@@ -15,5 +15,6 @@ config.substitutions = [
 config.suffixes = ['.mlir']
 
 # Where to find tests
-config.test_source_root = lit_config.test_source_root
-config.test_exec_root = lit_config.test_exec_root
+import os
+config.test_source_root = os.path.dirname(__file__)
+config.test_exec_root = os.path.dirname(__file__)

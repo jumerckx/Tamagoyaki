@@ -4,6 +4,7 @@ set(HERBIE_MLIR_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 
 add_mlir_library(herbieMLIR
   HerbieMLIRPasses.cpp
+  IntervalAnalysis.cpp
 
   PARTIAL_SOURCES_INTENDED
 
@@ -19,6 +20,8 @@ add_mlir_library(herbieMLIR
   MLIRPass
   MLIRTransforms
   MLIRFuncDialect
+  MLIRArithDialect
+  MLIRAnalysis
   Rival
 )
 
