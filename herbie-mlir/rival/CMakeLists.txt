@@ -8,15 +8,13 @@ set(RIVAL_REPO_URL "https://github.com/herbie-fp/rival-rs.git"
     CACHE STRING "URL of the Rival repository")
 set(RIVAL_GIT_TAG "main"
     CACHE STRING "Git tag/branch of Rival to use")
-set(RIVAL_ENABLE_LOCAL_DEV OFF
-    CACHE BOOL "Use local Rival development (set RIVAL_LOCAL_PATH)")
 set(RIVAL_LOCAL_PATH ""
-    CACHE PATH "Path to local Rival repository for development")
+    CACHE PATH "Path to local Rival repository (if set, uses local dev mode; otherwise fetches from GitHub)")
 
-# Handle local development mode
-if(RIVAL_ENABLE_LOCAL_DEV)
-  if(NOT RIVAL_LOCAL_PATH)
-    message(FATAL_ERROR "RIVAL_ENABLE_LOCAL_DEV=ON requires RIVAL_LOCAL_PATH to be set")
+# Handle local development vs GitHub fetch
+if(RIVAL_LOCAL_PATH)
+  if(NOT IS_DIRECTORY "${RIVAL_LOCAL_PATH}")
+    message(FATAL_ERROR "RIVAL_LOCAL_PATH is set but directory does not exist: ${RIVAL_LOCAL_PATH}")
   endif()
   set(RIVAL_SOURCE_DIR "${RIVAL_LOCAL_PATH}")
   message(STATUS "Using local Rival from: ${RIVAL_LOCAL_PATH}")

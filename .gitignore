@@ -20,6 +20,8 @@ __pycache__
 /mlir/
 build
 .cache
+_deps
+CMakeFiles
 
 # Prerequisites
 *.d

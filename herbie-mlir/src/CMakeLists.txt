@@ -1,18 +1,24 @@
 # herbie-mlir source code
 
-add_library(herbieMLIR
+set(HERBIE_MLIR_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+
+add_mlir_library(herbieMLIR
   HerbieMLIRPasses.cpp
+
+  PARTIAL_SOURCES_INTENDED
+
+  ADDITIONAL_HEADER_DIRS
+  ${HERBIE_MLIR_INCLUDE_DIR}
+
+  DEPENDS
+  HerbieMLIRPassesIncGen
+  copy_herbie_mlir_generated_to_src_include
+
+  LINK_LIBS PUBLIC
+  MLIRIR
+  MLIRPass
+  MLIRTransforms
+  MLIRFuncDialect
 )
 
-target_include_directories(herbieMLIR
-  PUBLIC
-    ${CMAKE_CURRENT_SOURCE_DIR}/../include
-    ${MLIR_INCLUDE_DIRS}
-)
-
-target_link_libraries(herbieMLIR
-  PUBLIC
-    MLIRPass
-    MLIRTransforms
-    MLIRFuncDialect
-)
+target_include_directories(herbieMLIR PUBLIC ${HERBIE_MLIR_INCLUDE_DIR})

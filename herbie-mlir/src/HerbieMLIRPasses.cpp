@@ -4,7 +4,7 @@
 
 namespace herbie {
 
-#define GEN_PASS_DEF_HERBIEMLIRTEMPLATE
+#define GEN_PASS_DEF_HERBIEMLIRTEMPLATEPASS
 #include "HerbieMLIRPasses.h.inc"
 
 namespace {
