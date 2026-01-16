@@ -1,4 +1,5 @@
 #include "HerbieMLIR.h"
+#include "RivalRAII.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Pass/PassManager.h"
 
@@ -17,7 +18,11 @@ public:
 
   void runOnOperation() final {
     mlir::ModuleOp module = getOperation();
-    // TODO: Add pass logic here
+    (void)module;
+
+    auto pi = rival::makeFloat(53, 3.14159265359);
+    auto str = rival::toString(pi.get());
+    llvm::errs() << "Pi: " << str << "\n";
   }
 };
 

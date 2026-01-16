@@ -19,6 +19,7 @@ add_mlir_library(herbieMLIR
   MLIRPass
   MLIRTransforms
   MLIRFuncDialect
+  Rival
 )
 
 target_include_directories(herbieMLIR PUBLIC ${HERBIE_MLIR_INCLUDE_DIR})

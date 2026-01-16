@@ -1,10 +1,17 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Dialect.h"
+#include "mlir/InitAllDialects.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 
+#include "EquivalenceDialect.h"
+#include "TamatchDialect.h"
+
 #include "HerbieMLIR.h"
+
+using namespace mlir::equivalence;
+using namespace mlir::tamatch;
 
 namespace herbie {
 #define GEN_PASS_REGISTRATION
@@ -13,10 +20,9 @@ namespace herbie {
 
 int main(int argc, char **argv) {
   mlir::DialectRegistry registry;
-
-  // Register all MLIR dialects
-  registry.insert<mlir::func::FuncDialect>();
-  registry.insert<mlir::arith::ArithDialect>();
+  registry.insert<mlir::equivalence::EquivalenceDialect,
+                  mlir::tamatch::TamatchDialect>();
+  registerAllDialects(registry);
 
   // Register herbie-mlir passes
   herbie::registerHerbieMLIRPasses();
