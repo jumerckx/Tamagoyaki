@@ -1,9 +1,11 @@
 #include "IntervalAnalysis.h"
+#include "RivalCAPI.h"
 #include "RivalRAII.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/raw_ostream.h"
 
 using namespace mlir;
 using namespace mlir::dataflow;
@@ -77,67 +79,65 @@ static IntervalValue fromConstantFloat(double value) {
       makeSharedIval(rival_ival_from_f64(kDefaultPrecision, value)));
 }
 
-static IntervalValue intervalAdd(const IntervalValue &lhs,
-                                 const IntervalValue &rhs) {
+using BinaryExprBuilder = rival_Expr *(*)(rival_Expr *, rival_Expr *);
+
+static IntervalValue evalBinaryOp(const IntervalValue &lhs,
+                                  const IntervalValue &rhs,
+                                  BinaryExprBuilder buildExpr) {
   if (lhs.isUnknown() || rhs.isUnknown())
     return IntervalValue::getUnknown();
 
-  const rival_Float *lhsLo = rival_ival_lower(lhs.getInterval());
-  const rival_Float *lhsHi = rival_ival_upper(lhs.getInterval());
-  const rival_Float *rhsLo = rival_ival_lower(rhs.getInterval());
-  const rival_Float *rhsHi = rival_ival_upper(rhs.getInterval());
+  rival_Expr *opExpr =
+      buildExpr(rival_expr_var("x"), rival_expr_var("y"));
 
-  double newLoVal = rival_float_to_f64(lhsLo) + rival_float_to_f64(rhsLo);
-  double newHiVal = rival_float_to_f64(lhsHi) + rival_float_to_f64(rhsHi);
+  rival_Discretization disc = {nullptr, nullptr, nullptr, nullptr};
+  rival::MachineBuilderPtr builder(rival_machine_builder_new(disc, nullptr));
 
-  auto newLo = rival::makeFloat(kDefaultPrecision, newLoVal);
-  auto newHi = rival::makeFloat(kDefaultPrecision, newHiVal);
-  return IntervalValue(
-      makeSharedIval(rival_ival_new(newLo.get(), newHi.get())));
+  rival_Expr *exprs[] = {opExpr};
+  const char *vars[] = {"x", "y"};
+  rival_Machine *machine = nullptr;
+
+  rival_error_t err = rival_machine_builder_build(builder.get(), exprs, 1, vars,
+                                                  2, &machine);
+  rival_expr_free(opExpr);
+
+  if (err != RIVAL_OK || !machine) {
+    llvm::errs() << "Machine build failed: " << rival_error_string(err) << "\n";
+    return IntervalValue::getUnknown();
+  }
+
+  rival::MachinePtr machinePtr(machine);
+
+  const rival_Ival *inputs[] = {lhs.getInterval(), rhs.getInterval()};
+  rival_Ival **results = nullptr;
+  size_t resultCount = 0;
+
+  err = rival_machine_apply(machinePtr.get(), inputs, 2, &results, &resultCount,
+                            100);
+  if (err != RIVAL_OK || resultCount == 0 || !results) {
+    llvm::errs() << "Machine apply failed: " << rival_error_string(err) << "\n";
+    return IntervalValue::getUnknown();
+  }
+
+  IvalSharedPtr result = makeSharedIval(rival_ival_clone(results[0]));
+  rival_ival_array_free(results, resultCount);
+
+  return IntervalValue(std::move(result));
+}
+
+static IntervalValue intervalAdd(const IntervalValue &lhs,
+                                 const IntervalValue &rhs) {
+  return evalBinaryOp(lhs, rhs, rival_expr_add);
 }
 
 static IntervalValue intervalSub(const IntervalValue &lhs,
                                  const IntervalValue &rhs) {
-  if (lhs.isUnknown() || rhs.isUnknown())
-    return IntervalValue::getUnknown();
-
-  const rival_Float *lhsLo = rival_ival_lower(lhs.getInterval());
-  const rival_Float *lhsHi = rival_ival_upper(lhs.getInterval());
-  const rival_Float *rhsLo = rival_ival_lower(rhs.getInterval());
-  const rival_Float *rhsHi = rival_ival_upper(rhs.getInterval());
-
-  double newLoVal = rival_float_to_f64(lhsLo) - rival_float_to_f64(rhsHi);
-  double newHiVal = rival_float_to_f64(lhsHi) - rival_float_to_f64(rhsLo);
-
-  auto newLo = rival::makeFloat(kDefaultPrecision, newLoVal);
-  auto newHi = rival::makeFloat(kDefaultPrecision, newHiVal);
-  return IntervalValue(
-      makeSharedIval(rival_ival_new(newLo.get(), newHi.get())));
+  return evalBinaryOp(lhs, rhs, rival_expr_sub);
 }
 
 static IntervalValue intervalMul(const IntervalValue &lhs,
                                  const IntervalValue &rhs) {
-  if (lhs.isUnknown() || rhs.isUnknown())
-    return IntervalValue::getUnknown();
-
-  double a = rival_float_to_f64(rival_ival_lower(lhs.getInterval()));
-  double b = rival_float_to_f64(rival_ival_upper(lhs.getInterval()));
-  double c = rival_float_to_f64(rival_ival_lower(rhs.getInterval()));
-  double d = rival_float_to_f64(rival_ival_upper(rhs.getInterval()));
-
-  double products[] = {a * c, a * d, b * c, b * d};
-  double lo = products[0], hi = products[0];
-  for (double p : products) {
-    if (p < lo)
-      lo = p;
-    if (p > hi)
-      hi = p;
-  }
-
-  auto newLo = rival::makeFloat(kDefaultPrecision, lo);
-  auto newHi = rival::makeFloat(kDefaultPrecision, hi);
-  return IntervalValue(
-      makeSharedIval(rival_ival_new(newLo.get(), newHi.get())));
+  return evalBinaryOp(lhs, rhs, rival_expr_mul);
 }
 
 LogicalResult
