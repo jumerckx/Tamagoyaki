@@ -17,17 +17,5 @@ def HerbieMLIRTemplatePass : Pass<"herbie-mlir-template", "::mlir::ModuleOp"> {
   let dependentDialects = ["::mlir::func::FuncDialect"];
 }
 
-def IntervalAnalysisPass : Pass<"herbie-interval-analysis", "::mlir::ModuleOp"> {
-  let summary = "Run interval analysis using Rival.";
-  let description = [{
-    Performs sparse forward dataflow interval analysis on the module using
-    the Rival interval arithmetic library. Prints computed intervals for
-    each SSA value.
-  }];
-  let dependentDialects = [
-    "::mlir::func::FuncDialect",
-    "::mlir::arith::ArithDialect"
-  ];
-}
 
 #endif // HERBIE_MLIR_PASSES
