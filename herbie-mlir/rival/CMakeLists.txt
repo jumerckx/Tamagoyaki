@@ -13,24 +13,24 @@ set(RIVAL_LOCAL_PATH ""
 
 # Handle local development vs GitHub fetch
 if(RIVAL_LOCAL_PATH)
-  if(NOT IS_DIRECTORY "${RIVAL_LOCAL_PATH}")
-    message(FATAL_ERROR "RIVAL_LOCAL_PATH is set but directory does not exist: ${RIVAL_LOCAL_PATH}")
-  endif()
-  set(RIVAL_SOURCE_DIR "${RIVAL_LOCAL_PATH}")
-  message(STATUS "Using local Rival from: ${RIVAL_LOCAL_PATH}")
+    if(NOT IS_DIRECTORY "${RIVAL_LOCAL_PATH}")
+        message(FATAL_ERROR "RIVAL_LOCAL_PATH is set but directory does not exist: ${RIVAL_LOCAL_PATH}")
+    endif()
+    set(RIVAL_SOURCE_DIR "${RIVAL_LOCAL_PATH}")
+    message(STATUS "Using local Rival from: ${RIVAL_LOCAL_PATH}")
 else()
-  # Fetch from GitHub
-  FetchContent_Declare(
+    # Fetch from GitHub
+    FetchContent_Declare(
     rival
     GIT_REPOSITORY "${RIVAL_REPO_URL}"
     GIT_TAG "${RIVAL_GIT_TAG}"
     GIT_SHALLOW ON
     GIT_PROGRESS ON
   )
-  
-  FetchContent_MakeAvailable(rival)
-  set(RIVAL_SOURCE_DIR "${rival_SOURCE_DIR}")
-  message(STATUS "Fetched Rival from: ${RIVAL_REPO_URL} (${RIVAL_GIT_TAG})")
+
+    FetchContent_MakeAvailable(rival)
+    set(RIVAL_SOURCE_DIR "${rival_SOURCE_DIR}")
+    message(STATUS "Fetched Rival from: ${RIVAL_REPO_URL} (${RIVAL_GIT_TAG})")
 endif()
 
 # Find Rust toolchain
@@ -42,20 +42,20 @@ message(STATUS "Using Rustc: ${RUSTC}")
 
 # Determine target triple
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
-  set(RUST_TARGET_TRIPLE "aarch64-apple-darwin")
+    set(RUST_TARGET_TRIPLE "aarch64-apple-darwin")
 elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
-  set(RUST_TARGET_TRIPLE "x86_64-apple-darwin")
+    set(RUST_TARGET_TRIPLE "x86_64-apple-darwin")
 else()
-  set(RUST_TARGET_TRIPLE "")
+    set(RUST_TARGET_TRIPLE "")
 endif()
 
 # Build configuration
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-  set(CARGO_BUILD_FLAGS "")
-  set(RIVAL_BUILD_PROFILE "debug")
+    set(CARGO_BUILD_FLAGS "")
+    set(RIVAL_BUILD_PROFILE "debug")
 else()
-  set(CARGO_BUILD_FLAGS "--release")
-  set(RIVAL_BUILD_PROFILE "release")
+    set(CARGO_BUILD_FLAGS "--release")
+    set(RIVAL_BUILD_PROFILE "release")
 endif()
 
 # Create custom target for building Rival via cargo
@@ -64,17 +64,18 @@ set(RIVAL_LIB_DIR "${RIVAL_BUILD_DIR}/lib")
 
 # Determine library name and extension
 if(APPLE)
-  set(RIVAL_LIB_NAME "libherbie_rival.a")
+    set(RIVAL_LIB_NAME "libherbie_rival.a")
 elseif(UNIX)
-  set(RIVAL_LIB_NAME "libherbie_rival.a")
+    set(RIVAL_LIB_NAME "libherbie_rival.a")
 else()
-  set(RIVAL_LIB_NAME "herbie_rival.lib")
+    set(RIVAL_LIB_NAME "herbie_rival.lib")
 endif()
 
 set(RIVAL_LIB_PATH "${RIVAL_LIB_DIR}/${RIVAL_LIB_NAME}")
 
-add_custom_target(
-  buildRival ALL
+# Custom command that produces the library file as an explicit output
+add_custom_command(
+  OUTPUT "${RIVAL_LIB_PATH}"
   COMMAND ${CMAKE_COMMAND} -E make_directory "${RIVAL_LIB_DIR}"
   COMMAND
     ${CMAKE_COMMAND} -E env
@@ -92,6 +93,9 @@ add_custom_target(
   DEPENDS "${RIVAL_SOURCE_DIR}/Cargo.toml"
   COMMENT "Building Rival C library via cargo"
 )
+
+# Custom target that depends on the library output
+add_custom_target(buildRival DEPENDS "${RIVAL_LIB_PATH}")
 
 # Create imported library target
 add_library(RivalCLib STATIC IMPORTED GLOBAL)
