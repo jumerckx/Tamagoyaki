@@ -1,5 +1,79 @@
 # rival-rs C API integration
 # Pulls Rival from GitHub and builds the C API library
+# Also builds GMP and MPFR from source for portable builds
+
+include(FetchContent)
+include(ExternalProject)
+
+# =============================================================================
+# GMP and MPFR from source
+# =============================================================================
+
+set(GMP_VERSION "6.3.0" CACHE STRING "GMP version to build")
+set(MPFR_VERSION "4.2.1" CACHE STRING "MPFR version to build")
+
+set(GMP_URL "https://ftp.gnu.org/gnu/gmp/gmp-${GMP_VERSION}.tar.xz")
+set(MPFR_URL "https://ftp.gnu.org/gnu/mpfr/mpfr-${MPFR_VERSION}.tar.xz")
+
+set(DEPS_INSTALL_DIR "${CMAKE_CURRENT_BINARY_DIR}/deps-install")
+set(DEPS_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/deps-build")
+
+# Build GMP from source
+ExternalProject_Add(gmp_external
+    URL ${GMP_URL}
+    PREFIX ${DEPS_BUILD_DIR}/gmp
+    INSTALL_DIR ${DEPS_INSTALL_DIR}
+    CONFIGURE_COMMAND <SOURCE_DIR>/configure
+        --prefix=<INSTALL_DIR>
+        --enable-static
+        --disable-shared
+        --with-pic
+    BUILD_COMMAND make -j${CMAKE_BUILD_PARALLEL_LEVEL}
+    INSTALL_COMMAND make install
+    BUILD_BYPRODUCTS ${DEPS_INSTALL_DIR}/lib/libgmp.a
+)
+
+# Build MPFR from source (depends on GMP)
+ExternalProject_Add(mpfr_external
+    URL ${MPFR_URL}
+    PREFIX ${DEPS_BUILD_DIR}/mpfr
+    INSTALL_DIR ${DEPS_INSTALL_DIR}
+    CONFIGURE_COMMAND <SOURCE_DIR>/configure
+        --prefix=<INSTALL_DIR>
+        --enable-static
+        --disable-shared
+        --with-pic
+        --with-gmp=<INSTALL_DIR>
+    BUILD_COMMAND make -j${CMAKE_BUILD_PARALLEL_LEVEL}
+    INSTALL_COMMAND make install
+    BUILD_BYPRODUCTS ${DEPS_INSTALL_DIR}/lib/libmpfr.a
+    DEPENDS gmp_external
+)
+
+# Create imported targets for GMP and MPFR
+add_library(GMP::GMP STATIC IMPORTED GLOBAL)
+set_target_properties(GMP::GMP PROPERTIES
+    IMPORTED_LOCATION ${DEPS_INSTALL_DIR}/lib/libgmp.a
+    INTERFACE_INCLUDE_DIRECTORIES ${DEPS_INSTALL_DIR}/include
+)
+add_dependencies(GMP::GMP gmp_external)
+
+add_library(MPFR::MPFR STATIC IMPORTED GLOBAL)
+set_target_properties(MPFR::MPFR PROPERTIES
+    IMPORTED_LOCATION ${DEPS_INSTALL_DIR}/lib/libmpfr.a
+    INTERFACE_INCLUDE_DIRECTORIES ${DEPS_INSTALL_DIR}/include
+    INTERFACE_LINK_LIBRARIES GMP::GMP
+)
+add_dependencies(MPFR::MPFR mpfr_external)
+
+message(STATUS "GMP/MPFR will be built from source:")
+message(STATUS "  GMP ${GMP_VERSION}: ${GMP_URL}")
+message(STATUS "  MPFR ${MPFR_VERSION}: ${MPFR_URL}")
+message(STATUS "  Install dir: ${DEPS_INSTALL_DIR}")
+
+# =============================================================================
+# Rival from GitHub
+# =============================================================================
 
 include(FetchContent)
 
@@ -82,12 +156,12 @@ add_custom_command(
     CARGO_TARGET_DIR="${RIVAL_BUILD_DIR}/target"
     ${CARGO} build
     ${CARGO_BUILD_FLAGS}
-    --manifest-path "${RIVAL_SOURCE_DIR}/Cargo.toml"
+    --manifest-path "${RIVAL_SOURCE_DIR}/rival3-ffi/Cargo.toml"
     --lib
-    -p "rival"
+    -p "rival3-ffi"
   COMMAND
     ${CMAKE_COMMAND} -E copy
-    "${RIVAL_BUILD_DIR}/target/${RIVAL_BUILD_PROFILE}/librival.a"
+    "${RIVAL_BUILD_DIR}/target/${RIVAL_BUILD_PROFILE}/librival3_ffi.a"
     "${RIVAL_LIB_PATH}"
   WORKING_DIRECTORY "${RIVAL_SOURCE_DIR}"
   DEPENDS "${RIVAL_SOURCE_DIR}/Cargo.toml"
@@ -107,7 +181,7 @@ add_dependencies(RivalCLib buildRival)
 
 # Expose via interface library for easy consumption
 add_library(Rival INTERFACE)
-target_link_libraries(Rival INTERFACE RivalCLib)
+target_link_libraries(Rival INTERFACE RivalCLib MPFR::MPFR GMP::GMP)
 target_include_directories(Rival INTERFACE "${RIVAL_SOURCE_DIR}")
 
 message(STATUS "Rival C API:")

@@ -10,6 +10,7 @@ set(LIBS
     herbieMLIR
     MLIREquivalence
     MLIRTamatch
+    Rival
 )
 
 add_llvm_executable(herbie-mlir-opt herbie-mlir-opt.cpp)
