@@ -163,7 +163,7 @@ public:
       }
 
       RivalError err = rival_apply(machine, argPtrs.data(), numArgs, outs, 1,
-                                   nullptr, 10, 200);
+                                   nullptr, 100, 2000);
 
       if (err == RIVAL_ERROR_OK) {
         double res = mpfr_get_d(result, MPFR_RNDN);
