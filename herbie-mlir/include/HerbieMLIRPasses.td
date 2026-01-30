@@ -19,24 +19,18 @@ def HerbieMLIRTemplatePass : Pass<"herbie-mlir-template", "::mlir::ModuleOp"> {
 }
 
 
-def TransferOpInterface : OpInterface<"TransferOpInterface"> {
+def RivalCompileableInterface : OpInterface<"RivalCompileableInterface"> {
   let description = [{
-    Interface for operations to define their own transfer functions for 
-    my custom dataflow analysis.
+    Interface for operations to be compiled to Rival expressions.
   }];
   
-  let cppNamespace = "::my_project";
+  let cppNamespace = "::herbie";
 
   let methods = [
     InterfaceMethod<
-      "Apply the transfer function to the given solver state.",
-      "void", "visit",
-      (ins "::mlir::dataflow::LatticeAnchor":$anchor, 
-           "::mlir::dataflow::DataFlowSolver &":$solver),
-      /*methodBody=*/[{}],
-      /*defaultImplementation=*/[{
-        return; // Default is to do nothing or mark conservative
-      }]
+      "Compile the operation to a Rival expression.",
+      "uint32_t", "compile",
+      (ins "::RivalExprArena *":$arena, "::llvm::ArrayRef<uint32_t>":$operands)
     >
   ];
 }
