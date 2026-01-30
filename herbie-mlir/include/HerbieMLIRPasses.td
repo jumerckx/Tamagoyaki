@@ -19,6 +19,15 @@ def HerbieMLIRTemplatePass : Pass<"herbie-mlir-template", "::mlir::ModuleOp"> {
 }
 
 
+def RivalEvaluatePass : Pass<"rival-evaluate", "::mlir::ModuleOp"> {
+  let summary = "Compile and evaluate functions using Rival interval arithmetic.";
+  let description = [{
+    Compiles functions to Rival expressions using RivalCompileableInterface
+    and evaluates them with test inputs.
+  }];
+  let dependentDialects = ["::mlir::func::FuncDialect", "::mlir::arith::ArithDialect"];
+}
+
 def RivalCompileableInterface : OpInterface<"RivalCompileableInterface"> {
   let description = [{
     Interface for operations to be compiled to Rival expressions.

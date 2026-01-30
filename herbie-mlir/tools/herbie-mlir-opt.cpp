@@ -9,6 +9,7 @@
 #include "TamatchDialect.h"
 
 #include "HerbieMLIR.h"
+#include "RivalExternalModels.h"
 
 using namespace mlir::equivalence;
 using namespace mlir::tamatch;
@@ -23,6 +24,9 @@ int main(int argc, char **argv) {
   registry.insert<mlir::equivalence::EquivalenceDialect,
                   mlir::tamatch::TamatchDialect>();
   registerAllDialects(registry);
+
+  // Register Rival external models for RivalCompileableInterface
+  herbie::registerRivalExternalModels(registry);
 
   // Register herbie-mlir passes
   herbie::registerHerbieMLIRPasses();

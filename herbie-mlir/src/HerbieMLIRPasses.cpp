@@ -1,17 +1,21 @@
 #include "HerbieMLIR.h"
-#include "mlir/Analysis/DataFlow/DeadCodeAnalysis.h"
-#include "mlir/Analysis/DataFlowFramework.h"
+#include "HerbieMLIROpInterfaces.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
-#include "mlir/Pass/PassManager.h"
+#include "mlir/Support/LLVM.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <mpfr.h>
 #include <rival.h>
+#include <string>
+#include <vector>
 
 namespace herbie {
 
 #define GEN_PASS_DEF_HERBIEMLIRTEMPLATEPASS
+#define GEN_PASS_DEF_RIVALEVALUATEPASS
 #include "HerbieMLIRPasses.h.inc"
 
 namespace {
@@ -88,6 +92,97 @@ public:
     mpfr_clear(result);
 
     llvm::errs() << "=== End Rival Demo ===\n";
+  }
+};
+
+class RivalEvaluatePass
+    : public impl::RivalEvaluatePassBase<RivalEvaluatePass> {
+public:
+  using impl::RivalEvaluatePassBase<RivalEvaluatePass>::RivalEvaluatePassBase;
+
+  void runOnOperation() final {
+    mlir::ModuleOp module = getOperation();
+
+    module.walk([&](mlir::func::FuncOp funcOp) {
+      auto iface =
+          mlir::dyn_cast<RivalCompileableInterface>(funcOp.getOperation());
+      if (!iface) {
+        llvm::errs() << "Function " << funcOp.getName()
+                     << " does not implement RivalCompileableInterface\n";
+        return;
+      }
+
+      llvm::errs() << "=== Rival Evaluate: " << funcOp.getName() << " ===\n";
+
+      RivalExprArena *arena = rival_expr_arena_new();
+      if (!arena) {
+        llvm::errs() << "Failed to create arena\n";
+        return;
+      }
+
+      uint32_t exprRoot = iface.compile(arena, {});
+
+      size_t numArgs = funcOp.getNumArguments();
+      std::vector<std::string> varNames;
+      std::vector<const char *> varNamePtrs;
+      varNames.reserve(numArgs);
+      for (size_t i = 0; i < numArgs; ++i) {
+        varNames.push_back("arg" + std::to_string(i));
+      }
+      varNamePtrs.reserve(varNames.size());
+      for (auto &name : varNames) {
+        varNamePtrs.push_back(name.c_str());
+      }
+
+      auto *args = new mpfr_t[numArgs];
+      std::vector<const mpfr_t *> argPtrs(numArgs);
+      for (size_t i = 0; i < numArgs; ++i) {
+        mpfr_init2(args[i], 53);
+        mpfr_set_d(args[i], 42.0, MPFR_RNDN);
+        argPtrs[i] = &args[i];
+      }
+
+      mpfr_t result;
+      mpfr_init2(result, 53);
+      mpfr_t *outs[] = {&result};
+
+      uint32_t roots[] = {exprRoot};
+      RivalDiscretization *disc = rival_disc_f64(53);
+      RivalMachine *machine = rival_machine_new(
+          arena, roots, 1, varNamePtrs.data(), numArgs, disc, 200, 1000);
+
+      if (!machine) {
+        llvm::errs() << "Failed to create machine\n";
+        rival_disc_free(disc);
+        rival_expr_arena_free(arena);
+        for (size_t i = 0; i < numArgs; ++i)
+          mpfr_clear(args[i]);
+        delete[] args;
+        mpfr_clear(result);
+        return;
+      }
+
+      RivalError err = rival_apply(machine, argPtrs.data(), numArgs, outs, 1,
+                                   nullptr, 10, 200);
+
+      if (err == RIVAL_ERROR_OK) {
+        double res = mpfr_get_d(result, MPFR_RNDN);
+        llvm::errs() << "Result: " << res << "\n";
+      } else {
+        llvm::errs() << "Evaluation failed with error: "
+                     << rival_error_message(err) << "\n";
+      }
+
+      rival_machine_free(machine);
+      rival_disc_free(disc);
+      rival_expr_arena_free(arena);
+      for (size_t i = 0; i < numArgs; ++i)
+        mpfr_clear(args[i]);
+      delete[] args;
+      mpfr_clear(result);
+
+      llvm::errs() << "=== End Rival Evaluate ===\n";
+    });
   }
 };
 
