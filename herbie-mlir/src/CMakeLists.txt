@@ -6,6 +6,8 @@ add_mlir_library(herbieMLIR
   HerbieMLIRPasses.cpp
   HerbieMLIROpInterfaces.cpp
   RivalExternalModels.cpp
+  IntervalSearch.cpp
+  IntervalSearchPass.cpp
   PARTIAL_SOURCES_INTENDED
 
   ADDITIONAL_HEADER_DIRS

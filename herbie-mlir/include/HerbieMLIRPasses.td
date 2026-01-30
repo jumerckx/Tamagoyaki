@@ -28,6 +28,36 @@ def RivalEvaluatePass : Pass<"rival-evaluate", "::mlir::ModuleOp"> {
   let dependentDialects = ["::mlir::func::FuncDialect", "::mlir::arith::ArithDialect"];
 }
 
+def IntervalSearchPass : Pass<"interval-search", "::mlir::func::FuncOp"> {
+  let summary = "Find valid sampling regions via interval subdivision.";
+  let description = [{
+    Uses Rival's interval analysis to find regions of the input space where
+    floating-point expressions can be safely evaluated. The algorithm
+    subdivides the input space, classifying regions as:
+    - Valid (safe to sample)
+    - Invalid (will always produce errors like division by zero)
+    - Uncertain (needs further subdivision or is at the subdivision limit)
+
+    The pass emits statistics about the fraction of the input space that is
+    sampleable, which is useful for understanding expression domains.
+  }];
+  let dependentDialects = ["::mlir::func::FuncDialect", "::mlir::arith::ArithDialect"];
+  let options = [
+    Option<"maxSearchDepth", "max-depth", "unsigned", "128",
+           "Maximum subdivision iterations (fuel)">,
+    Option<"maxRegions", "max-regions", "unsigned", "131072",
+           "Stop if region count exceeds this (default 2^17)">,
+    Option<"analysisPrecision", "analysis-precision", "unsigned", "128",
+           "MPFR precision for interval bounds">,
+    Option<"maxRivalPrecision", "max-rival-precision", "unsigned", "2000",
+           "Max precision for Rival analysis">,
+    Option<"maxRivalIterations", "max-rival-iterations", "unsigned", "5",
+           "Max Rival iterations per analysis">,
+    Option<"emitStatistics", "emit-statistics", "bool", "true",
+           "Whether to emit statistics as operation attributes">
+  ];
+}
+
 def RivalCompileableInterface : OpInterface<"RivalCompileableInterface"> {
   let description = [{
     Interface for operations to be compiled to Rival expressions.
