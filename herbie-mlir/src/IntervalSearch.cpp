@@ -99,12 +99,12 @@ void Interval::clear() {
 namespace {
 
 /// The total number of ordinals for a given float bit width.
-inline uint64_t totalOrdinals(unsigned bitWidth) {
+inline double totalOrdinals(unsigned bitWidth) {
   if (bitWidth == 32)
-    return uint64_t(1) << 32;
+    return 4294967296.0; // 2^32
   if (bitWidth == 64)
-    return uint64_t(1) << 63; // We use signed ordinals, so half the range
-  return uint64_t(1) << bitWidth;
+    return 18446744073709551616.0; // 2^64
+  return std::pow(2.0, bitWidth);
 }
 
 } // namespace
@@ -204,7 +204,7 @@ double herbie::hyperrectWeight(const Hyperrect &rect,
 double herbie::totalWeight(llvm::ArrayRef<unsigned> floatBitWidths) {
   double weight = 1.0;
   for (unsigned bitWidth : floatBitWidths) {
-    weight *= static_cast<double>(totalOrdinals(bitWidth));
+    weight *= totalOrdinals(bitWidth);
   }
   return weight;
 }
@@ -427,6 +427,7 @@ SearchResult herbie::findIntervals(RivalMachine *machine,
 
   // Build result: sampleable = true ∪ other
   SearchResult result;
+  result.statistics = computeStatistics(space, floatBitWidths);
   result.sampleableRegions.reserve(space.trueRegions.size() +
                                    space.otherRegions.size());
 
@@ -436,8 +437,6 @@ SearchResult herbie::findIntervals(RivalMachine *machine,
   for (auto &region : space.otherRegions) {
     result.sampleableRegions.push_back(std::move(region));
   }
-
-  result.statistics = computeStatistics(space, floatBitWidths);
 
   return result;
 }
