@@ -287,7 +287,7 @@ public:
       // Only set cost if not already present (preserve manually specified
       // costs)
       graphOp.walk([&](Operation *op) {
-        if (!isa<ClassOp>(op) && !isa<GraphOp>(op)) {
+        if (!isa<ClassOp>(op) && !isa<GraphOp>(op) && !isa<YieldOp>(op)) {
           if (!op->hasAttr("equivalence.cost")) {
             int64_t cost = (defaultCostVal < 0) ? -1 : defaultCostVal;
             op->setAttr("equivalence.cost",
