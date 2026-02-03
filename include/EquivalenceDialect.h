@@ -39,4 +39,7 @@ namespace mlir::equivalence {
 #define GET_TYPEDEF_CLASSES
 #include "EquivalenceTypes.h.inc"
 
+#define GET_ATTRDEF_CLASSES
+#include "EquivalenceAttrs.h.inc"
+
 #endif // EQUIVALENCE_EQUIVALENCEDIALECT_H

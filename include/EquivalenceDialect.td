@@ -33,8 +33,10 @@ def Equivalence_Dialect : Dialect {
     let cppNamespace = "::mlir::equivalence";
 
     let useDefaultTypePrinterParser = 1;
+    let useDefaultAttributePrinterParser = 1;
     let extraClassDeclaration = [{
         void registerTypes();
+        void registerAttributes();
     }];
 }
 
@@ -191,6 +193,25 @@ def EquivalenceSelectGreedy: Pass<"equivalence-select-greedy", "::mlir::ModuleOp
            "Default cost for operations not in cost file (-1 means none)">
   ];
   let dependentDialects = ["::mlir::equivalence::EquivalenceDialect"];
+}
+
+//===----------------------------------------------------------------------===//
+// Equivalence Attributes
+//===----------------------------------------------------------------------===//
+
+class Equivalence_Attr<string name, string attrMnemonic, list<Trait> traits = []>
+    : AttrDef<Equivalence_Dialect, name, traits> {
+  let mnemonic = attrMnemonic;
+}
+
+def Equivalence_CostAttr : Equivalence_Attr<"Cost", "cost"> {
+  let summary = "An attribute representing the cost of an operation";
+  let description = [{
+    This attribute stores the cost of an operation for use in cost-based
+    extraction algorithms. A value of -1 indicates no cost is available.
+  }];
+  let parameters = (ins "int64_t":$value);
+  let assemblyFormat = "`<` $value `>`";
 }
 
 class Equivalence_Type<string name, string typeMnemonic, list<Trait> traits = []>

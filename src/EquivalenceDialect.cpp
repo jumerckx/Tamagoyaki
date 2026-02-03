@@ -49,6 +49,7 @@ void EquivalenceDialect::initialize() {
 
       >();
   registerTypes();
+  registerAttributes();
 }
 
 //===----------------------------------------------------------------------===//
@@ -261,8 +262,8 @@ public:
 
 /// Get the base cost of a node from its cost attribute or default.
 int64_t getNodeBaseCost(Operation *op, int64_t defaultCost) {
-  if (auto attr = op->getAttrOfType<IntegerAttr>("base_cost")) {
-    return attr.getValue().getSExtValue();
+  if (auto attr = op->getAttrOfType<CostAttr>("equivalence.cost")) {
+    return attr.getValue();
   }
   return defaultCost;
 }
@@ -287,8 +288,7 @@ public:
         int64_t cost = (defaultCostVal < 0) ? -1 : defaultCostVal;
         opCosts[op] = cost;
         // Store as attribute for later reference
-        OpBuilder builder(op->getContext());
-        op->setAttr("base_cost", builder.getI64IntegerAttr(cost));
+        op->setAttr("equivalence.cost", CostAttr::get(op->getContext(), cost));
       }
     });
 
@@ -387,10 +387,21 @@ public:
 #define GET_TYPEDEF_CLASSES
 #include "EquivalenceTypes.cpp.inc"
 
+#define GET_ATTRDEF_CLASSES
+#include "EquivalenceAttrs.cpp.inc"
+
 void EquivalenceDialect::registerTypes() {
   addTypes<
 #define GET_TYPEDEF_LIST
 #include "EquivalenceTypes.cpp.inc"
+
+      >();
+}
+
+void EquivalenceDialect::registerAttributes() {
+  addAttributes<
+#define GET_ATTRDEF_LIST
+#include "EquivalenceAttrs.cpp.inc"
 
       >();
 }
