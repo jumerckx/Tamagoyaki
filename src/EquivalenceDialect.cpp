@@ -275,106 +275,118 @@ public:
       EquivalenceSelectGreedy>::EquivalenceSelectGreedyBase;
   void runOnOperation() final {
     ModuleOp module = getOperation();
-
-    // Collect all ClassOps in the module
-    SmallVector<ClassOp> classOps;
-    module.walk([&](ClassOp classOp) { classOps.push_back(classOp); });
-
-    // Initialize base costs as attributes on all operations
-    DenseMap<Operation *, int64_t> opCosts;
     int64_t defaultCostVal = this->defaultCost;
-    module.walk([&](Operation *op) {
-      if (!isa<ClassOp>(op)) {
-        int64_t cost = (defaultCostVal < 0) ? -1 : defaultCostVal;
-        opCosts[op] = cost;
-        // Store as attribute for later reference
-        op->setAttr("equivalence.cost", CostAttr::get(op->getContext(), cost));
-      }
-    });
 
-    // Fixed-point iteration: repeatedly scan ClassOps until convergence
-    bool changed = true;
-    int maxIterations = 100;
-    int iteration = 0;
+    // Process each GraphOp separately
+    module.walk([&](GraphOp graphOp) {
+      // Collect all ClassOps in this graph
+      SmallVector<ClassOp> classOps;
+      graphOp.walk([&](ClassOp classOp) { classOps.push_back(classOp); });
 
-    while (changed && iteration < maxIterations) {
-      changed = false;
-      iteration++;
+      // Initialize base costs as attributes on operations within the graph
+      // Only set cost if not already present (preserve manually specified
+      // costs)
+      graphOp.walk([&](Operation *op) {
+        if (!isa<ClassOp>(op) && !isa<GraphOp>(op)) {
+          if (!op->hasAttr("equivalence.cost")) {
+            int64_t cost = (defaultCostVal < 0) ? -1 : defaultCostVal;
+            op->setAttr("equivalence.cost",
+                        CostAttr::get(op->getContext(), cost));
+          }
+        }
+      });
 
-      // Track e-class minimum costs in this iteration
-      DenseMap<Value, int64_t> eclassCosts;
+      // Fixed-point iteration: repeatedly scan ClassOps until convergence
+      bool changed = true;
+      int maxIterations = 100;
+      int iteration = 0;
 
-      // First pass: collect costs from ClassOps
-      for (ClassOp classOp : classOps) {
-        Value result = classOp.getResult();
-        int64_t minCost = std::numeric_limits<int64_t>::max();
-        int minIndex = -1;
+      while (changed && iteration < maxIterations) {
+        changed = false;
+        iteration++;
 
-        // Evaluate cost of each operand
-        for (size_t i = 0; i < classOp.getInputs().size(); ++i) {
-          Value operand = classOp.getInputs()[i];
-          Operation *operandDef = operand.getDefiningOp();
+        // Track e-class minimum costs in this iteration
+        DenseMap<Value, int64_t> eclassCosts;
 
-          int64_t totalCost = 0;
-          if (!operandDef || isa<BlockArgument>(operand)) {
-            // Block arguments are free
-            totalCost = 0;
-          } else if (auto classDefOp = dyn_cast<ClassOp>(operandDef)) {
-            // Cost is from e-class map
-            auto it = eclassCosts.find(classDefOp.getResult());
-            if (it == eclassCosts.end()) {
-              continue; // Skip if cost not yet computed
-            }
-            totalCost = it->second;
-          } else {
-            // Regular operation: base cost + dependency costs
-            totalCost = getNodeBaseCost(operandDef, defaultCostVal);
-            if (totalCost == -1) {
-              continue; // Skip if no cost
-            }
-            for (Value dep : operandDef->getOperands()) {
-              auto it = eclassCosts.find(dep);
-              if (it != eclassCosts.end()) {
-                int64_t depCost = it->second;
-                if (depCost == -1) {
-                  totalCost = -1;
-                  break;
+        // First pass: collect costs from ClassOps
+        for (ClassOp classOp : classOps) {
+          Value result = classOp.getResult();
+          int64_t minCost = std::numeric_limits<int64_t>::max();
+          int minIndex = -1;
+
+          // Evaluate cost of each operand
+          for (size_t i = 0; i < classOp.getInputs().size(); ++i) {
+            Value operand = classOp.getInputs()[i];
+            Operation *operandDef = operand.getDefiningOp();
+
+            int64_t totalCost = 0;
+            if (!operandDef) {
+              // Block arguments are free
+              totalCost = 0;
+            } else if (auto classDefOp = dyn_cast<ClassOp>(operandDef)) {
+              // Cost is from e-class map
+              auto it = eclassCosts.find(classDefOp.getResult());
+              if (it == eclassCosts.end()) {
+                continue; // Skip if cost not yet computed
+              }
+              totalCost = it->second;
+            } else {
+              // Regular operation: base cost + dependency costs
+              totalCost = getNodeBaseCost(operandDef, defaultCostVal);
+              if (totalCost == -1) {
+                continue; // Skip if no cost
+              }
+              for (Value dep : operandDef->getOperands()) {
+                if (!dep.getDefiningOp()) {
+                  // Block argument dependency is free
+                  continue;
                 }
-                totalCost += depCost;
+                auto it = eclassCosts.find(dep);
+                if (it != eclassCosts.end()) {
+                  int64_t depCost = it->second;
+                  if (depCost == -1) {
+                    totalCost = -1;
+                    break;
+                  }
+                  totalCost += depCost;
+                }
+                // If dep is not in eclassCosts and not a block arg, it's a
+                // direct operation result - we need its cost
+              }
+              if (totalCost == -1) {
+                continue; // Skip if dependency costs unavailable
               }
             }
-            if (totalCost == -1) {
-              continue; // Skip if dependency costs unavailable
+
+            if (totalCost < minCost) {
+              minCost = totalCost;
+              minIndex = i;
             }
           }
 
-          if (totalCost < minCost) {
-            minCost = totalCost;
-            minIndex = i;
+          // Update e-class cost if minimum was found
+          if (minIndex >= 0) {
+            eclassCosts[result] = minCost;
+          } else {
+            eclassCosts[result] = -1;
+          }
+
+          // Update min_cost_index attribute if changed
+          int64_t currentMinIndex = -1;
+          if (auto attr =
+                  classOp->getAttrOfType<IntegerAttr>("min_cost_index")) {
+            currentMinIndex = attr.getValue().getSExtValue();
+          }
+
+          if (currentMinIndex != minIndex && minIndex >= 0) {
+            OpBuilder builder(classOp);
+            classOp->setAttr("min_cost_index",
+                             builder.getI64IntegerAttr(minIndex));
+            changed = true;
           }
         }
-
-        // Update e-class cost if minimum was found
-        if (minIndex >= 0) {
-          eclassCosts[result] = minCost;
-        } else {
-          eclassCosts[result] = -1;
-        }
-
-        // Update min_cost_index attribute if changed
-        int64_t currentMinIndex = -1;
-        if (auto attr = classOp->getAttrOfType<IntegerAttr>("min_cost_index")) {
-          currentMinIndex = attr.getValue().getSExtValue();
-        }
-
-        if (currentMinIndex != minIndex && minIndex >= 0) {
-          OpBuilder builder(classOp);
-          classOp->setAttr("min_cost_index",
-                           builder.getI64IntegerAttr(minIndex));
-          changed = true;
-        }
       }
-    }
+    });
   }
 };
 } // namespace
