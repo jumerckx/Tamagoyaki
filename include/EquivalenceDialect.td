@@ -177,6 +177,22 @@ def EquivalenceSwitchBarFoo: Pass<"equivalence-switch-bar-foo", "::mlir::ModuleO
   }];
 }
 
+def EquivalenceSelectGreedy: Pass<"equivalence-select-greedy", "::mlir::ModuleOp"> {
+  let summary = "Performs greedy cost-based extraction for equivalence classes.";
+  let description = [{
+    Implements greedy cost-based extraction for equivalence classes using
+    bottom-up fixed-point iteration. For each e-class, finds the minimum cost
+    node and sets the min_cost_index attribute on ClassOp operations.
+  }];
+  let options = [
+    Option<"costFile", "cost-file", "std::string", "",
+           "Path to JSON file containing operation costs">,
+    Option<"defaultCost", "default-cost", "int", "-1",
+           "Default cost for operations not in cost file (-1 means none)">
+  ];
+  let dependentDialects = ["::mlir::equivalence::EquivalenceDialect"];
+}
+
 class Equivalence_Type<string name, string typeMnemonic, list<Trait> traits = []>
     : TypeDef<Equivalence_Dialect, name, traits> {
   let mnemonic = typeMnemonic;
