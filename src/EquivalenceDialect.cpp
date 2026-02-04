@@ -9,6 +9,7 @@
 
 #include "EquivalenceDialect.h"
 
+#include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
@@ -28,6 +29,7 @@
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/raw_ostream.h"
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -93,6 +95,7 @@ namespace mlir::equivalence {
 #define GEN_PASS_DEF_EQUIVALENCEINSERTGRAPH
 #define GEN_PASS_DEF_EQUIVALENCESWITCHBARFOO
 #define GEN_PASS_DEF_EQUIVALENCESELECTGREEDY
+#define GEN_PASS_DEF_EQUIVALENCEPRINTTOPOSORT
 #include "EquivalencePasses.h.inc"
 
 namespace {
@@ -386,6 +389,102 @@ public:
           }
         }
       }
+    });
+  }
+};
+
+class EquivalencePrintTopoSort
+    : public impl::EquivalencePrintTopoSortBase<EquivalencePrintTopoSort> {
+public:
+  using impl::EquivalencePrintTopoSortBase<
+      EquivalencePrintTopoSort>::EquivalencePrintTopoSortBase;
+
+  void runOnOperation() final {
+    ModuleOp module = getOperation();
+
+    module.walk([&](GraphOp graphOp) {
+      Block &block = graphOp.getBody().front();
+
+      // Build sets of selected and excluded values based on ClassOp operands.
+      // Selected: operand at min_cost_index
+      // Excluded: other operands of ClassOps (not at min_cost_index, or no
+      // min_cost_index)
+      DenseSet<Value> selectedValues;
+      DenseSet<Value> excludedValues;
+      for (Operation &op : block) {
+        if (auto classOp = dyn_cast<ClassOp>(&op)) {
+          int64_t minIdx = -1;
+          if (auto minCostAttr =
+                  classOp->getAttrOfType<IntegerAttr>("min_cost_index")) {
+            minIdx = minCostAttr.getInt();
+          }
+          for (size_t i = 0; i < classOp.getInputs().size(); ++i) {
+            Value operand = classOp.getInputs()[i];
+            if (minIdx >= 0 && static_cast<size_t>(minIdx) == i) {
+              selectedValues.insert(operand);
+            } else {
+              excludedValues.insert(operand);
+            }
+          }
+        }
+      }
+
+      // Build set of operations to include in toposort:
+      // - ClassOps, YieldOp
+      // - Operations whose results are selected OR not used by any ClassOp
+      // - Exclude operations whose results are only in excludedValues
+      SmallVector<Operation *> opsToSort;
+      DenseSet<Operation *> selectedOps;
+      for (Operation &op : block) {
+        if (isa<YieldOp>(&op) || isa<ClassOp>(&op)) {
+          opsToSort.push_back(&op);
+          selectedOps.insert(&op);
+        } else {
+          // Include if any result is selected or not used by any ClassOp
+          bool include = false;
+          for (Value result : op.getResults()) {
+            if (selectedValues.contains(result)) {
+              include = true;
+              break;
+            }
+            // If not in excludedValues, it's not used by any ClassOp -> include
+            if (!excludedValues.contains(result)) {
+              include = true;
+              break;
+            }
+          }
+          if (include) {
+            opsToSort.push_back(&op);
+            selectedOps.insert(&op);
+          }
+        }
+      }
+
+      // isOperandReady callback: treat operands from non-selected ops as ready
+      auto isOperandReady = [&](Value value, Operation *) -> bool {
+        Operation *defOp = value.getDefiningOp();
+        if (!defOp) {
+          // Block arguments are always ready
+          return true;
+        }
+        // If the defining op is not in our selected set, treat as ready
+        return !selectedOps.contains(defOp);
+      };
+
+      // Compute topological sort
+      computeTopologicalSorting(opsToSort, isOperandReady);
+
+      // Print the sorted operations (excluding YieldOp for clarity)
+      llvm::errs() << "Topological order for graph at " << graphOp.getLoc()
+                   << ":\n";
+      for (Operation *op : opsToSort) {
+        if (!isa<YieldOp>(op)) {
+          llvm::errs() << "  ";
+          op->print(llvm::errs(), OpPrintingFlags().skipRegions());
+          llvm::errs() << "\n";
+        }
+      }
+      llvm::errs() << "\n";
     });
   }
 };
