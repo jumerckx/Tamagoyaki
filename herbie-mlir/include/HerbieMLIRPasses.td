@@ -58,6 +58,18 @@ def IntervalSearchPass : Pass<"interval-search", "::mlir::func::FuncOp"> {
   ];
 }
 
+def EquivalencePrintTopoSort : Pass<"equivalence-print-toposort", "::mlir::ModuleOp"> {
+  let summary = "Prints topological ordering of selected operations in equivalence.graph.";
+  let description = [{
+    Computes a topological sort of operations in each equivalence.graph op,
+    considering only the operations that correspond to the min_cost_index
+    of equivalence.class operations. Operations used by a class but not
+    selected by min_cost_index are treated as "ready" (ignored in ordering).
+    Prints the resulting order to stderr without modifying the IR.
+  }];
+  let dependentDialects = ["::mlir::equivalence::EquivalenceDialect"];
+}
+
 def RivalCompileableInterface : OpInterface<"RivalCompileableInterface"> {
   let description = [{
     Interface for operations to be compiled to Rival expressions.

@@ -1,7 +1,12 @@
+#include "EquivalenceDialect.h"
 #include "HerbieMLIR.h"
 #include "HerbieMLIROpInterfaces.h"
+#include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/Block.h"
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/Support/raw_ostream.h"
 
@@ -16,6 +21,7 @@ namespace herbie {
 
 #define GEN_PASS_DEF_HERBIEMLIRTEMPLATEPASS
 #define GEN_PASS_DEF_RIVALEVALUATEPASS
+#define GEN_PASS_DEF_EQUIVALENCEPRINTTOPOSORT
 #include "HerbieMLIRPasses.h.inc"
 
 namespace {
@@ -182,6 +188,103 @@ public:
       mpfr_clear(result);
 
       llvm::errs() << "=== End Rival Evaluate ===\n";
+    });
+  }
+};
+
+class EquivalencePrintTopoSort
+    : public impl::EquivalencePrintTopoSortBase<EquivalencePrintTopoSort> {
+public:
+  using impl::EquivalencePrintTopoSortBase<
+      EquivalencePrintTopoSort>::EquivalencePrintTopoSortBase;
+
+  void runOnOperation() final {
+    mlir::ModuleOp module = getOperation();
+
+    module.walk([&](mlir::equivalence::GraphOp graphOp) {
+      mlir::Block &block = graphOp.getBody().front();
+
+      // Build sets of selected and excluded values based on ClassOp operands.
+      // Selected: operand at min_cost_index
+      // Excluded: other operands of ClassOps (not at min_cost_index, or no
+      // min_cost_index)
+      mlir::DenseSet<mlir::Value> selectedValues;
+      mlir::DenseSet<mlir::Value> excludedValues;
+      for (mlir::Operation &op : block) {
+        if (auto classOp = mlir::dyn_cast<mlir::equivalence::ClassOp>(&op)) {
+          int64_t minIdx = -1;
+          if (auto minCostAttr =
+                  classOp->getAttrOfType<mlir::IntegerAttr>("min_cost_index")) {
+            minIdx = minCostAttr.getInt();
+          }
+          for (size_t i = 0; i < classOp.getInputs().size(); ++i) {
+            mlir::Value operand = classOp.getInputs()[i];
+            if (minIdx >= 0 && static_cast<size_t>(minIdx) == i) {
+              selectedValues.insert(operand);
+            } else {
+              excludedValues.insert(operand);
+            }
+          }
+        }
+      }
+
+      // Build set of operations to include in toposort:
+      // - ClassOps, YieldOp
+      // - Operations whose results are selected OR not used by any ClassOp
+      // - Exclude operations whose results are only in excludedValues
+      mlir::SmallVector<mlir::Operation *> opsToSort;
+      mlir::DenseSet<mlir::Operation *> selectedOps;
+      for (mlir::Operation &op : block) {
+        if (mlir::isa<mlir::equivalence::YieldOp>(&op) ||
+            mlir::isa<mlir::equivalence::ClassOp>(&op)) {
+          opsToSort.push_back(&op);
+          selectedOps.insert(&op);
+        } else {
+          // Include if any result is selected or not used by any ClassOp
+          bool include = false;
+          for (mlir::Value result : op.getResults()) {
+            if (selectedValues.contains(result)) {
+              include = true;
+              break;
+            }
+            // If not in excludedValues, it's not used by any ClassOp -> include
+            if (!excludedValues.contains(result)) {
+              include = true;
+              break;
+            }
+          }
+          if (include) {
+            opsToSort.push_back(&op);
+            selectedOps.insert(&op);
+          }
+        }
+      }
+
+      // isOperandReady callback: treat operands from non-selected ops as ready
+      auto isOperandReady = [&](mlir::Value value, mlir::Operation *) -> bool {
+        mlir::Operation *defOp = value.getDefiningOp();
+        if (!defOp) {
+          // Block arguments are always ready
+          return true;
+        }
+        // If the defining op is not in our selected set, treat as ready
+        return !selectedOps.contains(defOp);
+      };
+
+      // Compute topological sort
+      mlir::computeTopologicalSorting(opsToSort, isOperandReady);
+
+      // Print the sorted operations (excluding YieldOp for clarity)
+      llvm::errs() << "Topological order for graph at " << graphOp.getLoc()
+                   << ":\n";
+      for (mlir::Operation *op : opsToSort) {
+        if (!mlir::isa<mlir::equivalence::YieldOp>(op)) {
+          llvm::errs() << "  ";
+          op->print(llvm::errs(), mlir::OpPrintingFlags().skipRegions());
+          llvm::errs() << "\n";
+        }
+      }
+      llvm::errs() << "\n";
     });
   }
 };
