@@ -8,14 +8,13 @@
 //===----------------------------------------------------------------------===//
 
 #include "EquivalenceDialect.h"
+#include "EquivalenceUtils.h"
 
-#include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/DialectImplementation.h"
-#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/RegionKindInterface.h"
@@ -26,10 +25,8 @@
 #include "mlir/Rewrite/FrozenRewritePatternSet.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
-#include "mlir/Tools/mlir-opt/MlirOptMain.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/TypeSwitch.h"
-#include "llvm/Support/raw_ostream.h"
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -163,64 +160,10 @@ public:
 
     // Process each function
     for (func::FuncOp funcOp : functions) {
-      if (failed(transformFunction(funcOp, true))) {
+      if (failed(insertGraphInFunction(funcOp, false))) {
         signalPassFailure();
       }
     }
-  }
-
-private:
-  LogicalResult transformFunction(func::FuncOp funcOp,
-                                  bool insertSingleElementEqs) {
-    // Only transform single-block functions
-    Region &funcBody = funcOp.getFunctionBody();
-
-    if (!funcBody.hasOneBlock()) {
-      return failure();
-    }
-
-    Block &entryBlock = funcBody.front();
-    auto returnOp = dyn_cast<func::ReturnOp>(*entryBlock.getTerminator());
-
-    if (!returnOp) {
-      return funcOp.emitOpError("function must have a return operation");
-    }
-
-    Location loc = funcOp.getLoc();
-
-    // Create the graphOp at the start of the block
-    FunctionType funcType = funcOp.getFunctionType();
-    OpBuilder builder(funcOp->getContext());
-    auto graphOp = GraphOp::create(builder, loc, funcType.getResults(), {});
-
-    // Put the single-block function body in the graphOp
-    Region &graphBody = graphOp.getBody();
-    graphBody.takeBody(funcBody);
-
-    // Rewrite the func.return to a tama.yield
-    builder.setInsertionPoint(returnOp);
-    YieldOp::create(builder, returnOp.getLoc(), returnOp.getOperands());
-    returnOp.erase();
-
-    if (insertSingleElementEqs) {
-      wrapValuesInClassOps(graphBody, builder);
-    }
-
-    // Create a new function body
-    Block *newEntryBlock = builder.createBlock(
-        &funcBody, funcBody.end(), funcType.getInputs(),
-        SmallVector<Location>(funcType.getNumInputs(), loc));
-
-    graphOp->setOperands(newEntryBlock->getArguments());
-
-    // Insert the graphOp into the new block
-    builder.setInsertionPointToStart(newEntryBlock);
-    builder.insert(graphOp);
-
-    // Create a return that returns the graphOp's results
-    func::ReturnOp::create(builder, loc, graphOp->getResults());
-
-    return success();
   }
 };
 
@@ -420,3 +363,53 @@ void EquivalenceDialect::registerAttributes() {
 
       >();
 }
+
+namespace mlir::equivalence {
+
+LogicalResult insertGraphInFunction(func::FuncOp funcOp,
+                                    bool insertSingleElementEqs) {
+  Region &funcBody = funcOp.getFunctionBody();
+
+  if (!funcBody.hasOneBlock()) {
+    return failure();
+  }
+
+  Block &entryBlock = funcBody.front();
+  auto returnOp = dyn_cast<func::ReturnOp>(*entryBlock.getTerminator());
+
+  if (!returnOp) {
+    return funcOp.emitOpError("function must have a return operation");
+  }
+
+  Location loc = funcOp.getLoc();
+  FunctionType funcType = funcOp.getFunctionType();
+  OpBuilder builder(funcOp->getContext());
+
+  auto graphOp = GraphOp::create(builder, loc, funcType.getResults(), {});
+
+  Region &graphBody = graphOp.getBody();
+  graphBody.takeBody(funcBody);
+
+  builder.setInsertionPoint(returnOp);
+  YieldOp::create(builder, returnOp.getLoc(), returnOp.getOperands());
+  returnOp.erase();
+
+  if (insertSingleElementEqs) {
+    wrapValuesInClassOps(graphBody, builder);
+  }
+
+  Block *newEntryBlock =
+      builder.createBlock(&funcBody, funcBody.end(), funcType.getInputs(),
+                          SmallVector<Location>(funcType.getNumInputs(), loc));
+
+  graphOp->setOperands(newEntryBlock->getArguments());
+
+  builder.setInsertionPointToStart(newEntryBlock);
+  builder.insert(graphOp);
+
+  func::ReturnOp::create(builder, loc, graphOp->getResults());
+
+  return success();
+}
+
+} // namespace mlir::equivalence
