@@ -1,14 +1,18 @@
 #include "IntervalSearch.h"
+#include "HerbieMLIROpInterfaces.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/IR/BuiltinTypeInterfaces.h"
+#include "mlir/IR/Types.h"
+#include "mlir/Support/LLVM.h"
 #include "rival.h"
 #include "llvm/ADT/ArrayRef.h"
-#include "llvm/Support/raw_ostream.h"
-#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <limits>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -437,6 +441,105 @@ SearchResult herbie::findIntervals(RivalMachine *machine,
   for (auto &region : space.otherRegions) {
     result.sampleableRegions.push_back(std::move(region));
   }
+
+  return result;
+}
+
+// ============================================================================
+// runIntervalSearchOnFunction Implementation
+// ============================================================================
+
+FunctionIntervalResult
+herbie::runIntervalSearchOnFunction(mlir::func::FuncOp funcOp,
+                                    const IntervalSearchConfig &config) {
+  FunctionIntervalResult result;
+  result.success = false;
+
+  auto iface = mlir::dyn_cast<RivalCompileableInterface>(funcOp.getOperation());
+  if (!iface) {
+    funcOp.emitWarning()
+        << "Function does not implement RivalCompileableInterface";
+    return result;
+  }
+
+  RivalExprArena *arena = rival_expr_arena_new();
+  if (!arena) {
+    funcOp.emitError() << "Failed to create Rival expression arena";
+    return result;
+  }
+
+  uint32_t exprRoot = iface.compile(arena, {});
+
+  size_t numArgs = funcOp.getNumArguments();
+  std::vector<std::string> varNames;
+  std::vector<const char *> varNamePtrs;
+
+  varNames.reserve(numArgs);
+  result.floatBitWidths.reserve(numArgs);
+
+  for (size_t i = 0; i < numArgs; ++i) {
+    varNames.push_back("arg" + std::to_string(i));
+
+    mlir::Type argType = funcOp.getArgumentTypes()[i];
+    if (auto floatType = mlir::dyn_cast<mlir::FloatType>(argType)) {
+      result.floatBitWidths.push_back(floatType.getWidth());
+    } else {
+      funcOp.emitError() << "Argument " << i << " is not a floating-point type";
+      rival_expr_arena_free(arena);
+      return result;
+    }
+  }
+
+  varNamePtrs.reserve(varNames.size());
+  for (auto &name : varNames) {
+    varNamePtrs.push_back(name.c_str());
+  }
+
+  uint32_t roots[] = {exprRoot};
+
+  RivalDiscretization *disc = nullptr;
+  if (funcOp.getNumResults() > 0) {
+    mlir::Type resultType = funcOp.getResultTypes()[0];
+    if (auto floatType = mlir::dyn_cast<mlir::FloatType>(resultType)) {
+      if (floatType.getWidth() == 32)
+        disc = rival_disc_f32(24);
+      else
+        disc = rival_disc_f64(53);
+    }
+  }
+  if (!disc)
+    disc = rival_disc_f64(53);
+
+  RivalMachine *machine =
+      rival_machine_new(arena, roots, 1, varNamePtrs.data(), numArgs, disc,
+                        config.maxRivalPrecision, 1000);
+
+  if (!machine) {
+    funcOp.emitError() << "Failed to create Rival machine";
+    rival_disc_free(disc);
+    rival_expr_arena_free(arena);
+    return result;
+  }
+
+  IntervalSearchOptions options;
+  options.maxSearchDepth = config.maxSearchDepth;
+  options.maxRegions = config.maxRegions;
+  options.analysisPrecision = config.analysisPrecision;
+  options.maxRivalPrecision = config.maxRivalPrecision;
+  options.maxRivalIterations = config.maxRivalIterations;
+  options.emitStatistics = false;
+
+  std::vector<Hyperrect> initialRects;
+  initialRects.push_back(
+      createFullDomainRect(result.floatBitWidths, config.analysisPrecision));
+
+  result.searchResult =
+      findIntervals(machine, initialRects, result.floatBitWidths, options);
+  result.success = true;
+
+  rival_machine_free(machine);
+  rival_disc_free(disc);
+  rival_expr_arena_free(arena);
 
   return result;
 }

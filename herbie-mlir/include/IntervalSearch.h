@@ -1,14 +1,16 @@
 #ifndef HERBIE_MLIR_INTERVAL_SEARCH_H
 #define HERBIE_MLIR_INTERVAL_SEARCH_H
 
-#include "mlir/IR/Types.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "rival.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <mpfr.h>
 #include <optional>
+#include <utility>
 #include <vector>
 
 namespace herbie {
@@ -235,6 +237,32 @@ public:
 private:
   std::vector<const mpfr_t *> ptrs_;
 };
+
+// ============================================================================
+// Function-Level Interval Search
+// ============================================================================
+
+/// Configuration object for storing rival and search options
+struct IntervalSearchConfig {
+  unsigned maxSearchDepth = 128;
+  unsigned maxRegions = 131072;
+  unsigned analysisPrecision = 128;
+  unsigned maxRivalPrecision = 2000;
+  unsigned maxRivalIterations = 5;
+};
+
+/// Result of running interval search on a function.
+struct FunctionIntervalResult {
+  SearchResult searchResult;
+  std::vector<unsigned> floatBitWidths;
+  bool success = false;
+};
+
+/// Run interval search on a function that implements RivalCompileableInterface.
+/// Returns the search result containing sampleable regions and statistics.
+FunctionIntervalResult
+runIntervalSearchOnFunction(mlir::func::FuncOp funcOp,
+                            const IntervalSearchConfig &config);
 
 } // namespace herbie
 
