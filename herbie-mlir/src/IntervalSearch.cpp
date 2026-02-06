@@ -468,7 +468,13 @@ herbie::runIntervalSearchOnFunction(mlir::func::FuncOp funcOp,
     return result;
   }
 
-  uint32_t exprRoot = iface.compile(arena, {});
+  auto exprs = iface.compile(arena, {});
+  if (exprs.size() != 1) {
+    funcOp->emitError()
+        << "Currently, only functions with a single result are supported.";
+    return result;
+  }
+  uint32_t exprRoot = exprs[0];
 
   size_t numArgs = funcOp.getNumArguments();
   std::vector<std::string> varNames;

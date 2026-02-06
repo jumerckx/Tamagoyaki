@@ -118,7 +118,7 @@ def RivalCompileableInterface : OpInterface<"RivalCompileableInterface"> {
   let methods = [
     InterfaceMethod<
       "Compile the operation to a Rival expression.",
-      "uint32_t", "compile",
+      "llvm::ArrayRef<uint32_t>", "compile",
       (ins "::RivalExprArena *":$arena, "::llvm::ArrayRef<uint32_t>":$operands)
     >
   ];

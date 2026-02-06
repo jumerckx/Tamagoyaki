@@ -26,33 +26,39 @@ namespace {
 #define RIVAL_UNARY_OP(NAME, OP_TYPE, RIVAL_FUNC)                              \
   struct NAME                                                                  \
       : public RivalCompileableInterface::ExternalModel<NAME, OP_TYPE> {       \
-    uint32_t compile(Operation *op, RivalExprArena *arena,                     \
-                     ArrayRef<uint32_t> operands) const {                      \
+    ArrayRef<uint32_t> compile(Operation *op, RivalExprArena *arena,           \
+                               ArrayRef<uint32_t> operands) const {            \
       if (operands.size() != 1)                                                \
         llvm::report_fatal_error(#OP_TYPE " expects 1 operand");               \
-      return RIVAL_FUNC(arena, operands[0]);                                   \
+      static thread_local uint32_t result;                                     \
+      result = RIVAL_FUNC(arena, operands[0]);                                 \
+      return ArrayRef<uint32_t>(result);                                       \
     }                                                                          \
   };
 
 #define RIVAL_BINARY_OP(NAME, OP_TYPE, RIVAL_FUNC)                             \
   struct NAME                                                                  \
       : public RivalCompileableInterface::ExternalModel<NAME, OP_TYPE> {       \
-    uint32_t compile(Operation *op, RivalExprArena *arena,                     \
-                     ArrayRef<uint32_t> operands) const {                      \
+    ArrayRef<uint32_t> compile(Operation *op, RivalExprArena *arena,           \
+                               ArrayRef<uint32_t> operands) const {            \
       if (operands.size() != 2)                                                \
         llvm::report_fatal_error(#OP_TYPE " expects 2 operands");              \
-      return RIVAL_FUNC(arena, operands[0], operands[1]);                      \
+      static thread_local uint32_t result;                                     \
+      result = RIVAL_FUNC(arena, operands[0], operands[1]);                    \
+      return ArrayRef<uint32_t>(result);                                       \
     }                                                                          \
   };
 
 #define RIVAL_TERNARY_OP(NAME, OP_TYPE, RIVAL_FUNC)                            \
   struct NAME                                                                  \
       : public RivalCompileableInterface::ExternalModel<NAME, OP_TYPE> {       \
-    uint32_t compile(Operation *op, RivalExprArena *arena,                     \
-                     ArrayRef<uint32_t> operands) const {                      \
+    ArrayRef<uint32_t> compile(Operation *op, RivalExprArena *arena,           \
+                               ArrayRef<uint32_t> operands) const {            \
       if (operands.size() != 3)                                                \
         llvm::report_fatal_error(#OP_TYPE " expects 3 operands");              \
-      return RIVAL_FUNC(arena, operands[0], operands[1], operands[2]);         \
+      static thread_local uint32_t result;                                     \
+      result = RIVAL_FUNC(arena, operands[0], operands[1], operands[2]);       \
+      return ArrayRef<uint32_t>(result);                                       \
     }                                                                          \
   };
 
@@ -73,74 +79,86 @@ RIVAL_BINARY_OP(ArithMinNumFRivalCompile, arith::MinNumFOp, rival_expr_fmin)
 RIVAL_TERNARY_OP(ArithSelectRivalCompile, arith::SelectOp, rival_expr_if)
 
 // Pass-through ops (no-ops in Rival's arbitrary precision model)
+// Pass-through ops
 struct ArithExtFRivalCompile
     : public RivalCompileableInterface::ExternalModel<ArithExtFRivalCompile,
                                                       arith::ExtFOp> {
-  uint32_t compile(Operation *op, RivalExprArena *arena,
-                   ArrayRef<uint32_t> operands) const {
+  ArrayRef<uint32_t> compile(Operation *op, RivalExprArena *arena,
+                             ArrayRef<uint32_t> operands) const {
     if (operands.size() != 1)
       llvm::report_fatal_error("arith::ExtFOp expects 1 operand");
-    return operands[0];
+    return operands.take_front(1);
   }
 };
 
 struct ArithTruncFRivalCompile
     : public RivalCompileableInterface::ExternalModel<ArithTruncFRivalCompile,
                                                       arith::TruncFOp> {
-  uint32_t compile(Operation *op, RivalExprArena *arena,
-                   ArrayRef<uint32_t> operands) const {
+  ArrayRef<uint32_t> compile(Operation *op, RivalExprArena *arena,
+                             ArrayRef<uint32_t> operands) const {
     if (operands.size() != 1)
       llvm::report_fatal_error("arith::TruncFOp expects 1 operand");
-    return operands[0];
+    return operands.take_front(1);
   }
 };
 
 struct ArithCmpFRivalCompile
     : public RivalCompileableInterface::ExternalModel<ArithCmpFRivalCompile,
                                                       arith::CmpFOp> {
-  uint32_t compile(Operation *op, RivalExprArena *arena,
-                   ArrayRef<uint32_t> operands) const {
+  ArrayRef<uint32_t> compile(Operation *op, RivalExprArena *arena,
+                             ArrayRef<uint32_t> operands) const {
     if (operands.size() != 2)
       llvm::report_fatal_error("arith.cmpf expects 2 operands");
 
     auto pred = cast<arith::CmpFOp>(op).getPredicate();
     uint32_t lhs = operands[0], rhs = operands[1];
 
+    static thread_local uint32_t result;
     switch (pred) {
     case arith::CmpFPredicate::OEQ:
     case arith::CmpFPredicate::UEQ:
-      return rival_expr_eq(arena, lhs, rhs);
+      result = rival_expr_eq(arena, lhs, rhs);
+      break;
     case arith::CmpFPredicate::ONE:
     case arith::CmpFPredicate::UNE:
-      return rival_expr_ne(arena, lhs, rhs);
+      result = rival_expr_ne(arena, lhs, rhs);
+      break;
     case arith::CmpFPredicate::OLT:
     case arith::CmpFPredicate::ULT:
-      return rival_expr_lt(arena, lhs, rhs);
+      result = rival_expr_lt(arena, lhs, rhs);
+      break;
     case arith::CmpFPredicate::OLE:
     case arith::CmpFPredicate::ULE:
-      return rival_expr_le(arena, lhs, rhs);
+      result = rival_expr_le(arena, lhs, rhs);
+      break;
     case arith::CmpFPredicate::OGT:
     case arith::CmpFPredicate::UGT:
-      return rival_expr_gt(arena, lhs, rhs);
+      result = rival_expr_gt(arena, lhs, rhs);
+      break;
     case arith::CmpFPredicate::OGE:
     case arith::CmpFPredicate::UGE:
-      return rival_expr_ge(arena, lhs, rhs);
+      result = rival_expr_ge(arena, lhs, rhs);
+      break;
     default:
       llvm::report_fatal_error("Unsupported cmpf predicate for Rival");
     }
+    return ArrayRef<uint32_t>(result);
   }
 };
 
 struct ArithConstantRivalCompile
     : public RivalCompileableInterface::ExternalModel<ArithConstantRivalCompile,
                                                       arith::ConstantOp> {
-  uint32_t compile(Operation *op, RivalExprArena *arena,
-                   ArrayRef<uint32_t> operands) const {
+  ArrayRef<uint32_t> compile(Operation *op, RivalExprArena *arena,
+                             ArrayRef<uint32_t> operands) const {
+    static thread_local uint32_t result;
     if (auto floatAttr =
             dyn_cast<FloatAttr>(cast<arith::ConstantOp>(op).getValue()))
-      return rival_expr_f64(arena, floatAttr.getValueAsDouble());
-    llvm::report_fatal_error(
-        "arith.constant: only floating point constants supported");
+      result = rival_expr_f64(arena, floatAttr.getValueAsDouble());
+    else
+      llvm::report_fatal_error(
+          "arith.constant: only floating point constants supported");
+    return ArrayRef<uint32_t>(result);
   }
 };
 
@@ -192,16 +210,17 @@ RIVAL_TERNARY_OP(MathFmaRivalCompile, math::FmaOp, rival_expr_fma)
 struct MathRsqrtRivalCompile
     : public RivalCompileableInterface::ExternalModel<MathRsqrtRivalCompile,
                                                       math::RsqrtOp> {
-  uint32_t compile(Operation *op, RivalExprArena *arena,
-                   ArrayRef<uint32_t> operands) const {
+  ArrayRef<uint32_t> compile(Operation *op, RivalExprArena *arena,
+                             ArrayRef<uint32_t> operands) const {
     if (operands.size() != 1)
       llvm::report_fatal_error("math::RsqrtOp expects 1 operand");
+    static thread_local uint32_t result;
     uint32_t one = rival_expr_f64(arena, 1.0);
     uint32_t sqrtVal = rival_expr_sqrt(arena, operands[0]);
-    return rival_expr_div(arena, one, sqrtVal);
+    result = rival_expr_div(arena, one, sqrtVal);
+    return ArrayRef<uint32_t>(result);
   }
 };
-
 // ============================================================================
 // Func Dialect Operations
 // ============================================================================
@@ -209,8 +228,8 @@ struct MathRsqrtRivalCompile
 struct FuncRivalCompile
     : public RivalCompileableInterface::ExternalModel<FuncRivalCompile,
                                                       func::FuncOp> {
-  uint32_t compile(Operation *op, RivalExprArena *arena,
-                   ArrayRef<uint32_t> operands) const {
+  ArrayRef<uint32_t> compile(Operation *op, RivalExprArena *arena,
+                             ArrayRef<uint32_t> operands) const {
     auto funcOp = cast<func::FuncOp>(op);
     if (funcOp.getBlocks().size() != 1)
       llvm::report_fatal_error("Only single block functions supported");
@@ -229,7 +248,9 @@ struct FuncRivalCompile
           llvm::report_fatal_error("Only single return value supported");
         if (valueMap.count(returnOp.getOperand(0)) == 0)
           llvm::report_fatal_error("Return operand not computed");
-        return valueMap[returnOp.getOperand(0)];
+        static thread_local uint32_t result;
+        result = valueMap[returnOp.getOperand(0)];
+        return ArrayRef<uint32_t>(result);
       }
 
       if (auto iface = dyn_cast<RivalCompileableInterface>(innerOp)) {
@@ -243,7 +264,10 @@ struct FuncRivalCompile
         if (innerOp.getNumResults() != 1)
           llvm::report_fatal_error(
               "Only single result operations supported inside func");
-        valueMap[innerOp.getResult(0)] = iface.compile(arena, opOperands);
+        ArrayRef<uint32_t> compiledResults = iface.compile(arena, opOperands);
+        if (compiledResults.size() != 1)
+          llvm::report_fatal_error("Expected single result from compile");
+        valueMap[innerOp.getResult(0)] = compiledResults[0];
       } else {
         llvm::report_fatal_error(
             "Operation not supported (missing RivalCompileableInterface): " +

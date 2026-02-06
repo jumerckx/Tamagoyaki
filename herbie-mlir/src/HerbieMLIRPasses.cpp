@@ -202,7 +202,12 @@ public:
         return;
       }
 
-      uint32_t exprRoot = iface.compile(arena, {});
+      auto exprs = iface.compile(arena, {});
+      if (exprs.size() != 1) {
+        llvm::errs()
+            << "Currently only single-result operations are supported\n";
+      }
+      auto exprRoot = exprs[0];
 
       size_t numArgs = funcOp.getNumArguments();
       std::vector<std::string> varNames;
