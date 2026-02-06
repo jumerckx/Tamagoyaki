@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "EmatchDialect.h"
+#include "EmatchUtils.h"
 
 #include "EquivalenceDialect.h"
 #include "Utils/ClassOpUnionFind.h"
@@ -91,11 +92,13 @@ struct PendingMatch {
   mlir::detail::PDLByteCode::MatchResult matchResult;
 };
 
+} // namespace
+
 /// Run equality saturation on the given IR module using the provided pattern
 /// module. The patternModule is consumed (removed from parent).
 /// Returns true on success.
-static bool runSaturation(MLIRContext *ctx, ModuleOp patternModule,
-                          ModuleOp irModule, int maxIters) {
+bool runSaturation(MLIRContext *ctx, ModuleOp patternModule, ModuleOp irModule,
+                   int maxIters) {
   RewritePatternSet patternList(ctx);
 
   patternModule.getOperation()->remove();
@@ -220,6 +223,8 @@ static bool runSaturation(MLIRContext *ctx, ModuleOp patternModule,
 
   return true;
 }
+
+namespace {
 
 struct EmatchSaturatePass
     : public impl::EmatchSaturatePassBase<EmatchSaturatePass> {
