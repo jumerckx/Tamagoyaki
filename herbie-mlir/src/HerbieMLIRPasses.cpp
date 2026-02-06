@@ -1,17 +1,26 @@
+#include "EmatchUtils.h"
 #include "EquivalenceDialect.h"
+#include "EquivalenceUtils.h"
 #include "HerbieMLIR.h"
 #include "HerbieMLIROpInterfaces.h"
+#include "HerbieUtils.h"
+#include "IntervalSearch.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
 #include "mlir/IR/Block.h"
+#include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/DialectRegistry.h"
+#include "mlir/IR/OwningOpRef.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <mach/mach.h>
 #include <mpfr.h>
 #include <rival.h>
 #include <string>
@@ -22,7 +31,74 @@ namespace herbie {
 #define GEN_PASS_DEF_HERBIEMLIRTEMPLATEPASS
 #define GEN_PASS_DEF_RIVALEVALUATEPASS
 #define GEN_PASS_DEF_HERBIEPRINTTOPOSORT
+#define GEN_PASS_DEF_HERBIEOPTIMIZEPASS
 #include "HerbieMLIRPasses.h.inc"
+
+using namespace mlir;
+using namespace mlir::equivalence;
+
+SmallVector<Operation *> computeSelectedTopoSort(GraphOp graphOp) {
+  Block &block = graphOp.getBody().front();
+
+  DenseSet<Operation *> excludedOps;
+
+  for (Operation &op : block) {
+    if (isa<YieldOp>(&op))
+      continue;
+
+    bool anyResultNeeded = false;
+    for (Value result : op.getResults()) {
+      for (OpOperand &use : result.getUses()) {
+        Operation *user = use.getOwner();
+        auto classOp = dyn_cast<ClassOp>(user);
+        if (!classOp) {
+          anyResultNeeded = true;
+          break;
+        }
+        if (auto minCostAttr =
+                classOp->getAttrOfType<IntegerAttr>("min_cost_index")) {
+          int64_t minIdx = minCostAttr.getInt();
+          if (minIdx >= 0 &&
+              static_cast<size_t>(minIdx) < classOp.getInputs().size() &&
+              classOp.getInputs()[minIdx] == result) {
+            anyResultNeeded = true;
+            break;
+          }
+        } else {
+          anyResultNeeded = true;
+          break;
+        }
+      }
+      if (anyResultNeeded)
+        break;
+    }
+
+    if (!anyResultNeeded)
+      excludedOps.insert(&op);
+  }
+
+  SmallVector<Operation *> opsToSort;
+  for (Operation &op : block) {
+    if (!excludedOps.contains(&op))
+      opsToSort.push_back(&op);
+  }
+
+  auto isOperandReady = [&](Value value, Operation *) -> bool {
+    Operation *defOp = value.getDefiningOp();
+    return !defOp || excludedOps.contains(defOp);
+  };
+
+  computeTopologicalSorting(opsToSort, isOperandReady);
+
+  // Remove YieldOp from result
+  SmallVector<Operation *> result;
+  for (Operation *op : opsToSort) {
+    if (!isa<YieldOp>(op)) {
+      result.push_back(op);
+    }
+  }
+  return result;
+}
 
 namespace {
 
@@ -202,79 +278,102 @@ public:
     mlir::ModuleOp module = getOperation();
 
     module.walk([&](mlir::equivalence::GraphOp graphOp) {
-      mlir::Block &block = graphOp.getBody().front();
-
-      // Determine which operations to exclude from the sort.
-      // An operation is excluded only if ALL of its results are exclusively
-      // consumed by equivalence.class ops whose min_cost_index does NOT
-      // select them. If any result is selected by a class, or used by a
-      // non-class op, the operation is included.
-      mlir::DenseSet<mlir::Operation *> excludedOps;
-
-      for (mlir::Operation &op : block) {
-        if (mlir::isa<mlir::equivalence::YieldOp>(&op))
-          continue;
-
-        bool anyResultNeeded = false;
-        for (mlir::Value result : op.getResults()) {
-          for (mlir::OpOperand &use : result.getUses()) {
-            mlir::Operation *user = use.getOwner();
-            auto classOp = mlir::dyn_cast<mlir::equivalence::ClassOp>(user);
-            if (!classOp) {
-              // Used by a non-class op — this result is needed.
-              anyResultNeeded = true;
-              break;
-            }
-            // Used by a class op — check if min_cost_index selects this input.
-            if (auto minCostAttr = classOp->getAttrOfType<mlir::IntegerAttr>(
-                    "min_cost_index")) {
-              int64_t minIdx = minCostAttr.getInt();
-              if (minIdx >= 0 &&
-                  static_cast<size_t>(minIdx) < classOp.getInputs().size() &&
-                  classOp.getInputs()[minIdx] == result) {
-                anyResultNeeded = true;
-                break;
-              }
-            } else {
-              // No min_cost_index — conservatively treat as needed.
-              anyResultNeeded = true;
-              break;
-            }
-          }
-          if (anyResultNeeded)
-            break;
-        }
-
-        if (!anyResultNeeded)
-          excludedOps.insert(&op);
-      }
-
-      // Collect included ops in block order.
-      mlir::SmallVector<mlir::Operation *> opsToSort;
-      for (mlir::Operation &op : block) {
-        if (!excludedOps.contains(&op))
-          opsToSort.push_back(&op);
-      }
-
-      // Operands defined by excluded ops are treated as ready (no dependency).
-      auto isOperandReady = [&](mlir::Value value, mlir::Operation *) -> bool {
-        mlir::Operation *defOp = value.getDefiningOp();
-        return !defOp || excludedOps.contains(defOp);
-      };
-
-      mlir::computeTopologicalSorting(opsToSort, isOperandReady);
+      auto sortedOps = computeSelectedTopoSort(graphOp);
 
       llvm::errs() << "Topological order for graph at " << graphOp.getLoc()
                    << ":\n";
-      for (mlir::Operation *op : opsToSort) {
-        if (!mlir::isa<mlir::equivalence::YieldOp>(op)) {
-          llvm::errs() << "  ";
-          op->print(llvm::errs(), mlir::OpPrintingFlags().skipRegions());
-          llvm::errs() << "\n";
-        }
+      for (mlir::Operation *op : sortedOps) {
+        llvm::errs() << "  ";
+        op->print(llvm::errs(), mlir::OpPrintingFlags().skipRegions());
+        llvm::errs() << "\n";
       }
       llvm::errs() << "\n";
     });
+  }
+};
+
+class HerbieOptimizePass
+    : public impl::HerbieOptimizePassBase<HerbieOptimizePass> {
+public:
+  using impl::HerbieOptimizePassBase<
+      HerbieOptimizePass>::HerbieOptimizePassBase;
+
+  void getDependentDialects(mlir::DialectRegistry &registry) const override {
+    registry.insert<mlir::equivalence::EquivalenceDialect>();
+    registry.insert<mlir::func::FuncDialect>();
+    registry.insert<mlir::pdl_interp::PDLInterpDialect>();
+  }
+
+  void runOnOperation() final {
+    mlir::ModuleOp module = getOperation();
+
+    ModuleOp patternModule = module.lookupSymbol<ModuleOp>(
+        StringAttr::get(module->getContext(), "patterns"));
+    ModuleOp irModule = module.lookupSymbol<ModuleOp>(
+        StringAttr::get(module->getContext(), "ir"));
+
+    if (!patternModule || !irModule)
+      return;
+
+    IntervalSearchConfig intervalConfig;
+    intervalConfig.maxSearchDepth = maxSearchDepth;
+    intervalConfig.maxRegions = maxRegions;
+    intervalConfig.analysisPrecision = analysisPrecision;
+    intervalConfig.maxRivalPrecision = maxRivalPrecision;
+    intervalConfig.maxRivalIterations = maxRivalIterations;
+
+    irModule.walk([&](mlir::func::FuncOp funcOp) {
+      FunctionIntervalResult intervalResult =
+          runIntervalSearchOnFunction(funcOp, intervalConfig);
+
+      if (!intervalResult.success) {
+        funcOp.emitWarning() << "Interval search failed, continuing anyway";
+      } else {
+        llvm::errs() << "  Found "
+                     << intervalResult.searchResult.sampleableRegions.size()
+                     << " sampleable regions\n";
+        llvm::errs() << "  Valid fraction: "
+                     << intervalResult.searchResult.statistics.validFraction
+                     << "\n";
+      }
+
+      llvm::errs() << "Step 2: Inserting equivalence graph...\n";
+
+      if (mlir::failed(mlir::equivalence::insertGraphInFunction(
+              funcOp, /*insertSingleElementEqs=*/false))) {
+        funcOp.emitError() << "Failed to insert equivalence graph";
+        return signalPassFailure();
+      }
+
+      llvm::errs() << "  Graph inserted successfully\n";
+    });
+
+    // Run saturation
+    bool saturationSuccess = mlir::ematch::runSaturation(
+        irModule->getContext(), patternModule, irModule, maxSaturationIters);
+
+    if (!saturationSuccess) {
+      llvm::errs() << "  Warning: Saturation returned false\n";
+    } else {
+      llvm::errs() << "  Saturation completed\n";
+    }
+
+    // Step 4: Compute topological sort of selected operations
+    llvm::errs() << "Step 4: Computing topological sort...\n";
+
+    irModule.walk([&](mlir::equivalence::GraphOp graphOp) {
+      auto sortedOps = computeSelectedTopoSort(graphOp);
+
+      llvm::errs() << "  Topological order (" << sortedOps.size()
+                   << " operations):\n";
+      for (mlir::Operation *op : sortedOps) {
+        llvm::errs() << "    ";
+        op->print(llvm::errs(), mlir::OpPrintingFlags().skipRegions());
+        llvm::errs() << "\n";
+      }
+    });
+
+    llvm::errs() << "=== End Herbie Optimize ===\n";
   }
 };
 
