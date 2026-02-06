@@ -204,58 +204,62 @@ public:
     module.walk([&](mlir::equivalence::GraphOp graphOp) {
       mlir::Block &block = graphOp.getBody().front();
 
-      // Find the YieldOp
-      auto *yieldOp = block.getTerminator();
-      if (!mlir::isa<mlir::equivalence::YieldOp>(yieldOp))
-        return;
+      // Determine which operations to exclude from the sort.
+      // An operation is excluded only if ALL of its results are exclusively
+      // consumed by equivalence.class ops whose min_cost_index does NOT
+      // select them. If any result is selected by a class, or used by a
+      // non-class op, the operation is included.
+      mlir::DenseSet<mlir::Operation *> excludedOps;
 
-      // Compute backward reachable set from yield using worklist algorithm
-      mlir::DenseSet<mlir::Operation *> neededOps;
-      mlir::SmallVector<mlir::Value> worklist;
-
-      neededOps.insert(yieldOp);
-      for (mlir::Value operand : yieldOp->getOperands())
-        worklist.push_back(operand);
-
-      while (!worklist.empty()) {
-        mlir::Value value = worklist.pop_back_val();
-        mlir::Operation *defOp = value.getDefiningOp();
-        if (!defOp || neededOps.contains(defOp))
+      for (mlir::Operation &op : block) {
+        if (mlir::isa<mlir::equivalence::YieldOp>(&op))
           continue;
 
-        neededOps.insert(defOp);
-
-        if (auto classOp = mlir::dyn_cast<mlir::equivalence::ClassOp>(defOp)) {
-          // For ClassOp, only follow the selected input (min_cost_index)
-          if (auto minCostAttr =
-                  classOp->getAttrOfType<mlir::IntegerAttr>("min_cost_index")) {
-            int64_t minIdx = minCostAttr.getInt();
-            if (minIdx >= 0 &&
-                static_cast<size_t>(minIdx) < classOp.getInputs().size()) {
-              worklist.push_back(classOp.getInputs()[minIdx]);
+        bool anyResultNeeded = false;
+        for (mlir::Value result : op.getResults()) {
+          for (mlir::OpOperand &use : result.getUses()) {
+            mlir::Operation *user = use.getOwner();
+            auto classOp = mlir::dyn_cast<mlir::equivalence::ClassOp>(user);
+            if (!classOp) {
+              // Used by a non-class op — this result is needed.
+              anyResultNeeded = true;
+              break;
             }
-          } else {
-            for (mlir::Value operand : classOp.getInputs())
-              worklist.push_back(operand);
+            // Used by a class op — check if min_cost_index selects this input.
+            if (auto minCostAttr = classOp->getAttrOfType<mlir::IntegerAttr>(
+                    "min_cost_index")) {
+              int64_t minIdx = minCostAttr.getInt();
+              if (minIdx >= 0 &&
+                  static_cast<size_t>(minIdx) < classOp.getInputs().size() &&
+                  classOp.getInputs()[minIdx] == result) {
+                anyResultNeeded = true;
+                break;
+              }
+            } else {
+              // No min_cost_index — conservatively treat as needed.
+              anyResultNeeded = true;
+              break;
+            }
           }
-        } else {
-          // For other ops, follow all operands
-          for (mlir::Value operand : defOp->getOperands())
-            worklist.push_back(operand);
+          if (anyResultNeeded)
+            break;
         }
+
+        if (!anyResultNeeded)
+          excludedOps.insert(&op);
       }
 
-      // Collect ops in block order (needed for stable toposort input)
+      // Collect included ops in block order.
       mlir::SmallVector<mlir::Operation *> opsToSort;
       for (mlir::Operation &op : block) {
-        if (neededOps.contains(&op))
+        if (!excludedOps.contains(&op))
           opsToSort.push_back(&op);
       }
 
-      // Operands from ops not in neededOps are treated as ready
+      // Operands defined by excluded ops are treated as ready (no dependency).
       auto isOperandReady = [&](mlir::Value value, mlir::Operation *) -> bool {
         mlir::Operation *defOp = value.getDefiningOp();
-        return !defOp || !neededOps.contains(defOp);
+        return !defOp || excludedOps.contains(defOp);
       };
 
       mlir::computeTopologicalSorting(opsToSort, isOperandReady);
