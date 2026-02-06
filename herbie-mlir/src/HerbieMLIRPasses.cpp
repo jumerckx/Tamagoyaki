@@ -21,7 +21,7 @@ namespace herbie {
 
 #define GEN_PASS_DEF_HERBIEMLIRTEMPLATEPASS
 #define GEN_PASS_DEF_RIVALEVALUATEPASS
-#define GEN_PASS_DEF_EQUIVALENCEPRINTTOPOSORT
+#define GEN_PASS_DEF_HERBIEPRINTTOPOSORT
 #include "HerbieMLIRPasses.h.inc"
 
 namespace {
@@ -192,11 +192,11 @@ public:
   }
 };
 
-class EquivalencePrintTopoSort
-    : public impl::EquivalencePrintTopoSortBase<EquivalencePrintTopoSort> {
+class HerbiePrintTopoSort
+    : public impl::HerbiePrintTopoSortBase<HerbiePrintTopoSort> {
 public:
-  using impl::EquivalencePrintTopoSortBase<
-      EquivalencePrintTopoSort>::EquivalencePrintTopoSortBase;
+  using impl::HerbiePrintTopoSortBase<
+      HerbiePrintTopoSort>::HerbiePrintTopoSortBase;
 
   void runOnOperation() final {
     mlir::ModuleOp module = getOperation();

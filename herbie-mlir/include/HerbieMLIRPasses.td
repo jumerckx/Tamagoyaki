@@ -58,7 +58,7 @@ def IntervalSearchPass : Pass<"interval-search", "::mlir::func::FuncOp"> {
   ];
 }
 
-def EquivalencePrintTopoSort : Pass<"equivalence-print-toposort", "::mlir::ModuleOp"> {
+def HerbiePrintTopoSort : Pass<"herbie-print-toposort", "::mlir::ModuleOp"> {
   let summary = "Prints topological ordering of selected operations in equivalence.graph.";
   let description = [{
     Computes a topological sort of operations in each equivalence.graph op,
