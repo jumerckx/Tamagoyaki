@@ -1,21 +1,35 @@
-# herbie-mlir source code
+# herbie-mlir library
+
+include(${PROJECT_SOURCE_DIR}/cmake/TableGenHelpers.cmake)
 
 set(HERBIE_MLIR_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../include)
 
-add_mlir_library(herbieMLIR
+# ============================================================================
+# herbieMLIR Library
+# ============================================================================
+set(HERBIE_MLIR_SOURCES
   HerbieMLIRPasses.cpp
   HerbieMLIROpInterfaces.cpp
   RivalExternalModels.cpp
   IntervalSearch.cpp
   IntervalSearchPass.cpp
+)
+
+set_source_object_depends(
+  SOURCES ${HERBIE_MLIR_SOURCES}
+  DEPENDS ${HERBIE_MLIR_GENERATED_HEADERS}
+)
+
+add_mlir_library(herbieMLIR
+  ${HERBIE_MLIR_SOURCES}
   PARTIAL_SOURCES_INTENDED
 
   ADDITIONAL_HEADER_DIRS
   ${HERBIE_MLIR_INCLUDE_DIR}
 
   DEPENDS
-  HerbieMLIRPassesIncGen
-  copy_herbie_mlir_generated_to_src_include
+  MLIRHerbieMLIRIncGen
+  copy_herbiemlir_generated_td_to_src_include
 
   LINK_LIBS PUBLIC
   MLIRIR

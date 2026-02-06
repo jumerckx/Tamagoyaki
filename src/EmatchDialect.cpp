@@ -330,13 +330,3 @@ struct EmatchSaturateBenchmarkPass
 };
 } // namespace
 } // namespace mlir::ematch
-
-#define GEN_PASS_REGISTRATION
-#include "EmatchPasses.h.inc"
-
-namespace mlir::ematch {
-void registerPasses() {
-  registerEmatchSaturatePass();
-  registerEmatchSaturateBenchmarkPass();
-}
-} // namespace mlir::ematch

@@ -17,14 +17,10 @@ using namespace mlir;
 using namespace mlir::equivalence;
 using namespace mlir::ematch;
 
-namespace mlir::ematch {
-void registerPasses();
-}
-
 int main(int argc, char **argv) {
   mlir::registerAllPasses();
-  mlir::equivalence::registerPasses();
-  mlir::ematch::registerPasses();
+  mlir::equivalence::registerEquivalencePasses();
+  mlir::ematch::registerEmatchPasses();
   mlir::DialectRegistry registry;
   registry.insert<mlir::equivalence::EquivalenceDialect,
                   mlir::ematch::EmatchDialect>();

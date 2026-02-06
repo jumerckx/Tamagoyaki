@@ -15,6 +15,7 @@
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Pass/Pass.h"
 
 #include <memory>
 // IWYU pragma: end_keep
@@ -23,5 +24,13 @@
 
 #define GET_OP_CLASSES
 #include "EmatchOps.h.inc"
+
+namespace mlir::ematch {
+#define GEN_PASS_DECL
+#include "EmatchPasses.h.inc"
+
+#define GEN_PASS_REGISTRATION
+#include "EmatchPasses.h.inc"
+} // namespace mlir::ematch
 
 #endif // EMATCH_EMATCHDIALECT_H
