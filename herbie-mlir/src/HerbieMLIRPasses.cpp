@@ -16,8 +16,12 @@
 #include "mlir/IR/OwningOpRef.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <mach/mach.h>
@@ -327,6 +331,18 @@ public:
     intervalConfig.maxRivalPrecision = maxRivalPrecision;
     intervalConfig.maxRivalIterations = maxRivalIterations;
 
+    // Create a shared rival arena for all functions
+    RivalExprArena *arena = rival_expr_arena_new();
+    if (!arena) {
+      llvm::errs() << "Failed to create rival expression arena\n";
+      return signalPassFailure();
+    }
+
+    // Shared state for rival compilation across all functions
+    DenseMap<Value, uint32_t> valueToExpr;
+    std::vector<std::string> varNameStorage;
+    SmallVector<uint32_t> roots;
+
     irModule.walk([&](mlir::func::FuncOp funcOp) {
       FunctionIntervalResult intervalResult =
           runIntervalSearchOnFunction(funcOp, intervalConfig);
@@ -351,6 +367,14 @@ public:
       }
 
       llvm::errs() << "  Graph inserted successfully\n";
+
+      // Map function arguments to rival variables
+      for (auto [i, arg] : llvm::enumerate(funcOp.getArguments())) {
+        std::string name = "arg" + std::to_string(i);
+        varNameStorage.push_back(name);
+        uint32_t varExpr = rival_expr_var(arena, varNameStorage.back().c_str());
+        valueToExpr[arg] = varExpr;
+      }
     });
 
     // Run saturation
@@ -363,8 +387,10 @@ public:
       llvm::errs() << "  Saturation completed\n";
     }
 
-    // Step 4: Compute topological sort of selected operations
-    llvm::errs() << "Step 4: Computing topological sort...\n";
+    // Step 4: Compile selected operations to rival expressions in
+    // topological order, then build the rival machine
+    llvm::errs() << "Step 4: Computing topological sort and compiling to "
+                    "rival expressions...\n";
 
     irModule.walk([&](mlir::equivalence::GraphOp graphOp) {
       auto sortedOps = computeSelectedTopoSort(graphOp);
@@ -376,7 +402,64 @@ public:
         op->print(llvm::errs(), mlir::OpPrintingFlags().skipRegions());
         llvm::errs() << "\n";
       }
+
+      // Compile each operation in topological order so that operand
+      // expressions are already present in valueToExpr when needed
+      for (mlir::Operation *op : sortedOps) {
+        auto iface = dyn_cast<RivalCompileableInterface>(op);
+        if (!iface) {
+          llvm::errs() << "  Skipping op without RivalCompileableInterface: "
+                       << op->getName() << "\n";
+          continue;
+        }
+
+        SmallVector<uint32_t> operandExprs{};
+        for (auto operand : op->getOperands()) {
+          assert(valueToExpr.contains(operand));
+          operandExprs.push_back(valueToExpr[operand]);
+        }
+        auto resultExprs = iface.compile(arena, operandExprs);
+        assert(op->getNumResults() == resultExprs.size());
+        for (auto [val, expr] : llvm::zip(op->getResults(), resultExprs)) {
+          valueToExpr[val] = expr;
+        }
+      }
+
+      // Collect roots from the graph's YieldOp operands
+      graphOp.walk([&](mlir::equivalence::YieldOp yieldOp) {
+        for (Value operand : yieldOp.getOperands()) {
+          auto it = valueToExpr.find(operand);
+          if (it != valueToExpr.end()) {
+            roots.push_back(it->second);
+          }
+        }
+      });
     });
+
+    // Build the rival machine from all collected roots and variables
+    std::vector<const char *> varNamePtrs;
+    varNamePtrs.reserve(varNameStorage.size());
+    for (auto &name : varNameStorage) {
+      varNamePtrs.push_back(name.c_str());
+    }
+
+    llvm::errs() << "Step 5: Building rival machine (" << roots.size()
+                 << " roots, " << varNamePtrs.size() << " variables)...\n";
+
+    RivalDiscretization *disc = rival_disc_f64(analysisPrecision);
+    RivalMachine *machine = rival_machine_new(
+        arena, roots.data(), roots.size(), varNamePtrs.data(),
+        varNamePtrs.size(), disc, maxRivalPrecision, maxRivalIterations);
+
+    if (!machine) {
+      llvm::errs() << "Failed to create rival machine\n";
+    } else {
+      llvm::errs() << "  Rival machine constructed successfully\n";
+      rival_machine_free(machine);
+    }
+
+    rival_disc_free(disc);
+    rival_expr_arena_free(arena);
 
     llvm::errs() << "=== End Herbie Optimize ===\n";
   }
