@@ -402,7 +402,15 @@ LogicalResult insertGraphInFunction(func::FuncOp funcOp,
       builder.createBlock(&funcBody, funcBody.end(), funcType.getInputs(),
                           SmallVector<Location>(funcType.getNumInputs(), loc));
 
-  graphOp->setOperands(newEntryBlock->getArguments());
+  // Remap the inner block arguments (which were the original function
+  // arguments) to the new outer function arguments, as GraphOp captures them
+  // implicitly.
+  Block &innerBlock = graphBody.front();
+  unsigned numArgs = innerBlock.getNumArguments();
+  for (unsigned i = 0; i < numArgs; ++i) {
+    innerBlock.getArgument(i).replaceAllUsesWith(newEntryBlock->getArgument(i));
+  }
+  innerBlock.eraseArguments(0, numArgs);
 
   builder.setInsertionPointToStart(newEntryBlock);
   builder.insert(graphOp);

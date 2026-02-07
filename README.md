@@ -23,14 +23,13 @@ Example:
 
 ```mlir
 func.func @main(%a: i32) -> (i32, i32) {
-  %res = equivalence.graph %a : i32 -> i32 {
-  ^bb0(%b: i32):
+  %res = equivalence.graph -> (i32) {
     %one = arith.constant 1 : i32
     %two = arith.constant 2 : i32
     
-    %mul = arith.muli %b, %two
-    %shift = arith.shli %b, %one : i32
-    // `b << 1` is equivalent to `b * 2`
+    %mul = arith.muli %a, %two
+    %shift = arith.shli %a, %one : i32
+    // `a << 1` is equivalent to `a * 2`
     %result = equivalence.class %mul, %shift : i32
     
     equivalence.yield %result : i32

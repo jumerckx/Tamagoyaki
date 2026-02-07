@@ -103,9 +103,7 @@ def Equivalence_YieldOp : Equivalence_Op<"yield", [
 }
 
 def Equivalence_GraphOp : Equivalence_Op<"graph", [
-    // Ensures the region has one block and ends with a equivalence.yield
     SingleBlockImplicitTerminator<"YieldOp">,
-    IsolatedFromAbove,
     DeclareOpInterfaceMethods<RegionKindInterface>,
  ]> {
     let summary = "A graph region operation";
@@ -116,15 +114,16 @@ def Equivalence_GraphOp : Equivalence_Op<"graph", [
         their definitions.
     }];
 
-    let arguments = (ins Variadic<AnyType>:$inputs);
+    let arguments = (ins);
     let results = (outs Variadic<AnyType>:$outputs);
 
     let regions = (region SizedRegion<1>:$body);
 
     let assemblyFormat = [{
-        $inputs attr-dict `:` functional-type($inputs, results) $body
+        ( `->` `(` type($outputs)^ `)` )? $body attr-dict
     }];
 }
+
 
 def Equivalence_ClassOp : Equivalence_Op<"class", [
     Pure, 
