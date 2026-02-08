@@ -13,6 +13,7 @@ set(HERBIE_MLIR_SOURCES
   RivalExternalModels.cpp
   IntervalSearch.cpp
   IntervalSearchPass.cpp
+  LocalError.cpp
 )
 
 set_source_object_depends(

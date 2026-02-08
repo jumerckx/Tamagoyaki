@@ -5,6 +5,7 @@
 #include "HerbieMLIROpInterfaces.h"
 #include "HerbieUtils.h"
 #include "IntervalSearch.h"
+#include "LocalError.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
@@ -340,9 +341,11 @@ public:
 
     // Shared state for rival compilation across all functions
     DenseMap<Value, uint32_t> valueToExpr;
+    DenseMap<Value, size_t> valueToRootIdx;
     std::vector<std::string> varNameStorage;
     SmallVector<uint32_t> roots;
     SmallVector<FunctionIntervalResult> intervalResults;
+    SmallVector<SmallVector<Operation *>> allSortedOps;
 
     irModule.walk([&](mlir::func::FuncOp funcOp) {
       auto &intervalResult = intervalResults.emplace_back(
@@ -369,12 +372,16 @@ public:
 
       llvm::errs() << "  Graph inserted successfully\n";
 
-      // Map function arguments to rival variables
+      // Map function arguments to rival variables and register as roots
       for (auto [i, arg] : llvm::enumerate(funcOp.getArguments())) {
         std::string name = "arg" + std::to_string(i);
         varNameStorage.push_back(name);
         uint32_t varExpr = rival_expr_var(arena, varNameStorage.back().c_str());
         valueToExpr[arg] = varExpr;
+
+        size_t idx = roots.size();
+        roots.push_back(varExpr);
+        valueToRootIdx[arg] = idx;
       }
     });
 
@@ -405,8 +412,17 @@ public:
       }
 
       // Compile each operation in topological order so that operand
-      // expressions are already present in valueToExpr when needed
+      // expressions are already present in valueToExpr when needed.
+      // Register every result as a rival root so we can look up exact
+      // values for local error computation.
       for (mlir::Operation *op : sortedOps) {
+        if (auto eclass = dyn_cast<ClassOp>(op)) {
+          std::optional<uint64_t> mci = eclass.getMinCostIndex();
+          assert(mci.has_value());
+          valueToExpr[eclass.getResult()] =
+              valueToExpr[eclass->getOperand(mci.value())];
+          break;
+        }
         auto iface = dyn_cast<RivalCompileableInterface>(op);
         if (!iface) {
           llvm::errs() << "  Skipping op without RivalCompileableInterface: "
@@ -423,18 +439,14 @@ public:
         assert(op->getNumResults() == resultExprs.size());
         for (auto [val, expr] : llvm::zip(op->getResults(), resultExprs)) {
           valueToExpr[val] = expr;
+
+          size_t idx = roots.size();
+          roots.push_back(expr);
+          valueToRootIdx[val] = idx;
         }
       }
 
-      // Collect roots from the graph's YieldOp operands
-      graphOp.walk([&](mlir::equivalence::YieldOp yieldOp) {
-        for (Value operand : yieldOp.getOperands()) {
-          auto it = valueToExpr.find(operand);
-          if (it != valueToExpr.end()) {
-            roots.push_back(it->second);
-          }
-        }
-      });
+      allSortedOps.push_back(sortedOps);
     });
 
     // Build the rival machine from all collected roots and variables
@@ -476,20 +488,27 @@ public:
       llvm::errs() << "  Sampled " << samplingResult.sampled << " / 256 points"
                    << " (skipped " << samplingResult.skipped << ")\n";
 
-      for (unsigned i = 0; i < std::min(samplingResult.sampled, 3u); ++i) {
-        llvm::errs() << "  Point " << i << ": (";
-        for (size_t d = 0; d < intervalResult.floatBitWidths.size(); ++d) {
-          if (d > 0)
-            llvm::errs() << ", ";
-          llvm::errs() << samplingResult.points[i][d];
+      // Step 7: Compute local error for each operation
+      llvm::errs() << "Step 7: Computing local errors...\n";
+
+      for (auto &sortedOps : allSortedOps) {
+        auto localErrors =
+            computeLocalErrors(sortedOps, valueToRootIdx, samplingResult);
+
+        for (auto &errInfo : localErrors) {
+          if (errInfo.count == 0)
+            continue;
+
+          llvm::errs() << "  ";
+          errInfo.op->print(llvm::errs(),
+                            mlir::OpPrintingFlags().skipRegions());
+          llvm::errs() << "\n    max_ulp=" << errInfo.maxUlp
+                       << " mean_ulp=" << errInfo.meanUlp()
+                       << " samples=" << errInfo.count;
+          if (errInfo.foldFailures > 0)
+            llvm::errs() << " fold_failures=" << errInfo.foldFailures;
+          llvm::errs() << "\n";
         }
-        llvm::errs() << ") -> (";
-        for (size_t j = 0; j < roots.size(); ++j) {
-          if (j > 0)
-            llvm::errs() << ", ";
-          llvm::errs() << samplingResult.results[i][j];
-        }
-        llvm::errs() << ")\n";
       }
     }
 
