@@ -395,6 +395,9 @@ public:
       llvm::errs() << "  Saturation completed\n";
     }
 
+    // select greedily:
+    irModule.walk([&](GraphOp graphOp) { selectGreedy(graphOp, 1); });
+
     // Step 4: Compile selected operations to rival expressions in
     // topological order, then build the rival machine
     llvm::errs() << "Step 4: Computing topological sort and compiling to "

@@ -666,11 +666,9 @@ SamplingResult herbie::sampleAndEvaluate(
     for (size_t d = 0; d < numVars; ++d)
       mpfr_set_d(argMpfr[d], pt[d], MPFR_RNDN);
 
-    const RivalHints *hints = regions[regionIdx].hints.get();
-
     RivalError err =
         rival_apply(machine, argPtrs.data(), numVars, outPtrs.data(), numRoots,
-                    hints, evalMaxIterations, evalMaxPrecision);
+                    nullptr, evalMaxIterations, evalMaxPrecision);
 
     if (err != RIVAL_ERROR_OK) {
       ++sr.skipped;
