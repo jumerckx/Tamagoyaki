@@ -342,10 +342,11 @@ public:
     DenseMap<Value, uint32_t> valueToExpr;
     std::vector<std::string> varNameStorage;
     SmallVector<uint32_t> roots;
+    SmallVector<FunctionIntervalResult> intervalResults;
 
     irModule.walk([&](mlir::func::FuncOp funcOp) {
-      FunctionIntervalResult intervalResult =
-          runIntervalSearchOnFunction(funcOp, intervalConfig);
+      auto &intervalResult = intervalResults.emplace_back(
+          runIntervalSearchOnFunction(funcOp, intervalConfig));
 
       if (!intervalResult.success) {
         funcOp.emitWarning() << "Interval search failed, continuing anyway";
@@ -453,11 +454,46 @@ public:
 
     if (!machine) {
       llvm::errs() << "Failed to create rival machine\n";
-    } else {
-      llvm::errs() << "  Rival machine constructed successfully\n";
-      rival_machine_free(machine);
+      rival_disc_free(disc);
+      rival_expr_arena_free(arena);
+      return signalPassFailure();
     }
 
+    llvm::errs() << "  Rival machine constructed successfully\n";
+
+    llvm::errs() << "Step 6: Sampling points and evaluating...\n";
+
+    if (intervalResults.empty() || !intervalResults[0].success) {
+      llvm::errs() << "  No valid interval result; skipping sampling.\n";
+    } else {
+      auto &intervalResult = intervalResults[0];
+
+      SamplingResult samplingResult = sampleAndEvaluate(
+          machine, intervalResult.searchResult, intervalResult.floatBitWidths,
+          roots.size(), /*numSamples=*/256, /*evalMaxIterations=*/100,
+          /*evalMaxPrecision=*/2000, analysisPrecision);
+
+      llvm::errs() << "  Sampled " << samplingResult.sampled << " / 256 points"
+                   << " (skipped " << samplingResult.skipped << ")\n";
+
+      for (unsigned i = 0; i < std::min(samplingResult.sampled, 3u); ++i) {
+        llvm::errs() << "  Point " << i << ": (";
+        for (size_t d = 0; d < intervalResult.floatBitWidths.size(); ++d) {
+          if (d > 0)
+            llvm::errs() << ", ";
+          llvm::errs() << samplingResult.points[i][d];
+        }
+        llvm::errs() << ") -> (";
+        for (size_t j = 0; j < roots.size(); ++j) {
+          if (j > 0)
+            llvm::errs() << ", ";
+          llvm::errs() << samplingResult.results[i][j];
+        }
+        llvm::errs() << ")\n";
+      }
+    }
+
+    rival_machine_free(machine);
     rival_disc_free(disc);
     rival_expr_arena_free(arena);
 
