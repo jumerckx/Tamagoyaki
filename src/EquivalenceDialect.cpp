@@ -205,14 +205,6 @@ public:
   }
 };
 
-/// Get the base cost of a node from its cost attribute or default.
-int64_t getNodeBaseCost(Operation *op, int64_t defaultCost) {
-  if (auto attr = op->getAttrOfType<CostAttr>("equivalence.cost")) {
-    return attr.getValue();
-  }
-  return defaultCost;
-}
-
 class EquivalenceSelectGreedy
     : public impl::EquivalenceSelectGreedyBase<EquivalenceSelectGreedy> {
 public:
@@ -222,116 +214,8 @@ public:
     ModuleOp module = getOperation();
     int64_t defaultCostVal = this->defaultCost;
 
-    // Process each GraphOp separately
-    module.walk([&](GraphOp graphOp) {
-      // Collect all ClassOps in this graph
-      SmallVector<ClassOp> classOps;
-      graphOp.walk([&](ClassOp classOp) { classOps.push_back(classOp); });
-
-      // Initialize base costs as attributes on operations within the graph
-      // Only set cost if not already present (preserve manually specified
-      // costs)
-      graphOp.walk([&](Operation *op) {
-        if (!isa<ClassOp>(op) && !isa<GraphOp>(op) && !isa<YieldOp>(op)) {
-          if (!op->hasAttr("equivalence.cost")) {
-            int64_t cost = (defaultCostVal < 0) ? -1 : defaultCostVal;
-            op->setAttr("equivalence.cost",
-                        CostAttr::get(op->getContext(), cost));
-          }
-        }
-      });
-
-      // Fixed-point iteration: repeatedly scan ClassOps until convergence
-      bool changed = true;
-      int maxIterations = 100;
-      int iteration = 0;
-
-      while (changed && iteration < maxIterations) {
-        changed = false;
-        iteration++;
-
-        // Track e-class minimum costs in this iteration
-        DenseMap<Value, int64_t> eclassCosts;
-
-        // First pass: collect costs from ClassOps
-        for (ClassOp classOp : classOps) {
-          Value result = classOp.getResult();
-          int64_t minCost = std::numeric_limits<int64_t>::max();
-          int minIndex = -1;
-
-          // Evaluate cost of each operand
-          for (size_t i = 0; i < classOp.getInputs().size(); ++i) {
-            Value operand = classOp.getInputs()[i];
-            Operation *operandDef = operand.getDefiningOp();
-
-            int64_t totalCost = 0;
-            if (!operandDef) {
-              // Block arguments are free
-              totalCost = 0;
-            } else if (auto classDefOp = dyn_cast<ClassOp>(operandDef)) {
-              // Cost is from e-class map
-              auto it = eclassCosts.find(classDefOp.getResult());
-              if (it == eclassCosts.end()) {
-                continue; // Skip if cost not yet computed
-              }
-              totalCost = it->second;
-            } else {
-              // Regular operation: base cost + dependency costs
-              totalCost = getNodeBaseCost(operandDef, defaultCostVal);
-              if (totalCost == -1) {
-                continue; // Skip if no cost
-              }
-              for (Value dep : operandDef->getOperands()) {
-                if (!dep.getDefiningOp()) {
-                  // Block argument dependency is free
-                  continue;
-                }
-                auto it = eclassCosts.find(dep);
-                if (it != eclassCosts.end()) {
-                  int64_t depCost = it->second;
-                  if (depCost == -1) {
-                    totalCost = -1;
-                    break;
-                  }
-                  totalCost += depCost;
-                }
-                // If dep is not in eclassCosts and not a block arg, it's a
-                // direct operation result - we need its cost
-              }
-              if (totalCost == -1) {
-                continue; // Skip if dependency costs unavailable
-              }
-            }
-
-            if (totalCost < minCost) {
-              minCost = totalCost;
-              minIndex = i;
-            }
-          }
-
-          // Update e-class cost if minimum was found
-          if (minIndex >= 0) {
-            eclassCosts[result] = minCost;
-          } else {
-            eclassCosts[result] = -1;
-          }
-
-          // Update min_cost_index attribute if changed
-          int64_t currentMinIndex = -1;
-          if (auto attr =
-                  classOp->getAttrOfType<IntegerAttr>("min_cost_index")) {
-            currentMinIndex = attr.getValue().getSExtValue();
-          }
-
-          if (currentMinIndex != minIndex && minIndex >= 0) {
-            OpBuilder builder(classOp);
-            classOp->setAttr("min_cost_index",
-                             builder.getI64IntegerAttr(minIndex));
-            changed = true;
-          }
-        }
-      }
-    });
+    module.walk(
+        [&](GraphOp graphOp) { selectGreedy(graphOp, defaultCostVal); });
   }
 };
 
@@ -365,6 +249,104 @@ void EquivalenceDialect::registerAttributes() {
 }
 
 namespace mlir::equivalence {
+
+static int64_t getNodeBaseCost(Operation *op, int64_t defaultCost) {
+  if (auto attr = op->getAttrOfType<CostAttr>("equivalence.cost")) {
+    return attr.getValue();
+  }
+  return defaultCost;
+}
+
+void selectGreedy(GraphOp graphOp, int64_t defaultCost) {
+  SmallVector<ClassOp> classOps;
+  graphOp.walk([&](ClassOp classOp) { classOps.push_back(classOp); });
+
+  graphOp.walk([&](Operation *op) {
+    if (!isa<ClassOp>(op) && !isa<GraphOp>(op) && !isa<YieldOp>(op)) {
+      if (!op->hasAttr("equivalence.cost")) {
+        int64_t cost = (defaultCost < 0) ? -1 : defaultCost;
+        op->setAttr("equivalence.cost", CostAttr::get(op->getContext(), cost));
+      }
+    }
+  });
+
+  bool changed = true;
+  int maxIterations = 100;
+  int iteration = 0;
+
+  while (changed && iteration < maxIterations) {
+    changed = false;
+    iteration++;
+
+    DenseMap<Value, int64_t> eclassCosts;
+
+    for (ClassOp classOp : classOps) {
+      Value result = classOp.getResult();
+      int64_t minCost = std::numeric_limits<int64_t>::max();
+      int minIndex = -1;
+
+      for (size_t i = 0; i < classOp.getInputs().size(); ++i) {
+        Value operand = classOp.getInputs()[i];
+        Operation *operandDef = operand.getDefiningOp();
+
+        int64_t totalCost = 0;
+        if (!operandDef) {
+          totalCost = 0;
+        } else if (auto classDefOp = dyn_cast<ClassOp>(operandDef)) {
+          auto it = eclassCosts.find(classDefOp.getResult());
+          if (it == eclassCosts.end()) {
+            continue;
+          }
+          totalCost = it->second;
+        } else {
+          totalCost = getNodeBaseCost(operandDef, defaultCost);
+          if (totalCost == -1) {
+            continue;
+          }
+          for (Value dep : operandDef->getOperands()) {
+            if (!dep.getDefiningOp()) {
+              continue;
+            }
+            auto it = eclassCosts.find(dep);
+            if (it != eclassCosts.end()) {
+              int64_t depCost = it->second;
+              if (depCost == -1) {
+                totalCost = -1;
+                break;
+              }
+              totalCost += depCost;
+            }
+          }
+          if (totalCost == -1) {
+            continue;
+          }
+        }
+
+        if (totalCost < minCost) {
+          minCost = totalCost;
+          minIndex = i;
+        }
+      }
+
+      if (minIndex >= 0) {
+        eclassCosts[result] = minCost;
+      } else {
+        eclassCosts[result] = -1;
+      }
+
+      int64_t currentMinIndex = -1;
+      if (auto attr = classOp->getAttrOfType<IntegerAttr>("min_cost_index")) {
+        currentMinIndex = attr.getValue().getSExtValue();
+      }
+
+      if (currentMinIndex != minIndex && minIndex >= 0) {
+        OpBuilder builder(classOp);
+        classOp->setAttr("min_cost_index", builder.getI64IntegerAttr(minIndex));
+        changed = true;
+      }
+    }
+  }
+}
 
 LogicalResult insertGraphInFunction(func::FuncOp funcOp,
                                     bool insertSingleElementEqs) {
