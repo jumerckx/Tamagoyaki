@@ -26,6 +26,7 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include <cstddef>
 #include <cstdint>
@@ -150,20 +151,11 @@ public:
   void runOnOperation() final {
     ModuleOp module = getOperation();
 
-    // Collect all functions first, then process them
-    SmallVector<func::FuncOp> functions;
-    for (Operation &op : module.getBody()->getOperations()) {
-      if (auto funcOp = dyn_cast<func::FuncOp>(op)) {
-        functions.push_back(funcOp);
-      }
-    }
-
-    // Process each function
-    for (func::FuncOp funcOp : functions) {
+    module->walk([&](mlir::func::FuncOp funcOp) {
       if (failed(insertGraphInFunction(funcOp, false))) {
         signalPassFailure();
       }
-    }
+    });
   }
 };
 
@@ -257,10 +249,29 @@ static int64_t getNodeBaseCost(Operation *op, int64_t defaultCost) {
   return defaultCost;
 }
 
-void selectGreedy(GraphOp graphOp, int64_t defaultCost) {
-  SmallVector<ClassOp> classOps;
-  graphOp.walk([&](ClassOp classOp) { classOps.push_back(classOp); });
+// Compute the total cost of a non-class operation given current known costs.
+// Returns -1 if any dependency is unresolved.
+static int64_t computeNodeCost(Operation *op, int64_t defaultCost,
+                               DenseMap<Operation *, int64_t> &opCosts) {
+  int64_t baseCost = getNodeBaseCost(op, defaultCost);
+  if (baseCost == -1)
+    return -1;
 
+  int64_t totalCost = baseCost;
+  for (Value dep : op->getOperands()) {
+    Operation *defOp = dep.getDefiningOp();
+    if (!defOp)
+      continue; // block argument — free
+    auto it = opCosts.find(defOp);
+    if (it == opCosts.end() || it->second == -1)
+      return -1;
+    totalCost += it->second;
+  }
+  return totalCost;
+}
+
+void selectGreedy(GraphOp graphOp, int64_t defaultCost) {
+  // Assign default costs to non-class operations.
   graphOp.walk([&](Operation *op) {
     if (!isa<ClassOp>(op) && !isa<GraphOp>(op) && !isa<YieldOp>(op)) {
       if (!op->hasAttr("equivalence.cost")) {
@@ -270,6 +281,31 @@ void selectGreedy(GraphOp graphOp, int64_t defaultCost) {
     }
   });
 
+  // Determine which operations need persistent cost tracking:
+  //   1. ClassOps (e-class cost = cost of best candidate)
+  //   2. Non-class ops that are NOT consumed by any ClassOp
+  //      (their results are used by other non-class ops, YieldOp, etc.)
+  // Candidate ops (consumed by a ClassOp) have their cost computed inline.
+
+  SmallVector<Operation *> trackedOps;
+  graphOp.walk([&](Operation *op) {
+    if (isa<GraphOp>(op) || isa<YieldOp>(op))
+      return;
+
+    if (isa<ClassOp>(op)) {
+      trackedOps.push_back(op);
+      return;
+    }
+
+    // Check if all users are ClassOps — if so, this is a candidate and
+    // doesn't need its own tracked cost.
+    bool consumedByClass = llvm::all_of(
+        op->getUsers(), [](Operation *user) { return isa<ClassOp>(user); });
+    if (!consumedByClass)
+      trackedOps.push_back(op);
+  });
+
+  DenseMap<Operation *, int64_t> opCosts;
   bool changed = true;
   int maxIterations = 100;
   int iteration = 0;
@@ -278,71 +314,56 @@ void selectGreedy(GraphOp graphOp, int64_t defaultCost) {
     changed = false;
     iteration++;
 
-    DenseMap<Value, int64_t> eclassCosts;
+    for (Operation *op : trackedOps) {
+      if (auto classOp = dyn_cast<ClassOp>(op)) {
+        // ---- Class op: pick the minimum-cost candidate ----
+        int64_t minCost = std::numeric_limits<int64_t>::max();
+        int minIndex = -1;
 
-    for (ClassOp classOp : classOps) {
-      Value result = classOp.getResult();
-      int64_t minCost = std::numeric_limits<int64_t>::max();
-      int minIndex = -1;
+        for (size_t i = 0; i < classOp.getInputs().size(); ++i) {
+          Value operand = classOp.getInputs()[i];
+          Operation *candidate = operand.getDefiningOp();
+          if (!candidate)
+            continue;
 
-      for (size_t i = 0; i < classOp.getInputs().size(); ++i) {
-        Value operand = classOp.getInputs()[i];
-        Operation *operandDef = operand.getDefiningOp();
+          // Compute candidate cost inline — it's consumed by this class,
+          // so its total cost is not stored persistently.
+          int64_t cost = computeNodeCost(candidate, defaultCost, opCosts);
+          if (cost == -1)
+            continue;
 
-        int64_t totalCost = 0;
-        if (!operandDef) {
-          totalCost = 0;
-        } else if (auto classDefOp = dyn_cast<ClassOp>(operandDef)) {
-          auto it = eclassCosts.find(classDefOp.getResult());
-          if (it == eclassCosts.end()) {
-            continue;
-          }
-          totalCost = it->second;
-        } else {
-          totalCost = getNodeBaseCost(operandDef, defaultCost);
-          if (totalCost == -1) {
-            continue;
-          }
-          for (Value dep : operandDef->getOperands()) {
-            if (!dep.getDefiningOp()) {
-              continue;
-            }
-            auto it = eclassCosts.find(dep);
-            if (it != eclassCosts.end()) {
-              int64_t depCost = it->second;
-              if (depCost == -1) {
-                totalCost = -1;
-                break;
-              }
-              totalCost += depCost;
-            }
-          }
-          if (totalCost == -1) {
-            continue;
+          if (cost < minCost) {
+            minCost = cost;
+            minIndex = i;
           }
         }
 
-        if (totalCost < minCost) {
-          minCost = totalCost;
-          minIndex = i;
-        }
-      }
+        if (minIndex >= 0) {
+          auto it = opCosts.find(op);
+          if (it == opCosts.end() || minCost < it->second) {
+            opCosts[op] = minCost;
+            changed = true;
+          }
 
-      if (minIndex >= 0) {
-        eclassCosts[result] = minCost;
+          int64_t currentMinIndex = -1;
+          if (auto attr = classOp->getAttrOfType<IntegerAttr>("min_cost_index"))
+            currentMinIndex = attr.getValue().getSExtValue();
+          if (currentMinIndex != minIndex) {
+            OpBuilder builder(classOp);
+            classOp->setAttr("min_cost_index",
+                             builder.getI64IntegerAttr(minIndex));
+          }
+        }
       } else {
-        eclassCosts[result] = -1;
-      }
-
-      int64_t currentMinIndex = -1;
-      if (auto attr = classOp->getAttrOfType<IntegerAttr>("min_cost_index")) {
-        currentMinIndex = attr.getValue().getSExtValue();
-      }
-
-      if (currentMinIndex != minIndex && minIndex >= 0) {
-        OpBuilder builder(classOp);
-        classOp->setAttr("min_cost_index", builder.getI64IntegerAttr(minIndex));
-        changed = true;
+        // ---- Non-class op not consumed by any class ----
+        int64_t totalCost = computeNodeCost(op, defaultCost, opCosts);
+        if (totalCost >= 0) {
+          auto it = opCosts.find(op);
+          if (it == opCosts.end() || totalCost < it->second) {
+            opCosts[op] = totalCost;
+            changed = true;
+          }
+        }
       }
     }
   }
