@@ -27,6 +27,7 @@
 #include <cstdint>
 #include <mach/mach.h>
 #include <mpfr.h>
+#include <optional>
 #include <rival.h>
 #include <string>
 #include <vector>
@@ -422,9 +423,14 @@ public:
         if (auto eclass = dyn_cast<ClassOp>(op)) {
           std::optional<uint64_t> mci = eclass.getMinCostIndex();
           assert(mci.has_value());
-          valueToExpr[eclass.getResult()] =
-              valueToExpr[eclass->getOperand(mci.value())];
-          break;
+          Value selectedOperand = eclass->getOperand(mci.value());
+          valueToExpr[eclass.getResult()] = valueToExpr[selectedOperand];
+          if (valueToRootIdx.contains(selectedOperand)) {
+            valueToRootIdx[eclass.getResult()] =
+                valueToRootIdx[selectedOperand];
+          }
+
+          continue;
         }
         auto iface = dyn_cast<RivalCompileableInterface>(op);
         if (!iface) {
@@ -449,7 +455,43 @@ public:
         }
       }
 
-      allSortedOps.push_back(sortedOps);
+      // Collect ALL non-class, non-yield operations for local error
+      // computation.  Operations that were not part of the toposort
+      // (i.e. non-selected eclass members) don't have their own rival
+      // root, but each such operation is used by exactly one
+      // equivalence.class whose result *does* have a root.  Map the
+      // non-selected op's result to that class's root index so that
+      // computeLocalErrors can look up the exact (high-precision)
+      // ground-truth value.
+      SmallVector<Operation *> allOps;
+      for (Operation &op : graphOp.getBody().front()) {
+        if (isa<ClassOp, YieldOp>(&op))
+          continue;
+
+        for (Value result : op.getResults()) {
+          if (!valueToRootIdx.contains(result)) {
+            // This result was not compiled into its own rival root.
+            // Find the equivalence.class that consumes it and reuse
+            // that class's ground-truth value.
+            bool mapped = false;
+            for (OpOperand &use : result.getUses()) {
+              if (auto classOp = dyn_cast<ClassOp>(use.getOwner())) {
+                assert(valueToRootIdx.contains(classOp.getResult()) &&
+                       "ClassOp result must have a rival root index");
+                valueToRootIdx[result] =
+                    valueToRootIdx.lookup(classOp.getResult());
+                mapped = true;
+                break;
+              }
+            }
+            assert(mapped &&
+                   "Non-selected op result must be used by a ClassOp");
+          }
+        }
+
+        allOps.push_back(&op);
+      }
+      allSortedOps.push_back(std::move(allOps));
     });
 
     // Build the rival machine from all collected roots and variables
