@@ -5,6 +5,8 @@
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Support/LogicalResult.h"
+#include "llvm/ADT/StringRef.h"
+#include <cstdint>
 
 namespace mlir::equivalence {
 
@@ -17,7 +19,8 @@ LogicalResult insertGraphInFunction(func::FuncOp funcOp,
 /// Run greedy cost-based selection on a single GraphOp.
 /// Assigns min_cost_index attributes to ClassOps based on minimum-cost
 /// operands.
-void selectGreedy(GraphOp graphOp, int64_t defaultCost);
+void selectGreedy(GraphOp graphOp, int64_t defaultCost,
+                  llvm::StringRef costAttributeName = "equivalence.cost");
 
 } // namespace mlir::equivalence
 

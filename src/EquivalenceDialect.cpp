@@ -27,6 +27,7 @@
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include <cstddef>
 #include <cstdint>
@@ -270,13 +271,14 @@ static int64_t computeNodeCost(Operation *op, int64_t defaultCost,
   return totalCost;
 }
 
-void selectGreedy(GraphOp graphOp, int64_t defaultCost) {
+void selectGreedy(GraphOp graphOp, int64_t defaultCost,
+                  llvm::StringRef costAttributeName) {
   // Assign default costs to non-class operations.
   graphOp.walk([&](Operation *op) {
     if (!isa<ClassOp>(op) && !isa<GraphOp>(op) && !isa<YieldOp>(op)) {
-      if (!op->hasAttr("equivalence.cost")) {
+      if (!op->hasAttr(costAttributeName)) {
         int64_t cost = (defaultCost < 0) ? -1 : defaultCost;
-        op->setAttr("equivalence.cost", CostAttr::get(op->getContext(), cost));
+        op->setAttr(costAttributeName, CostAttr::get(op->getContext(), cost));
       }
     }
   });

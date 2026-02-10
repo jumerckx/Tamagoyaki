@@ -397,7 +397,8 @@ public:
     }
 
     // select greedily:
-    irModule.walk([&](GraphOp graphOp) { selectGreedy(graphOp, 1); });
+    irModule.walk(
+        [&](GraphOp graphOp) { selectGreedy(graphOp, 1, "herbie.cost"); });
 
     // Step 4: Compile selected operations to rival expressions in
     // topological order, then build the rival machine
