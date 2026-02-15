@@ -5,7 +5,7 @@ requires-python = ">=3.13"
 dependencies = [
     "cmake-format>=0.6.13",
     "lit>=18.1.8",
-    "mlir-wheel>=20260214",
+    "mlir-wheel>=20260210",
     "pre-commit>=4.5.1",
     "xdsl>=0.56.2",
 ]
