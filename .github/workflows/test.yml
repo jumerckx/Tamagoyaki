@@ -94,6 +94,4 @@ jobs:
 
       - name: Build and test with CMake/lit
         run: |
-
-          pushd build && ninja check-tamagoyaki && popd
-          rm -rf build
+          cmake --build build --target check-tamagoyaki
