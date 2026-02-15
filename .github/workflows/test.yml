@@ -75,7 +75,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          cat > uv.toml << 'EOF'
+          cat >> pyproject.toml << 'EOF'
           required-environments = [
               "sys_platform == 'linux' and platform_machine == 'x86_64'",
               "sys_platform == 'darwin' and platform_machine == 'arm64'",
