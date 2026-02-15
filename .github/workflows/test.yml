@@ -74,7 +74,14 @@ jobs:
           python-version: "${{ matrix.py_version }}"
 
       - name: Install dependencies
-        run: uv sync
+        run: |
+          cat > uv.toml << 'EOF'
+          required-environments = [
+              "sys_platform == 'linux' and platform_machine == 'x86_64'",
+              "sys_platform == 'darwin' and platform_machine == 'arm64'",
+          ]
+          EOF
+          uv sync
 
       - name: Configure CMake
         run: >-
