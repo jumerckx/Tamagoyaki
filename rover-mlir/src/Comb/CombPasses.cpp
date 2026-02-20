@@ -61,6 +61,18 @@ public:
     if (!patternModule || !irModule)
       return;
 
+    irModule.walk([&](mlir::func::FuncOp funcOp) {
+      llvm::errs() << "Step 2: Inserting equivalence graph...\n";
+
+      if (mlir::failed(mlir::equivalence::insertGraphInFunction(
+              funcOp, /*insertSingleElementEqs=*/false))) {
+        funcOp.emitError() << "Failed to insert equivalence graph";
+        return signalPassFailure();
+      }
+
+      llvm::errs() << "  Graph inserted successfully\n";
+    });
+
     // Run saturation
     mlir::ematch::convertEmatchOpsToApplyRewrites(patternModule);
     bool saturationSuccess = mlir::ematch::runSaturation(

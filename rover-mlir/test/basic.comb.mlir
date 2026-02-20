@@ -83,17 +83,17 @@ builtin.module @patterns {
 }
 
 module @ir {
-func.func @ShiftedFma(%a : i8, %b : i8, %s : i3, %c : i16) -> i17 {
-  %false = hw.constant false
-  %c0_i14 = hw.constant 0 : i14
-  %c0_i9 = hw.constant 0 : i9
-  %0 = comb.concat %c0_i9, %a : i9, i8
-  %1 = comb.concat %c0_i9, %b : i9, i8
-  %2 = comb.mul %0, %1 : i17
-  %3 = comb.concat %c0_i14, %s : i14, i3
-  %4 = comb.shl %2, %3 : i17
-  %5 = comb.concat %false, %c : i1, i16
-  %6 = comb.add %4, %5 : i17
-  return %6 : i17
-}
+    func.func @ShiftedFma(%a : i8, %b : i8, %s : i3, %c : i16) -> i17 {
+      %false = hw.constant false
+      %c0_i14 = hw.constant 0 : i14
+      %c0_i9 = hw.constant 0 : i9
+      %0 = comb.concat %c0_i9, %a : i9, i8
+      %1 = comb.concat %c0_i9, %b : i9, i8
+      %2 = comb.mul %0, %1 : i17
+      %3 = comb.concat %c0_i14, %s : i14, i3
+      %4 = comb.shl %2, %3 : i17
+      %5 = comb.concat %false, %c : i1, i16
+      %6 = comb.add %4, %5 : i17
+      return %6 : i17
+    }
 }
