@@ -48,3 +48,10 @@ option(BUILD_HERBIE_MLIR "Build herbie-mlir subproject" ON)
 if(BUILD_HERBIE_MLIR)
   add_subdirectory(herbie-mlir)
 endif()
+
+# rover-mlir subproject (optional, can be disabled)
+option(BUILD_ROVER_MLIR "Build rover-mlir subproject" ON)
+if(BUILD_ROVER_MLIR)
+  add_subdirectory(rover-mlir)
+endif()
+
