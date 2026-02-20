@@ -18,7 +18,7 @@ include "HWDialect.td"
 // include "circt/Dialect/HW/HWAttributesNaming.td"
 
 // include "circt/Dialect/HW/HWTypesImpl.td"
-include "HWTypes.td"
+// include "HWTypes.td"
 
 // include "circt/Dialect/HW/HWOpInterfaces.td"
 // include "circt/Dialect/HW/HWTypeInterfaces.td"
