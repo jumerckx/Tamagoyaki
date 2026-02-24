@@ -1,17 +1,17 @@
-# TableGen generation for Comb dialect
+# TableGen generation for Datapath dialect
 
 include(${PROJECT_SOURCE_DIR}/cmake/TableGenHelpers.cmake)
 
 # ============================================================================
-# Comb Dialect
+# Datapath Dialect
 # ============================================================================
 add_dialect_tablegen(
-  NAME Comb
-  NAMESPACE comb
-  TD_FILE CombDialect.td
+  NAME Datapath
+  NAMESPACE datapath
+  TD_FILE DatapathDialect.td
   DEST_DIR ${CMAKE_CURRENT_SOURCE_DIR}
   COMPONENTS Ops Attrs Dialect Passes
 )
 
 # Export to parent scope
-set(COMB_GENERATED_HEADERS ${Comb_GENERATED_HEADERS} PARENT_SCOPE)
+set(DATAPATH_GENERATED_HEADERS ${Datapath_GENERATED_HEADERS} PARENT_SCOPE)

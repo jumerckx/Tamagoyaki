@@ -7,5 +7,5 @@
 ##===----------------------------------------------------------------------===//
 
 add_subdirectory(Comb)
-# add_subdirectory(Datapath)
+add_subdirectory(Datapath)
 add_subdirectory(HW)

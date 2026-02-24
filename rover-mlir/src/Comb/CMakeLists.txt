@@ -2,7 +2,8 @@
 
 include(${PROJECT_SOURCE_DIR}/cmake/TableGenHelpers.cmake)
 
-set(COMB_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../include/Comb/)
+set(COMB_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../include/Comb)
+set(HW_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../include/)
 
 # ============================================================================
 # Comb Library
@@ -11,8 +12,6 @@ set(COMB_SOURCES
   CombDialect.cpp
   CombPasses.cpp
 )
-
-message(STATUS "COMB_GENERATED_HEADERS: ${COMB_GENERATED_HEADERS}")
 
 set_source_object_depends(
   SOURCES ${COMB_SOURCES}
@@ -25,6 +24,7 @@ add_mlir_library(Comb
 
   ADDITIONAL_HEADER_DIRS
   ${COMB_INCLUDE_DIR}
+  # ${HW_INCLUDE_DIR}
 
   DEPENDS
   MLIRCombIncGen
@@ -40,3 +40,4 @@ add_mlir_library(Comb
 )
 
 target_include_directories(Comb PUBLIC ${COMB_INCLUDE_DIR})
+target_include_directories(Comb PUBLIC ${HW_INCLUDE_DIR})

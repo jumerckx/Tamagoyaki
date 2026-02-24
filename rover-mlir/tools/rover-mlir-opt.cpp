@@ -14,6 +14,7 @@
 #include "EquivalenceUtils.h"
 
 #include "Comb/Comb.h"
+#include "Datapath/Datapath.h"
 #include "HW/HW.h"
 
 using namespace mlir::equivalence;
@@ -40,7 +41,7 @@ using namespace comb;
 
 int main(int argc, char **argv) {
   mlir::DialectRegistry registry;
-  registry.insert<comb::CombDialect, hw::HWDialect,
+  registry.insert<comb::CombDialect, hw::HWDialect, datapath::DatapathDialect,
                   mlir::equivalence::EquivalenceDialect,
                   mlir::ematch::EmatchDialect>();
   registerAllDialects(registry);
@@ -49,40 +50,7 @@ int main(int argc, char **argv) {
 
   // Register herbie-mlir passes
   comb::registerCombPasses();
-  // Set up the input file.
-  //   std::unique_ptr<llvm::MemoryBuffer> input;
 
-  //   {
-  //     std::string errorMessage;
-  //     input = openInputFile(inputFilename, &errorMessage);
-  //     if (!input) {
-  //       llvm::errs() << errorMessage << "\n";
-  //       return 0;
-  //     }
-  //   }
-
-  //   llvm::SourceMgr sourceMgr;
-  //   sourceMgr.AddNewSourceBuffer(std::move(input), llvm::SMLoc());
-  //   OwningOpRef<ModuleOp> module;
-  //   { module = parseSourceFile<ModuleOp>(sourceMgr, &context); }
-  //   if (!module)
-  //     return 0;
-  // Register rover-mlir passes
-  //   rover::registerHerbieMLIRPasses();
-  //   mlir::ModuleOp module = getOperation();
-
-  //   ModuleOp patternModule = module.lookupSymbol<ModuleOp>(
-  //       StringAttr::get(module->getContext(), "patterns"));
-  //   ModuleOp irModule = module.lookupSymbol<ModuleOp>(
-  //       StringAttr::get(module->getContext(), "ir"));
-
-  //   if (!patternModule || !irModule)
-  //     return;
-
-  // Run saturation
-  //   mlir::ematch::convertEmatchOpsToApplyRewrites(patternModule);
-  //   bool saturationSuccess = mlir::ematch::runSaturation(
-  //       irModule->getContext(), patternModule, irModule, 10);
   return mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "MLIR optimizer for Rover", registry));
 }

@@ -133,10 +133,19 @@ void convertEmatchOpsToApplyRewrites(ModuleOp module) {
 /// Returns true on success.
 bool runSaturation(MLIRContext *ctx, ModuleOp patternModule, ModuleOp irModule,
                    int maxIters) {
-  RewritePatternSet patternList(ctx);
 
   patternModule.getOperation()->remove();
   PDLPatternModule pdlPattern(patternModule);
+
+  return runSaturationWithPDL(ctx, std::move(pdlPattern), irModule, maxIters);
+}
+
+/// Run equality saturation on the given IR module using the provided pattern
+/// module. The patternModule is consumed (removed from parent).
+/// Returns true on success.
+bool runSaturationWithPDL(MLIRContext *ctx, PDLPatternModule pdlPattern,
+                          ModuleOp irModule, int maxIters) {
+  RewritePatternSet patternList(ctx);
 
   ClassOpUnionFind uf{};
   HashConsPatternRewriter hashconsRewriter(ctx);

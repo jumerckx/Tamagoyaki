@@ -10,6 +10,7 @@ set(ROVER_MLIR_OPT_LIBS
   ${conversion_libs}
   MLIROptLib
   Comb
+  DatapathDialect
   HWDialect
   MLIREquivalence
   MLIREmatch
@@ -20,6 +21,7 @@ set(ROVER_MLIR_OPT_GENERATED_HEADERS
   ${COMB_GENERATED_HEADERS}
   ${EQUIVALENCE_GENERATED_HEADERS}
   ${EMATCH_GENERATED_HEADERS}
+  ${DATAPATH_GENERATED_HEADERS}
 )
 
 set_source_object_depends(
@@ -41,6 +43,7 @@ add_dependencies(rover-mlir-opt
   MLIREquivalenceIncGen
   MLIREmatchIncGen
   copy_comb_generated_td_to_src_include
+  copy_datapath_generated_td_to_src_include
   copy_equivalence_generated_td_to_src_include
   copy_ematch_generated_td_to_src_include
 )
