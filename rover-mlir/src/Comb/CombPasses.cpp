@@ -79,9 +79,9 @@ unsigned getMulOpCost(comb::MulOp mulOp) {
   return (*lhsWidth) * (*rhsWidth);
 }
 
-static LogicalResult rewriterBuildPartialProductTree(PatternRewriter &rewriter,
-                                                     PDLResultList &results,
-                                                     ArrayRef<PDLValue> args) {
+static LogicalResult rewriterBuildPartialProduct(PatternRewriter &rewriter,
+                                                 PDLResultList &results,
+                                                 ArrayRef<PDLValue> args) {
   auto *mulOp = args[0].cast<Operation *>();
 
   // Operands of comb.mul
@@ -90,31 +90,36 @@ static LogicalResult rewriterBuildPartialProductTree(PatternRewriter &rewriter,
   unsigned width = lhs.getType().getIntOrFloatBitWidth();
 
   IntegerType elemTy = cast<IntegerType>(mulOp->getResult(0).getType());
+  SmallVector<Type> ppResultTypes(width, elemTy);
 
-  auto addOp = comb::AddOp::create(rewriter, mulOp->getLoc(), elemTy,
-                                   ValueRange{lhs, rhs});
+  auto ppOp = datapath::PartialProductOp::create(
+      rewriter, mulOp->getLoc(), ppResultTypes, ValueRange{lhs, rhs});
 
   // Hand the comb.add back to PDL so it can wire up the replacement.
-  results.push_back(addOp.getOperation());
+  results.push_back(ppOp.getOperation());
   return success();
 }
 
-// static Operation *rewriterBuildPartialProductTree(PatternRewriter &rewriter,
-//                                                   Operation *mulOp) {
-//   // auto *mulOp = args[0].cast<Operation *>();
+static LogicalResult rewriterBuildCompress(PatternRewriter &rewriter,
+                                           PDLResultList &results,
+                                           ArrayRef<PDLValue> args) {
+  auto compressOperands = args[0].cast<ValueRange>();
 
-//   // Operands of comb.mul
-//   Value lhs = mulOp->getOperand(0);
-//   Value rhs = mulOp->getOperand(1);
-//   unsigned width = lhs.getType().getIntOrFloatBitWidth();
+  if (compressOperands.size() < 3)
+    return failure();
 
-//   IntegerType elemTy = cast<IntegerType>(mulOp->getResult(0).getType());
-//   // rewriter.setInsertionPoint(mulOp);
-//   auto addOp = comb::AddOp::create(rewriter, mulOp->getLoc(), elemTy,
-//                                    ValueRange{lhs, rhs});
+  IntegerType elemTy = cast<IntegerType>(compressOperands[0].getType());
 
-//   return addOp;
-// }
+  SmallVector<Type> compressResultTypes(2, elemTy);
+
+  auto compressOp =
+      datapath::CompressOp::create(rewriter, compressOperands[0].getLoc(),
+                                   compressResultTypes, compressOperands);
+
+  // Hand the comb.add back to PDL so it can wire up the replacement.
+  results.push_back(compressOp.getOperation());
+  return success();
+}
 
 class RoverOptimizePass
     : public impl::RoverOptimizePassBase<RoverOptimizePass> {
@@ -157,18 +162,21 @@ public:
     patternModule.getOperation()->remove();
     PDLPatternModule pdlPattern(patternModule);
     pdlPattern.registerRewriteFunction("BuildPartialProduct",
-                                       rewriterBuildPartialProductTree);
+                                       rewriterBuildPartialProduct);
+    pdlPattern.registerRewriteFunction("BuildCompress", rewriterBuildCompress);
     bool saturationSuccess = mlir::ematch::runSaturationWithPDL(
-        irModule->getContext(), std::move(pdlPattern), irModule, 1);
+        irModule->getContext(), std::move(pdlPattern), irModule, 3);
 
     if (!saturationSuccess) {
       llvm::errs() << "  Warning: Saturation returned false\n";
     } else {
       llvm::errs() << "  Saturation completed\n";
     }
+
     llvm::errs() << "=== IR After Saturation ===\n";
     irModule.print(llvm::errs());
     llvm::errs() << "\n";
+
     // select greedily:
     irModule.walk(
         [&](GraphOp graphOp) { selectGreedy(graphOp, 1, "rover.cost"); });
@@ -192,12 +200,10 @@ public:
       });
 
       selectGreedy(graphOp, /*defaultCost=*/-1, "rover.cost");
-      // extractFromGraph(graphOp);
-      // inlineGraphOp(graphOp);
+      extractFromGraph(graphOp);
+      inlineGraphOp(graphOp);
     });
-    llvm::errs() << "=== IR After Saturation ===\n";
-    irModule.print(llvm::errs());
-    llvm::errs() << "\n";
+
     llvm::errs() << "=== End Rover Optimize ===\n";
   }
 };
