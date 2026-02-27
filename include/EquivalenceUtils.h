@@ -32,12 +32,14 @@ inline int64_t costReductionSum(int64_t baseCost,
   return total;
 }
 
+// Take the sum of the local cost and the maximum of the childCosts.
 inline int64_t costReductionMax(int64_t baseCost,
                                 ArrayRef<int64_t> childCosts) {
   int64_t result = baseCost;
+  int64_t maxChild = 0;
   for (int64_t c : childCosts)
-    result = std::max(result, c);
-  return result;
+    maxChild = std::max(maxChild, c);
+  return result + maxChild;
 }
 
 /// Run greedy cost-based selection on a single GraphOp.
