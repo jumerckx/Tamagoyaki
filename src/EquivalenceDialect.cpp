@@ -277,12 +277,13 @@ static int64_t getNodeBaseCost(Operation *op, int64_t defaultCost) {
 // Compute the total cost of a non-class operation given current known costs.
 // Returns -1 if any dependency is unresolved.
 static int64_t computeNodeCost(Operation *op, int64_t defaultCost,
-                               DenseMap<Operation *, int64_t> &opCosts) {
+                               DenseMap<Operation *, int64_t> &opCosts,
+                               const CostReductionFn &reductionFn) {
   int64_t baseCost = getNodeBaseCost(op, defaultCost);
   if (baseCost == -1)
     return -1;
 
-  int64_t totalCost = baseCost;
+  SmallVector<int64_t> childCosts;
   for (Value dep : op->getOperands()) {
     Operation *defOp = dep.getDefiningOp();
     if (!defOp)
@@ -290,13 +291,15 @@ static int64_t computeNodeCost(Operation *op, int64_t defaultCost,
     auto it = opCosts.find(defOp);
     if (it == opCosts.end() || it->second == -1)
       return -1;
-    totalCost += it->second;
+    childCosts.push_back(it->second);
   }
-  return totalCost;
+
+  return reductionFn(baseCost, childCosts);
 }
 
 void selectGreedy(GraphOp graphOp, int64_t defaultCost,
-                  llvm::StringRef costAttributeName) {
+                  llvm::StringRef costAttributeName,
+                  const CostReductionFn &reductionFn) {
   // Assign default costs to non-class operations.
   graphOp.walk([&](Operation *op) {
     if (!isa<ClassOp>(op) && !isa<GraphOp>(op) && !isa<YieldOp>(op)) {
@@ -352,7 +355,8 @@ void selectGreedy(GraphOp graphOp, int64_t defaultCost,
           // Block arguments have no defining op and are free (cost 0).
           int64_t cost = 0;
           if (candidate)
-            cost = computeNodeCost(candidate, defaultCost, opCosts);
+            cost =
+                computeNodeCost(candidate, defaultCost, opCosts, reductionFn);
           if (cost == -1)
             continue;
 
@@ -379,8 +383,8 @@ void selectGreedy(GraphOp graphOp, int64_t defaultCost,
           }
         }
       } else {
-        // ---- Non-class op not consumed by any class ----
-        int64_t totalCost = computeNodeCost(op, defaultCost, opCosts);
+        int64_t totalCost =
+            computeNodeCost(op, defaultCost, opCosts, reductionFn);
         if (totalCost >= 0) {
           auto it = opCosts.find(op);
           if (it == opCosts.end() || totalCost < it->second) {
