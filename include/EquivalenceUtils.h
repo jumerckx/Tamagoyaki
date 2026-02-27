@@ -47,7 +47,7 @@ inline int64_t costReductionMax(int64_t baseCost,
 /// operands.
 void selectGreedy(GraphOp graphOp, int64_t defaultCost,
                   llvm::StringRef costAttributeName = "equivalence.cost",
-                  CostReductionFn reductionFn = costReductionSum);
+                  const CostReductionFn &reductionFn = costReductionSum);
 
 /// Clear all selection state from a GraphOp: remove min_cost_index from
 /// ClassOps and the cost attribute from all other operations.
