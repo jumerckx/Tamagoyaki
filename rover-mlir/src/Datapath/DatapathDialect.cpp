@@ -15,9 +15,6 @@ using namespace datapath;
 #define GET_ATTRDEF_CLASSES
 #include "DatapathAttrs.cpp.inc"
 
-#define GET_OP_CLASSES
-#include "DatapathOps.cpp.inc"
-
 void DatapathDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
@@ -57,3 +54,9 @@ static void printCompressFormat(OpAsmPrinter &printer, Operation *op,
   printer << inputTypes[0] << " [" << inputTypes.size() << " -> "
           << resultTypes.size() << "]";
 }
+
+//===----------------------------------------------------------------------===//
+// TableGen generated logic.
+//===----------------------------------------------------------------------===//
+#define GET_OP_CLASSES
+#include "DatapathOps.cpp.inc"

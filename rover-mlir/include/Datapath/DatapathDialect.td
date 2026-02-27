@@ -63,7 +63,7 @@ def CompressOp : DatapathOp<"compress",
   let results   = (outs Variadic<AnyInteger>:$results);
 
   let assemblyFormat = [{
-    $inputs attr-dict `:` functional-type(operands, results)
+    $inputs attr-dict `:` custom<CompressFormat>(type($inputs), type($results))
   }];
   // let hasVerifier = 1;
   // let hasCanonicalizer = true;
