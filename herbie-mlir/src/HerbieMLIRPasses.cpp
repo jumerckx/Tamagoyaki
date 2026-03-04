@@ -296,7 +296,10 @@ struct LowerSoundDivPattern : public OpRewritePattern<SoundDivOp> {
 
   LogicalResult matchAndRewrite(SoundDivOp op,
                                 PatternRewriter &rewriter) const final {
-    rewriter.replaceOpWithNewOp<arith::DivFOp>(op, op.getLhs(), op.getRhs());
+    arith::DivFOp unsoundOp = rewriter.replaceOpWithNewOp<arith::DivFOp>(
+        op, op.getLhs(), op.getRhs());
+    unsoundOp->setAttr("herbie.cost",
+                       equivalence::CostAttr::get(op->getContext(), -1));
     return success();
   }
 };
@@ -306,7 +309,10 @@ struct LowerSoundPowPattern : public OpRewritePattern<SoundPowOp> {
 
   LogicalResult matchAndRewrite(SoundPowOp op,
                                 PatternRewriter &rewriter) const final {
-    rewriter.replaceOpWithNewOp<math::PowFOp>(op, op.getLhs(), op.getRhs());
+    math::PowFOp unsoundOp =
+        rewriter.replaceOpWithNewOp<math::PowFOp>(op, op.getLhs(), op.getRhs());
+    unsoundOp->setAttr("herbie.cost",
+                       equivalence::CostAttr::get(op->getContext(), -1));
     return success();
   }
 };
@@ -316,7 +322,10 @@ struct LowerSoundLogPattern : public OpRewritePattern<SoundLogOp> {
 
   LogicalResult matchAndRewrite(SoundLogOp op,
                                 PatternRewriter &rewriter) const final {
-    rewriter.replaceOpWithNewOp<math::LogOp>(op, op.getValue());
+    math::LogOp unsoundOp =
+        rewriter.replaceOpWithNewOp<math::LogOp>(op, op.getValue());
+    unsoundOp->setAttr("herbie.cost",
+                       equivalence::CostAttr::get(op->getContext(), -1));
     return success();
   }
 };
