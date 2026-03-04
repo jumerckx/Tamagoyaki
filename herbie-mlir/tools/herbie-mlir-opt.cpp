@@ -2,6 +2,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/InitAllDialects.h"
+#include "mlir/InitAllPasses.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
 
@@ -20,6 +21,8 @@ namespace herbie {
 } // namespace herbie
 
 int main(int argc, char **argv) {
+  mlir::registerAllPasses();
+
   mlir::DialectRegistry registry;
   registry
       .insert<herbie::HerbieMLIRDialect, mlir::equivalence::EquivalenceDialect,

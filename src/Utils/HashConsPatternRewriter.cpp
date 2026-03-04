@@ -19,7 +19,7 @@
 #include <memory>
 #include <utility>
 
-#define DEBUG_TYPE "ematch"
+#define DEBUG_TYPE "hashcons"
 
 using namespace mlir;
 using namespace mlir::ematch;
@@ -56,17 +56,10 @@ void HashConsPatternRewriter::finalizeOpModification(Operation *op) {
 
 LogicalResult HashConsPatternRewriter::erase(Operation *op) {
   Region *region = op->getParentRegion();
-  if (!region) {
-    LLVM_DEBUG(llvm::dbgs()
-               << "erase: operation has no parent region: " << *op << "\n");
-    return failure();
-  }
+  assert(region && "erase: operation has no parent region");
 
   ScopedMapTy::ScopeTy *scope = getScope(region);
-  if (!scope) {
-    LLVM_DEBUG(llvm::dbgs() << "erase: no scope registered for region\n");
-    return failure();
-  }
+  assert(scope && "erase: no scope registered for region");
 
   bool erased = scope->erase(op);
   LLVM_DEBUG({
@@ -81,18 +74,11 @@ LogicalResult HashConsPatternRewriter::erase(Operation *op) {
 
 LogicalResult HashConsPatternRewriter::insert(Operation *op) {
   Region *region = op->getParentRegion();
-  if (!region) {
-    LLVM_DEBUG(llvm::dbgs()
-               << "insert: operation has no parent region: " << *op << "\n");
-    return failure();
-  }
+  assert(region && "insert: operation has no parent region");
   assert(!llvm::isa<equivalence::ClassOp>(op));
 
   ScopedMapTy::ScopeTy *scope = getScope(region);
-  if (!scope) {
-    LLVM_DEBUG(llvm::dbgs() << "insert: no scope registered for region\n");
-    return failure();
-  }
+  assert(scope && "insert: no scope registered for region");
 
   // Check if an equivalent operation already exists in the scope
   if (Operation *existing = scope->lookupOrDefault(op)) {
@@ -110,17 +96,10 @@ LogicalResult HashConsPatternRewriter::insert(Operation *op) {
 
 Operation *HashConsPatternRewriter::lookup(Operation *op) {
   Region *region = op->getParentRegion();
-  if (!region) {
-    LLVM_DEBUG(llvm::dbgs()
-               << "lookup: operation has no parent region: " << *op << "\n");
-    return nullptr;
-  }
+  assert(region && "lookup: operation has no parent region");
 
   ScopedMapTy::ScopeTy *scope = getScope(region);
-  if (!scope) {
-    LLVM_DEBUG(llvm::dbgs() << "lookup: no scope registered for region\n");
-    return nullptr;
-  }
+  assert(scope && "lookup: no scope registered for region");
 
   return scope->lookupOrDefault(op);
 }

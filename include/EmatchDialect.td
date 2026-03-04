@@ -167,6 +167,10 @@ def EmatchSaturatePass : Pass<"ematch-saturate", "::mlir::ModuleOp"> {
         It serves as an example of implementing a transformation pass.
     }];
     let dependentDialects = ["::mlir::ematch::EmatchDialect"];
+    let options = [
+        Option<"maxIters", "max-iters", "int", "4",
+               "Maximum number of iterations before equality saturation times out.">
+    ];
 }
 
 def EmatchSaturateBenchmarkPass : Pass<"ematch-saturate-benchmark", "::mlir::ModuleOp"> {
@@ -174,6 +178,21 @@ def EmatchSaturateBenchmarkPass : Pass<"ematch-saturate-benchmark", "::mlir::Mod
     let description = [{
         This pass runs the ematch-saturate pass N times, cloning the IR module
         each time to ensure fresh input. Useful for profiling and benchmarking.
+    }];
+    let dependentDialects = ["::mlir::ematch::EmatchDialect"];
+    let options = [
+        Option<"numRuns", "num-runs", "int", "10",
+               "Number of times to run equality saturation.">,
+        Option<"maxIters", "max-iters", "int", "4",
+               "Maximum number of iterations before equality saturation times out.">
+    ];
+}
+
+def ApplyPDLInterpPass : Pass<"ematch-apply-pdl-interp", "::mlir::ModuleOp"> {
+    let summary = "Apply pdl_interp patterns to the IR module using the greedy pattern rewrite driver.";
+    let description = [{
+        A debugging pass that applies pdl_interp patterns to the IR module using
+        MLIR's greedy pattern rewrite driver, similar to TestPDLByteCode in MLIR.
     }];
     let dependentDialects = ["::mlir::ematch::EmatchDialect"];
 }

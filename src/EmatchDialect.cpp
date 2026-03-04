@@ -85,6 +85,7 @@ namespace mlir::ematch {
 #define GEN_PASS_DEF_EMATCHSATURATEPASS
 #define GEN_PASS_DEF_EMATCHSATURATEBENCHMARKPASS
 #define GEN_PASS_DEF_CONVERTEMATCHTOPDLINTERPPASS
+#define GEN_PASS_DEF_APPLYPDLINTERPPASS
 #include "EmatchPasses.h.inc"
 
 namespace {
@@ -131,20 +132,8 @@ void convertEmatchOpsToApplyRewrites(ModuleOp module) {
 /// Run equality saturation on the given IR module using the provided pattern
 /// module. The patternModule is consumed (removed from parent).
 /// Returns true on success.
-bool runSaturation(MLIRContext *ctx, ModuleOp patternModule, ModuleOp irModule,
-                   int maxIters) {
-
-  patternModule.getOperation()->remove();
-  PDLPatternModule pdlPattern(patternModule);
-
-  return runSaturationWithPDL(ctx, std::move(pdlPattern), irModule, maxIters);
-}
-
-/// Run equality saturation on the given IR module using the provided pattern
-/// module. The patternModule is consumed (removed from parent).
-/// Returns true on success.
-bool runSaturationWithPDL(MLIRContext *ctx, PDLPatternModule pdlPattern,
-                          ModuleOp irModule, int maxIters) {
+bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
+                   ModuleOp irModule, int maxIters) {
   RewritePatternSet patternList(ctx);
 
   ClassOpUnionFind uf{};
@@ -292,16 +281,6 @@ struct EmatchSaturatePass
   using impl::EmatchSaturatePassBase<
       EmatchSaturatePass>::EmatchSaturatePassBase;
 
-  EmatchSaturatePass() = default;
-  EmatchSaturatePass(const EmatchSaturatePass &pass)
-      : EmatchSaturatePassBase(pass) {}
-
-  Option<int> maxIters{
-      *this, "max-iters",
-      llvm::cl::desc("Maximum number of iterations before equality saturation "
-                     "times out."),
-      llvm::cl::init(4)};
-
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<mlir::pdl_interp::PDLInterpDialect>();
   }
@@ -320,7 +299,12 @@ struct EmatchSaturatePass
       return;
 
     convertEmatchOpsToApplyRewrites(patternModule);
-    runSaturation(module.getContext(), patternModule, irModule, maxIters);
+
+    patternModule.getOperation()->remove();
+    PDLPatternModule pdlPattern(patternModule);
+
+    runSaturation(module.getContext(), std::move(pdlPattern), irModule,
+                  maxIters);
 
     auto endTime = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -335,21 +319,6 @@ struct EmatchSaturateBenchmarkPass
           EmatchSaturateBenchmarkPass> {
   using impl::EmatchSaturateBenchmarkPassBase<
       EmatchSaturateBenchmarkPass>::EmatchSaturateBenchmarkPassBase;
-
-  EmatchSaturateBenchmarkPass() = default;
-  EmatchSaturateBenchmarkPass(const EmatchSaturateBenchmarkPass &pass)
-      : EmatchSaturateBenchmarkPassBase(pass) {}
-
-  Option<int> numRuns{
-      *this, "num-runs",
-      llvm::cl::desc("Number of times to run equality saturation."),
-      llvm::cl::init(10)};
-
-  Option<int> maxIters{
-      *this, "max-iters",
-      llvm::cl::desc("Maximum number of iterations before equality saturation "
-                     "times out."),
-      llvm::cl::init(4)};
 
   void getDependentDialects(DialectRegistry &registry) const override {
     registry.insert<mlir::pdl_interp::PDLInterpDialect>();
@@ -379,7 +348,10 @@ struct EmatchSaturateBenchmarkPass
       OwningOpRef<ModuleOp> irClone = irModule.clone();
       OwningOpRef<ModuleOp> patternClone = patternModule.clone();
 
-      runSaturation(module.getContext(), patternClone.release(), irClone.get(),
+      patternClone.get().getOperation()->remove();
+      PDLPatternModule pdlPattern(patternClone.release());
+
+      runSaturation(module.getContext(), std::move(pdlPattern), irClone.get(),
                     maxIters);
 
       auto endTime = std::chrono::high_resolution_clock::now();
@@ -395,6 +367,38 @@ struct EmatchSaturateBenchmarkPass
     LLVM_DEBUG(llvm::dbgs()
                << "EmatchSaturateBenchmarkPass total: " << totalDuration.count()
                << " µs for " << numRuns << " runs\n");
+  }
+};
+
+struct ApplyPDLInterpPass
+    : public impl::ApplyPDLInterpPassBase<ApplyPDLInterpPass> {
+  using impl::ApplyPDLInterpPassBase<
+      ApplyPDLInterpPass>::ApplyPDLInterpPassBase;
+
+  void getDependentDialects(DialectRegistry &registry) const override {
+    registry.insert<mlir::pdl_interp::PDLInterpDialect>();
+  }
+
+  void runOnOperation() final {
+    ModuleOp module = getOperation();
+
+    ModuleOp patternModule = module.lookupSymbol<ModuleOp>(
+        StringAttr::get(module->getContext(), "patterns"));
+    ModuleOp irModule = module.lookupSymbol<ModuleOp>(
+        StringAttr::get(module->getContext(), "ir"));
+
+    if (!patternModule || !irModule)
+      return;
+
+    patternModule.getOperation()->remove();
+    PDLPatternModule pdlPattern(patternModule);
+
+    RewritePatternSet patternList(module->getContext());
+    patternList.add(std::move(pdlPattern));
+
+    if (failed(applyPatternsGreedily(irModule.getBodyRegion(),
+                                     std::move(patternList))))
+      signalPassFailure();
   }
 };
 

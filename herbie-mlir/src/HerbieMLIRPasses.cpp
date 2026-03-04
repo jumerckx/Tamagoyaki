@@ -3,7 +3,6 @@
 #include "EquivalenceUtils.h"
 #include "HerbieMLIR.h"
 #include "HerbieMLIROpInterfaces.h"
-#include "HerbieUtils.h"
 #include "IntervalSearch.h"
 #include "LocalError.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
@@ -24,18 +23,23 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cassert>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <math.h>
 #include <mpfr.h>
 #include <optional>
 #include <rival.h>
 #include <string>
 #include <utility>
 #include <vector>
+
+#define DEBUG_TYPE "herbie"
 
 namespace herbie {
 
@@ -83,69 +87,6 @@ static double getConstantValue(::herbie::Constant constantEnum) {
     return M_2_PI;
   }
   llvm_unreachable("Unknown herbie constant");
-}
-
-SmallVector<Operation *> computeSelectedTopoSort(GraphOp graphOp) {
-  Block &block = graphOp.getBody().front();
-
-  DenseSet<Operation *> excludedOps;
-
-  for (Operation &op : block) {
-    if (isa<YieldOp>(&op))
-      continue;
-
-    bool anyResultNeeded = false;
-    for (Value result : op.getResults()) {
-      for (OpOperand &use : result.getUses()) {
-        Operation *user = use.getOwner();
-        auto classOp = dyn_cast<ClassOp>(user);
-        if (!classOp) {
-          anyResultNeeded = true;
-          break;
-        }
-        if (auto minCostAttr =
-                classOp->getAttrOfType<IntegerAttr>("min_cost_index")) {
-          int64_t minIdx = minCostAttr.getInt();
-          if (minIdx >= 0 &&
-              static_cast<size_t>(minIdx) < classOp.getInputs().size() &&
-              classOp.getInputs()[minIdx] == result) {
-            anyResultNeeded = true;
-            break;
-          }
-        } else {
-          anyResultNeeded = true;
-          break;
-        }
-      }
-      if (anyResultNeeded)
-        break;
-    }
-
-    if (!anyResultNeeded)
-      excludedOps.insert(&op);
-  }
-
-  SmallVector<Operation *> opsToSort;
-  for (Operation &op : block) {
-    if (!excludedOps.contains(&op))
-      opsToSort.push_back(&op);
-  }
-
-  auto isOperandReady = [&](Value value, Operation *) -> bool {
-    Operation *defOp = value.getDefiningOp();
-    return !defOp || excludedOps.contains(defOp);
-  };
-
-  computeTopologicalSorting(opsToSort, isOperandReady);
-
-  // Remove YieldOp from result
-  SmallVector<Operation *> result;
-  for (Operation *op : opsToSort) {
-    if (!isa<YieldOp>(op)) {
-      result.push_back(op);
-    }
-  }
-  return result;
 }
 
 namespace {
@@ -345,308 +286,10 @@ public:
   }
 };
 
-class HerbieOptimizePass
-    : public impl::HerbieOptimizePassBase<HerbieOptimizePass> {
-public:
-  using impl::HerbieOptimizePassBase<
-      HerbieOptimizePass>::HerbieOptimizePassBase;
-
-  void getDependentDialects(mlir::DialectRegistry &registry) const override {
-    registry.insert<mlir::equivalence::EquivalenceDialect>();
-    registry.insert<mlir::func::FuncDialect>();
-    registry.insert<mlir::pdl_interp::PDLInterpDialect>();
-  }
-
-  void runOnOperation() final {
-    mlir::ModuleOp module = getOperation();
-
-    ModuleOp patternModule = module.lookupSymbol<ModuleOp>(
-        StringAttr::get(module->getContext(), "patterns"));
-    ModuleOp irModule = module.lookupSymbol<ModuleOp>(
-        StringAttr::get(module->getContext(), "ir"));
-
-    if (!patternModule || !irModule)
-      return;
-
-    IntervalSearchConfig intervalConfig;
-    intervalConfig.maxSearchDepth = maxSearchDepth;
-    intervalConfig.maxRegions = maxRegions;
-    intervalConfig.analysisPrecision = analysisPrecision;
-    intervalConfig.maxRivalPrecision = maxRivalPrecision;
-    intervalConfig.maxRivalIterations = maxRivalIterations;
-
-    // Create a shared rival arena for all functions
-    RivalExprArena *arena = rival_expr_arena_new();
-    if (!arena) {
-      llvm::errs() << "Failed to create rival expression arena\n";
-      return signalPassFailure();
-    }
-
-    // Shared state for rival compilation across all functions
-    DenseMap<Value, uint32_t> valueToExpr;
-    DenseMap<Value, size_t> valueToRootIdx;
-    std::vector<std::string> varNameStorage;
-    SmallVector<uint32_t> roots;
-    SmallVector<FunctionIntervalResult> intervalResults;
-    SmallVector<SmallVector<Operation *>> allSortedOps;
-
-    irModule.walk([&](mlir::func::FuncOp funcOp) {
-      auto &intervalResult = intervalResults.emplace_back(
-          runIntervalSearchOnFunction(funcOp, intervalConfig));
-
-      if (!intervalResult.success) {
-        funcOp.emitWarning() << "Interval search failed, continuing anyway";
-      } else {
-        llvm::errs() << "  Found "
-                     << intervalResult.searchResult.sampleableRegions.size()
-                     << " sampleable regions\n";
-        llvm::errs() << "  Valid fraction: "
-                     << intervalResult.searchResult.statistics.validFraction
-                     << "\n";
-      }
-
-      llvm::errs() << "Step 2: Inserting equivalence graph...\n";
-
-      if (mlir::failed(mlir::equivalence::insertGraphInFunction(
-              funcOp, /*insertSingleElementEqs=*/false))) {
-        funcOp.emitError() << "Failed to insert equivalence graph";
-        return signalPassFailure();
-      }
-
-      llvm::errs() << "  Graph inserted successfully\n";
-
-      // Map function arguments to rival variables and register as roots
-      for (auto [i, arg] : llvm::enumerate(funcOp.getArguments())) {
-        std::string name = "arg" + std::to_string(i);
-        varNameStorage.push_back(name);
-        uint32_t varExpr = rival_expr_var(arena, varNameStorage.back().c_str());
-        valueToExpr[arg] = varExpr;
-
-        size_t idx = roots.size();
-        roots.push_back(varExpr);
-        valueToRootIdx[arg] = idx;
-      }
-    });
-
-    // Run saturation
-    mlir::ematch::convertEmatchOpsToApplyRewrites(patternModule);
-    bool saturationSuccess = mlir::ematch::runSaturation(
-        irModule->getContext(), patternModule, irModule, maxSaturationIters);
-
-    if (!saturationSuccess) {
-      llvm::errs() << "  Warning: Saturation returned false\n";
-    } else {
-      llvm::errs() << "  Saturation completed\n";
-    }
-
-    // select greedily:
-    irModule.walk(
-        [&](GraphOp graphOp) { selectGreedy(graphOp, 1, "herbie.cost"); });
-
-    // Step 4: Compile selected operations to rival expressions in
-    // topological order, then build the rival machine
-    llvm::errs() << "Step 4: Computing topological sort and compiling to "
-                    "rival expressions...\n";
-
-    irModule.walk([&](mlir::equivalence::GraphOp graphOp) {
-      auto sortedOps = computeSelectedTopoSort(graphOp);
-
-      llvm::errs() << "  Topological order (" << sortedOps.size()
-                   << " operations):\n";
-      for (mlir::Operation *op : sortedOps) {
-        llvm::errs() << "    ";
-        op->print(llvm::errs(), mlir::OpPrintingFlags().skipRegions());
-        llvm::errs() << "\n";
-      }
-
-      // Compile each operation in topological order so that operand
-      // expressions are already present in valueToExpr when needed.
-      // Register every result as a rival root so we can look up exact
-      // values for local error computation.
-      for (mlir::Operation *op : sortedOps) {
-        if (auto eclass = dyn_cast<ClassOp>(op)) {
-          std::optional<uint64_t> mci = eclass.getMinCostIndex();
-          assert(mci.has_value());
-          Value selectedOperand = eclass->getOperand(mci.value());
-          valueToExpr[eclass.getResult()] = valueToExpr[selectedOperand];
-          if (valueToRootIdx.contains(selectedOperand)) {
-            valueToRootIdx[eclass.getResult()] =
-                valueToRootIdx[selectedOperand];
-          }
-
-          continue;
-        }
-        auto iface = dyn_cast<RivalCompileableInterface>(op);
-        if (!iface) {
-          llvm::errs() << "  Skipping op without RivalCompileableInterface: "
-                       << op->getName() << "\n";
-          continue;
-        }
-
-        SmallVector<uint32_t> operandExprs{};
-        for (auto operand : op->getOperands()) {
-          assert(valueToExpr.contains(operand));
-          operandExprs.push_back(valueToExpr[operand]);
-        }
-        auto resultExprs = iface.compile(arena, operandExprs);
-        assert(op->getNumResults() == resultExprs.size());
-        for (auto [val, expr] : llvm::zip(op->getResults(), resultExprs)) {
-          valueToExpr[val] = expr;
-
-          size_t idx = roots.size();
-          roots.push_back(expr);
-          valueToRootIdx[val] = idx;
-        }
-      }
-
-      // Collect ALL non-class, non-yield operations for local error
-      // computation.  Operations that were not part of the toposort
-      // (i.e. non-selected eclass members) don't have their own rival
-      // root, but each such operation is used by exactly one
-      // equivalence.class whose result *does* have a root.  Map the
-      // non-selected op's result to that class's root index so that
-      // computeLocalErrors can look up the exact (high-precision)
-      // ground-truth value.
-      SmallVector<Operation *> allOps;
-      for (Operation &op : graphOp.getBody().front()) {
-        if (isa<ClassOp, YieldOp>(&op))
-          continue;
-
-        for (Value result : op.getResults()) {
-          if (!valueToRootIdx.contains(result)) {
-            // This result was not compiled into its own rival root.
-            // Find the equivalence.class that consumes it and reuse
-            // that class's ground-truth value.
-            bool mapped = false;
-            for (OpOperand &use : result.getUses()) {
-              if (auto classOp = dyn_cast<ClassOp>(use.getOwner())) {
-                assert(valueToRootIdx.contains(classOp.getResult()) &&
-                       "ClassOp result must have a rival root index");
-                valueToRootIdx[result] =
-                    valueToRootIdx.lookup(classOp.getResult());
-                mapped = true;
-                break;
-              }
-            }
-            assert(mapped &&
-                   "Non-selected op result must be used by a ClassOp");
-          }
-        }
-
-        allOps.push_back(&op);
-      }
-      allSortedOps.push_back(std::move(allOps));
-    });
-
-    // Build the rival machine from all collected roots and variables
-    std::vector<const char *> varNamePtrs;
-    varNamePtrs.reserve(varNameStorage.size());
-    for (auto &name : varNameStorage) {
-      varNamePtrs.push_back(name.c_str());
-    }
-
-    llvm::errs() << "Step 5: Building rival machine (" << roots.size()
-                 << " roots, " << varNamePtrs.size() << " variables)...\n";
-
-    RivalDiscretization *disc = rival_disc_f64(analysisPrecision);
-    RivalMachine *machine = rival_machine_new(
-        arena, roots.data(), roots.size(), varNamePtrs.data(),
-        varNamePtrs.size(), disc, maxRivalPrecision, maxRivalIterations);
-
-    if (!machine) {
-      llvm::errs() << "Failed to create rival machine\n";
-      rival_disc_free(disc);
-      rival_expr_arena_free(arena);
-      return signalPassFailure();
-    }
-
-    llvm::errs() << "  Rival machine constructed successfully\n";
-
-    llvm::errs() << "Step 6: Sampling points and evaluating...\n";
-
-    if (intervalResults.empty() || !intervalResults[0].success) {
-      llvm::errs() << "  No valid interval result; skipping sampling.\n";
-    } else {
-      auto &intervalResult = intervalResults[0];
-
-      SamplingResult samplingResult = sampleAndEvaluate(
-          machine, intervalResult.searchResult, intervalResult.floatBitWidths,
-          roots.size(), /*numSamples=*/256, /*evalMaxIterations=*/100,
-          /*evalMaxPrecision=*/2000, analysisPrecision);
-
-      llvm::errs() << "  Sampled " << samplingResult.sampled << " / 256 points"
-                   << " (skipped " << samplingResult.skipped << ")\n";
-
-      // Step 7: Compute local error for each operation
-      llvm::errs() << "Step 7: Computing local errors...\n";
-
-      DenseMap<Operation *, double> opSumDistances;
-
-      for (auto &sortedOps : allSortedOps) {
-        auto localErrors =
-            computeLocalErrors(sortedOps, valueToRootIdx, samplingResult);
-
-        for (auto &errInfo : localErrors) {
-          if (errInfo.count == 0)
-            continue;
-
-          opSumDistances[errInfo.op] = errInfo.sumUlp;
-
-          llvm::errs() << "  ";
-          errInfo.op->print(llvm::errs(),
-                            mlir::OpPrintingFlags().skipRegions());
-          llvm::errs() << "\n    max_ulp=" << errInfo.maxUlp
-                       << " mean_ulp=" << errInfo.meanUlp()
-                       << " samples=" << errInfo.count;
-          if (errInfo.foldFailures > 0)
-            llvm::errs() << " fold_failures=" << errInfo.foldFailures;
-          llvm::errs() << "\n";
-        }
-      }
-
-      // Step 8: Re-select with error-based costs, extract, and inline
-      llvm::errs() << "Step 8: Setting error-based costs and re-selecting...\n";
-
-      irModule.walk([&](GraphOp graphOp) {
-        clearSelection(graphOp, "equivalence.cost");
-
-        graphOp.walk([&](Operation *op) {
-          if (isa<ClassOp>(op) || isa<GraphOp>(op) || isa<YieldOp>(op))
-            return;
-
-          auto it = opSumDistances.find(op);
-          if (it != opSumDistances.end()) {
-            int64_t cost =
-                static_cast<int64_t>(std::round(std::log2(it->second + 1.0))) +
-                1;
-            op->setAttr("equivalence.cost",
-                        CostAttr::get(op->getContext(), cost));
-            llvm::errs() << "  cost=" << cost << " for ";
-            op->print(llvm::errs(), mlir::OpPrintingFlags().skipRegions());
-            llvm::errs() << "\n";
-          }
-        });
-
-        selectGreedy(graphOp, /*defaultCost=*/-1, "equivalence.cost");
-        extractFromGraph(graphOp);
-        inlineGraphOp(graphOp);
-      });
-
-      llvm::errs() << "  Extraction and inlining complete\n";
-    }
-
-    rival_machine_free(machine);
-    rival_disc_free(disc);
-    rival_expr_arena_free(arena);
-
-    llvm::errs() << "=== End Herbie Optimize ===\n";
-  }
-};
-
 // ===----------------------------------------------------------------------===
-// // LowerHerbieSoundOpsPass
+// // Herbie Sound Ops lowering patterns (shared by LowerHerbieSoundOpsPass
+// // and HerbieOptimizePass)
 // ===----------------------------------------------------------------------===
-// //
 
 struct LowerSoundDivPattern : public OpRewritePattern<SoundDivOp> {
   using OpRewritePattern<SoundDivOp>::OpRewritePattern;
@@ -684,6 +327,306 @@ static void populateLowerHerbieSoundOpsPatterns(RewritePatternSet &patterns) {
           patterns.getContext());
 }
 
+class HerbieOptimizePass
+    : public impl::HerbieOptimizePassBase<HerbieOptimizePass> {
+public:
+  using impl::HerbieOptimizePassBase<
+      HerbieOptimizePass>::HerbieOptimizePassBase;
+
+  void getDependentDialects(mlir::DialectRegistry &registry) const override {
+    registry.insert<mlir::equivalence::EquivalenceDialect>();
+    registry.insert<mlir::func::FuncDialect>();
+    registry.insert<mlir::pdl_interp::PDLInterpDialect>();
+  }
+
+  void runOnOperation() final {
+    mlir::ModuleOp module = getOperation();
+
+    ModuleOp patternModule = module.lookupSymbol<ModuleOp>(
+        StringAttr::get(module->getContext(), "patterns"));
+    ModuleOp irModule = module.lookupSymbol<ModuleOp>(
+        StringAttr::get(module->getContext(), "ir"));
+
+    if (!patternModule || !irModule)
+      return;
+
+    IntervalSearchConfig intervalConfig;
+    intervalConfig.maxSearchDepth = maxSearchDepth;
+    intervalConfig.maxRegions = maxRegions;
+    intervalConfig.analysisPrecision = analysisPrecision;
+    intervalConfig.maxRivalPrecision = maxRivalPrecision;
+    intervalConfig.maxRivalIterations = maxRivalIterations;
+
+    RivalExprArena *arena = rival_expr_arena_new();
+    if (!arena) {
+      llvm::errs() << "Failed to create rival expression arena\n";
+      return signalPassFailure();
+    }
+
+    DenseMap<Value, uint32_t> valueToExpr;
+    DenseMap<Value, size_t> valueToRootIdx;
+    std::vector<std::string> varNameStorage;
+    SmallVector<uint32_t> roots;
+    SmallVector<FunctionIntervalResult> intervalResults;
+    SmallVector<SmallVector<Operation *>> allSortedOps;
+
+    // Step 1: Run interval search and insert equivalence graphs
+    irModule.walk([&](mlir::func::FuncOp funcOp) {
+      auto &intervalResult = intervalResults.emplace_back(
+          runIntervalSearchOnFunction(funcOp, intervalConfig));
+
+      if (!intervalResult.success) {
+        funcOp.emitWarning() << "Interval search failed, continuing anyway";
+      } else {
+        LLVM_DEBUG({
+          llvm::dbgs() << "Interval search for " << funcOp.getName() << ": "
+                       << intervalResult.searchResult.sampleableRegions.size()
+                       << " sampleable regions, valid fraction: "
+                       << intervalResult.searchResult.statistics.validFraction
+                       << "\n";
+        });
+      }
+
+      if (mlir::failed(mlir::equivalence::insertGraphInFunction(
+              funcOp, /*insertSingleElementEqs=*/false))) {
+        funcOp.emitError() << "Failed to insert equivalence graph";
+        return signalPassFailure();
+      }
+
+      // Map function arguments to rival variables and register as roots
+      for (auto [i, arg] : llvm::enumerate(funcOp.getArguments())) {
+        std::string name = "arg" + std::to_string(i);
+        varNameStorage.push_back(name);
+        uint32_t varExpr = rival_expr_var(arena, varNameStorage.back().c_str());
+        valueToExpr[arg] = varExpr;
+
+        size_t idx = roots.size();
+        roots.push_back(varExpr);
+        valueToRootIdx[arg] = idx;
+      }
+    });
+
+    // Step 2: Run equality saturation
+    mlir::ematch::convertEmatchOpsToApplyRewrites(patternModule);
+
+    patternModule.getOperation()->remove();
+    PDLPatternModule pdlPattern(patternModule);
+
+    bool saturationSuccess = mlir::ematch::runSaturation(
+        irModule->getContext(), std::move(pdlPattern), irModule,
+        maxSaturationIters);
+
+    if (!saturationSuccess) {
+      LLVM_DEBUG(llvm::dbgs() << "Warning: Saturation returned false\n");
+    }
+
+    // Lower herbie sound ops introduced during saturation
+    {
+      RewritePatternSet patterns(irModule.getContext());
+      populateLowerHerbieSoundOpsPatterns(patterns);
+      GreedyRewriteConfig config;
+      config.enableConstantCSE(false);
+      config.enableFolding(false);
+      (void)applyPatternsGreedily(irModule, std::move(patterns), config);
+    }
+
+    // Step 3: Initial greedy selection
+    irModule.walk(
+        [&](GraphOp graphOp) { selectGreedy(graphOp, 1, "herbie.cost"); });
+
+    // Step 4: Compile selected operations to rival expressions in
+    // topological order, then build the rival machine
+    irModule.walk([&](mlir::equivalence::GraphOp graphOp) {
+      auto sortedOps = computeSelectedTopoSort(graphOp);
+
+      LLVM_DEBUG({
+        llvm::dbgs() << "Topological order (" << sortedOps.size()
+                     << " operations):\n";
+        for (mlir::Operation *op : sortedOps) {
+          llvm::dbgs() << "  ";
+          op->print(llvm::dbgs(), mlir::OpPrintingFlags().skipRegions());
+          llvm::dbgs() << "\n";
+        }
+      });
+
+      // Compile each operation in topological order so that operand
+      // expressions are already present in valueToExpr when needed.
+      // Register every result as a rival root so we can look up exact
+      // values for local error computation.
+      for (mlir::Operation *op : sortedOps) {
+        if (auto eclass = dyn_cast<ClassOp>(op)) {
+          std::optional<uint64_t> mci = eclass.getMinCostIndex();
+          assert(mci.has_value());
+          Value selectedOperand = eclass->getOperand(mci.value());
+          valueToExpr[eclass.getResult()] = valueToExpr[selectedOperand];
+          if (valueToRootIdx.contains(selectedOperand)) {
+            valueToRootIdx[eclass.getResult()] =
+                valueToRootIdx[selectedOperand];
+          }
+          continue;
+        }
+
+        auto iface = dyn_cast<RivalCompileableInterface>(op);
+        if (!iface) {
+          LLVM_DEBUG(llvm::dbgs()
+                     << "Skipping op without RivalCompileableInterface: "
+                     << op->getName() << "\n");
+          continue;
+        }
+
+        SmallVector<uint32_t> operandExprs{};
+        for (auto operand : op->getOperands()) {
+          assert(valueToExpr.contains(operand));
+          operandExprs.push_back(valueToExpr[operand]);
+        }
+        auto resultExprs = iface.compile(arena, operandExprs);
+        assert(op->getNumResults() == resultExprs.size());
+        for (auto [val, expr] : llvm::zip(op->getResults(), resultExprs)) {
+          valueToExpr[val] = expr;
+
+          size_t idx = roots.size();
+          roots.push_back(expr);
+          valueToRootIdx[val] = idx;
+        }
+      }
+
+      // Collect ALL non-class, non-yield operations for local error
+      // computation.  Operations that were not part of the toposort
+      // (i.e. non-selected eclass members) don't have their own rival
+      // root, but each such operation is used by exactly one
+      // equivalence.class whose result *does* have a root.  Map the
+      // non-selected op's result to that class's root index so that
+      // computeLocalErrors can look up the exact (high-precision)
+      // ground-truth value.
+      SmallVector<Operation *> allOps;
+      for (Operation &op : graphOp.getBody().front()) {
+        if (isa<ClassOp, YieldOp>(&op))
+          continue;
+
+        for (Value result : op.getResults()) {
+          if (!valueToRootIdx.contains(result)) {
+            bool mapped = false;
+            for (OpOperand &use : result.getUses()) {
+              if (auto classOp = dyn_cast<ClassOp>(use.getOwner())) {
+                assert(valueToRootIdx.contains(classOp.getResult()) &&
+                       "ClassOp result must have a rival root index");
+                valueToRootIdx[result] =
+                    valueToRootIdx.lookup(classOp.getResult());
+                mapped = true;
+                break;
+              }
+            }
+            assert(mapped &&
+                   "Non-selected op result must be used by a ClassOp");
+          }
+        }
+
+        allOps.push_back(&op);
+      }
+      allSortedOps.push_back(std::move(allOps));
+    });
+
+    // Step 5: Build the rival machine from all collected roots and variables
+    std::vector<const char *> varNamePtrs;
+    varNamePtrs.reserve(varNameStorage.size());
+    for (auto &name : varNameStorage) {
+      varNamePtrs.push_back(name.c_str());
+    }
+
+    LLVM_DEBUG(llvm::dbgs()
+               << "Building rival machine (" << roots.size() << " roots, "
+               << varNamePtrs.size() << " variables)\n");
+
+    RivalDiscretization *disc = rival_disc_f64(analysisPrecision);
+    RivalMachine *machine = rival_machine_new(
+        arena, roots.data(), roots.size(), varNamePtrs.data(),
+        varNamePtrs.size(), disc, maxRivalPrecision, maxRivalIterations);
+
+    if (!machine) {
+      llvm::errs() << "Failed to create rival machine\n";
+      rival_disc_free(disc);
+      rival_expr_arena_free(arena);
+      return signalPassFailure();
+    }
+
+    // Step 6: Sample points and evaluate
+    if (intervalResults.empty() || !intervalResults[0].success) {
+      LLVM_DEBUG(llvm::dbgs() << "No valid interval result; skipping sampling "
+                                 "and error analysis\n");
+    } else {
+      auto &intervalResult = intervalResults[0];
+
+      SamplingResult samplingResult = sampleAndEvaluate(
+          machine, intervalResult.searchResult, intervalResult.floatBitWidths,
+          roots.size(), /*numSamples=*/256, /*evalMaxIterations=*/100,
+          /*evalMaxPrecision=*/2000, analysisPrecision);
+
+      LLVM_DEBUG(llvm::dbgs()
+                 << "Sampled " << samplingResult.sampled << " / 256 points"
+                 << " (skipped " << samplingResult.skipped << ")\n");
+
+      // Step 7: Compute local error for each operation
+      DenseMap<Operation *, double> opSumDistances;
+
+      for (auto &sortedOps : allSortedOps) {
+        auto localErrors =
+            computeLocalErrors(sortedOps, valueToRootIdx, samplingResult);
+
+        for (auto &errInfo : localErrors) {
+          if (errInfo.count == 0)
+            continue;
+
+          opSumDistances[errInfo.op] = errInfo.sumUlp;
+
+          LLVM_DEBUG({
+            llvm::dbgs() << "  ";
+            errInfo.op->print(llvm::dbgs(),
+                              mlir::OpPrintingFlags().skipRegions());
+            llvm::dbgs() << "\n    max_ulp=" << errInfo.maxUlp
+                         << " mean_ulp=" << errInfo.meanUlp()
+                         << " samples=" << errInfo.count;
+            if (errInfo.foldFailures > 0)
+              llvm::dbgs() << " fold_failures=" << errInfo.foldFailures;
+            llvm::dbgs() << "\n";
+          });
+        }
+      }
+
+      // Step 8: Re-select with error-based costs, extract, and inline
+      irModule.walk([&](GraphOp graphOp) {
+        clearSelection(graphOp, "equivalence.cost");
+
+        graphOp.walk([&](Operation *op) {
+          if (isa<ClassOp>(op) || isa<GraphOp>(op) || isa<YieldOp>(op))
+            return;
+
+          auto it = opSumDistances.find(op);
+          if (it != opSumDistances.end()) {
+            int64_t cost =
+                static_cast<int64_t>(std::round(std::log2(it->second + 1.0))) +
+                1;
+            op->setAttr("equivalence.cost",
+                        CostAttr::get(op->getContext(), cost));
+            LLVM_DEBUG({
+              llvm::dbgs() << "cost=" << cost << " for ";
+              op->print(llvm::dbgs(), mlir::OpPrintingFlags().skipRegions());
+              llvm::dbgs() << "\n";
+            });
+          }
+        });
+
+        selectGreedy(graphOp, /*defaultCost=*/-1, "equivalence.cost");
+        extractFromGraph(graphOp);
+        inlineGraphOp(graphOp);
+      });
+    }
+
+    rival_machine_free(machine);
+    rival_disc_free(disc);
+    rival_expr_arena_free(arena);
+  }
+};
+
 class LowerHerbieSoundOpsPass
     : public impl::LowerHerbieSoundOpsPassBase<LowerHerbieSoundOpsPass> {
 public:
@@ -705,17 +648,14 @@ public:
 // ===----------------------------------------------------------------------===
 // // LowerHerbieConstantPass
 // ===----------------------------------------------------------------------===
-// //
 
 struct LowerHerbieConstantPattern : public OpRewritePattern<ConstantOp> {
   using OpRewritePattern<ConstantOp>::OpRewritePattern;
 
   LogicalResult matchAndRewrite(ConstantOp herbieConstOp,
                                 PatternRewriter &rewriter) const final {
-    // Get the constant value from the symbol
     double value = getConstantValue(herbieConstOp.getSymbol());
 
-    // Create an arith.constant with the same type and value
     auto resultType = herbieConstOp.getResult().getType();
     auto floatAttr = rewriter.getFloatAttr(resultType, value);
 

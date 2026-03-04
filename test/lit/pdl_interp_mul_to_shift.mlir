@@ -1,4 +1,18 @@
-// RUN: tamagoyaki-opt -ematch-saturate %s | FileCheck %s
+// RUN: tamagoyaki-opt -ematch-apply-pdl-interp %s | FileCheck %s
+
+module @ir {
+    // CHECK:      func.func @main(%arg0: i32) -> i32 {
+    // CHECK-NEXT:   %c1_i32 = arith.constant 1 : i32
+    // CHECK-NEXT:   %0 = arith.shli %arg0, %c1_i32 : i32
+    // CHECK-NEXT:   return %0 : i32
+    // CHECK-NEXT: }
+
+    func.func @main(%a: i32) -> i32 {
+        %two = arith.constant 2 : i32
+        %res = arith.muli %a, %two : i32
+        func.return %res : i32
+    }
+}
 
 module @patterns {
     pdl_interp.func @matcher(%arg0: !pdl.operation) {
@@ -60,20 +74,5 @@ module @patterns {
             pdl_interp.replace %arg1 with (%5 : !pdl.range<value>)
             pdl_interp.finalize
         }
-    }
-}
-
-module @ir {
-    // CHECK:      func.func @main(%arg0: i32) -> i32 {
-    // CHECK-NEXT:   %c2_i32 = arith.constant 2 : i32
-    // CHECK-NEXT:   %c1_i32 = arith.constant 1 : i32
-    // CHECK-NEXT:   %0 = arith.shli %arg0, %c1_i32 : i32
-    // CHECK-NEXT:   return %0 : i32
-    // CHECK-NEXT: }
-
-    func.func @main(%a: i32) -> i32 {
-        %two = arith.constant 2 : i32
-        %res = arith.muli %a, %two : i32
-        func.return %res : i32
     }
 }

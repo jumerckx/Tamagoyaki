@@ -22,7 +22,7 @@ The `equivalence` dialect provides core operations for representing and manipula
 Example:
 
 ```mlir
-func.func @main(%a: i32) -> (i32, i32) {
+func.func @main(%a: i32) -> (i32) {
   %res = equivalence.graph -> (i32) {
     %one = arith.constant 1 : i32
     %two = arith.constant 2 : i32
@@ -52,7 +52,7 @@ The `ematch` dialect extends the `pdl_interp` dialect to support e-matching for 
 
 The `herbie-mlir` subproject extends Tamagoyaki with floating-point expression optimization inspired by [Herbie](https://herbie.uwplse.org/). The goal is to use equality saturation with the `ematch` dialect to explore equivalent floating-point expressions and select those with improved numerical accuracy or performance characteristics.
 
-The subproject includes the `herbie-mlir-opt` tool, which combines the `equivalence` and `ematch` dialects with specialized patterns for floating-point arithmetic transformations. This tool builds on the MLIR infrastructure and the Rival type inference framework to validate transformations.
+The subproject includes the `herbie-mlir-opt` tool, which combines the `equivalence` and `ematch` dialects with specialized patterns for floating-point arithmetic transformations. This tool builds on the MLIR infrastructure and the [Rival 3](https://github.com/herbie-fp/rival3) arbitrary-precision interval arithmetic library.
 
 
 ## Building

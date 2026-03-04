@@ -206,7 +206,9 @@ def EquivalenceSelectGreedy: Pass<"equivalence-select-greedy", "::mlir::ModuleOp
     Option<"costFile", "cost-file", "std::string", "",
            "Path to JSON file containing operation costs">,
     Option<"defaultCost", "default-cost", "int", "-1",
-           "Default cost for operations not in cost file (-1 means none)">
+           "Default cost for operations not in cost file (-1 means none)">,
+    Option<"costAttributeName", "attribute-name", "std::string", "\"equivalence.cost\"",
+           "Name of the attribute representing the local cost of operations">
   ];
   let dependentDialects = ["::mlir::equivalence::EquivalenceDialect"];
 }
