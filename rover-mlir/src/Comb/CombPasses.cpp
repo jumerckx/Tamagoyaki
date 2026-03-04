@@ -36,11 +36,21 @@
 
 namespace comb {
 
-#define GEN_PASS_DEF_ROVEROPTIMIZEPASS
+#define GEN_PASS_DEF_ROVERSATURATEPASS
+#define GEN_PASS_DEF_ROVEREXTRACTPASS
 #include "CombPasses.h.inc"
 
 using namespace mlir;
 using namespace mlir::equivalence;
+
+#include <cassert>
+#include <cstdint>
+
+static unsigned ceilLog2(unsigned v) {
+  assert(v > 0 && "undefined for zero");
+  // for 32‑bit unsigned; use __builtin_clzll for 64‑bit
+  return 32u - __builtin_clz(v - 1);
+}
 
 // Helper to get the narrow width if value is zero-extended
 std::optional<unsigned> getZeroExtendedWidth(Value val) {
@@ -65,15 +75,15 @@ std::optional<unsigned> getZeroExtendedWidth(Value val) {
   return baseType.getWidth();
 }
 
-unsigned getMulOpCost(comb::MulOp mulOp) {
-  auto lhsWidth = getZeroExtendedWidth(mulOp.getOperand(0));
-  auto rhsWidth = getZeroExtendedWidth(mulOp.getOperand(1));
+unsigned getBinaryOpCost(Value lhs, Value rhs) {
+  auto lhsWidth = getZeroExtendedWidth(lhs);
+  auto rhsWidth = getZeroExtendedWidth(rhs);
 
   if (!lhsWidth)
-    lhsWidth = mulOp.getOperand(0).getType().getIntOrFloatBitWidth();
+    lhsWidth = lhs.getType().getIntOrFloatBitWidth();
 
   if (!rhsWidth)
-    rhsWidth = mulOp.getOperand(1).getType().getIntOrFloatBitWidth();
+    rhsWidth = rhs.getType().getIntOrFloatBitWidth();
 
   // Cost is the maximum narrow width
   return (*lhsWidth) * (*rhsWidth);
@@ -121,10 +131,10 @@ static LogicalResult rewriterBuildCompress(PatternRewriter &rewriter,
   return success();
 }
 
-class RoverOptimizePass
-    : public impl::RoverOptimizePassBase<RoverOptimizePass> {
+class RoverSaturatePass
+    : public impl::RoverSaturatePassBase<RoverSaturatePass> {
 public:
-  using impl::RoverOptimizePassBase<RoverOptimizePass>::RoverOptimizePassBase;
+  using impl::RoverSaturatePassBase<RoverSaturatePass>::RoverSaturatePassBase;
 
   void getDependentDialects(mlir::DialectRegistry &registry) const override {
     registry.insert<mlir::equivalence::EquivalenceDialect>();
@@ -145,15 +155,11 @@ public:
       return;
 
     irModule.walk([&](mlir::func::FuncOp funcOp) {
-      llvm::errs() << "Step 2: Inserting equivalence graph...\n";
-
       if (mlir::failed(mlir::equivalence::insertGraphInFunction(
               funcOp, /*insertSingleElementEqs=*/false))) {
         funcOp.emitError() << "Failed to insert equivalence graph";
         return signalPassFailure();
       }
-
-      llvm::errs() << "  Graph inserted successfully\n";
     });
 
     // Run saturation
@@ -169,17 +175,35 @@ public:
 
     if (!saturationSuccess) {
       llvm::errs() << "  Warning: Saturation returned false\n";
-    } else {
-      llvm::errs() << "  Saturation completed\n";
     }
 
-    llvm::errs() << "=== IR After Saturation ===\n";
-    irModule.print(llvm::errs());
-    llvm::errs() << "\n";
+    return;
+  }
+};
+
+class RoverExtractPass : public impl::RoverExtractPassBase<RoverExtractPass> {
+public:
+  using impl::RoverExtractPassBase<RoverExtractPass>::RoverExtractPassBase;
+
+  void getDependentDialects(mlir::DialectRegistry &registry) const override {
+    registry.insert<mlir::equivalence::EquivalenceDialect>();
+    registry.insert<mlir::func::FuncDialect>();
+    registry.insert<mlir::pdl_interp::PDLInterpDialect>();
+    registry.insert<datapath::DatapathDialect>();
+  }
+
+  void runOnOperation() final {
+    mlir::ModuleOp module = getOperation();
+
+    ModuleOp irModule = module.lookupSymbol<ModuleOp>(
+        StringAttr::get(module->getContext(), "ir"));
+
+    if (!irModule)
+      return;
 
     // select greedily:
     irModule.walk(
-        [&](GraphOp graphOp) { selectGreedy(graphOp, 1, "rover.cost"); });
+        [&](GraphOp graphOp) { selectGreedy(graphOp, 1, "equivalence.cost"); });
 
     irModule.walk([&](GraphOp graphOp) {
       // clearSelection(graphOp, "rover.cost");
@@ -188,29 +212,77 @@ public:
         if (isa<ClassOp>(op) || isa<GraphOp>(op) || isa<YieldOp>(op))
           return;
 
-        unsigned cost = llvm::TypeSwitch<Operation *, unsigned>(op)
-                            .Case<comb::AddOp>([](auto) { return 1; })
-                            .Case<comb::MulOp>([](comb::MulOp mulOp) {
-                              return getMulOpCost(mulOp);
-                            })
-                            .Case<comb::SubOp>([](auto) { return 1; })
-                            .Case<comb::ShlOp>([](auto) { return 2; })
-                            .Default([](auto) { return 1; });
-        op->setAttr("rover.cost", CostAttr::get(op->getContext(), cost));
+        auto [area, delay] =
+            llvm::TypeSwitch<Operation *, std::pair<unsigned, unsigned>>(op)
+                .Case<comb::AddOp>([](comb::AddOp addOp) {
+                  // Adder cost = width
+                  auto addArea =
+                      addOp.getResult().getType().getIntOrFloatBitWidth();
+                  auto addDelay = ceilLog2(addArea);
+                  // return std::pair{addArea, addDelay};
+                  return std::pair{1000, 1000};
+                })
+                .Case<comb::MulOp>([](comb::MulOp mulOp) {
+                  // Multiplier cost = width(lhs) * width(rhs)
+                  return std::pair{10000, 10000};
+                })
+                .Case<comb::ShlOp>([](comb::ShlOp shlOp) {
+                  auto shlArea =
+                      getBinaryOpCost(shlOp.getLhs(), shlOp.getRhs());
+                  auto shiftBy = getZeroExtendedWidth(shlOp.getRhs());
+                  if (shiftBy)
+                    return std::pair{shlArea, *shiftBy};
+
+                  return std::pair{
+                      shlArea,
+                      shlOp.getRhs().getType().getIntOrFloatBitWidth()};
+                })
+                .Case<datapath::PartialProductOp>(
+                    [](datapath::PartialProductOp ppOp) {
+                      // Partial product cost = width(lhs) * width(rhs)
+                      // return getBinaryOpCost(ppOp.getLhs(), ppOp.getRhs());
+                      // Delay is small
+                      return std::pair{
+                          getBinaryOpCost(ppOp.getLhs(), ppOp.getRhs()) /
+                              ppOp.getNumResults(),
+                          1};
+                    })
+                .Case<datapath::CompressOp>(
+                    [](datapath::CompressOp compressOp) {
+                      // Compress cost = num bits of array
+                      auto compressCost = 0;
+                      for (auto operand : compressOp.getInputs())
+                        compressCost +=
+                            operand.getType().getIntOrFloatBitWidth();
+
+                      auto numOps = compressOp.getNumOperands();
+
+                      return std::pair{compressCost / numOps, ceilLog2(numOps)};
+                    })
+                .Default([](auto) { return std::pair{0, 1}; });
+
+        op->setAttr("equivalence.cost", CostAttr::get(op->getContext(), area));
       });
 
-      selectGreedy(graphOp, /*defaultCost=*/-1, "rover.cost");
-      extractFromGraph(graphOp);
-      inlineGraphOp(graphOp);
-    });
+      selectGreedy(graphOp, /*defaultCost=*/-1, "equivalence.cost");
+      llvm::errs() << "=== IR After Costing ===\n";
+      irModule.print(llvm::errs());
+      llvm::errs() << "\n";
 
-    llvm::errs() << "=== End Rover Optimize ===\n";
+      extractFromGraph(graphOp);
+      graphOp.walk([&](Operation *op) {
+        if (isa<ClassOp>(op) || isa<GraphOp>(op) || isa<YieldOp>(op))
+          return;
+
+        op->removeAttr("equivalence.cost");
+        if (op->getUses().empty())
+          op->erase();
+      });
+      inlineGraphOp(graphOp);
+
+      // clearSelection(graphOp, "rover.cost");
+    });
   }
 };
-
-// ===----------------------------------------------------------------------===
-// // LowerHerbieSoundOpsPass
-// ===----------------------------------------------------------------------===
-// //
 
 } // namespace comb

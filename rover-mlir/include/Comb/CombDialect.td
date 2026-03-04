@@ -129,10 +129,28 @@ def ConcatOp : CombOp<"concat",
 // Comb Passes
 //===----------------------------------------------------------------------===//
 
-def RoverOptimizePass : Pass<"rover-optimize", "::mlir::ModuleOp"> {
-  let summary = "Run Rover optimization pipeline on a function.";
+def RoverSaturatePass : Pass<"rover-saturate", "::mlir::ModuleOp"> {
+  let summary = "Saturate a Rover e-graph on a function.";
   let description = [{
-    This pass runs the full Rover optimization pipeline on a function:
+    This pass runs the first half of Rover optimization pipeline on a function:
+
+    If a "patterns" module exists in the parent module, it
+    will be used for equality saturation.
+  }];
+  let dependentDialects = [
+    "::mlir::func::FuncDialect",
+    "::mlir::arith::ArithDialect",
+    "::mlir::equivalence::EquivalenceDialect",
+    "::mlir::pdl_interp::PDLInterpDialect",
+    // "::hw::HWDialect",
+    "::comb::CombDialect"
+  ];
+}
+
+def RoverExtractPass : Pass<"rover-extract", "::mlir::ModuleOp"> {
+  let summary = "Extract from a Rover e-graph.";
+  let description = [{
+    This pass runs the second half of Rover optimization pipeline on a function:
 
     If a "patterns" module exists in the parent module, it
     will be used for equality saturation.

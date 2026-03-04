@@ -2,6 +2,7 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/InitAllDialects.h"
+#include "mlir/InitAllPasses.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Support/FileUtilities.h"
@@ -40,6 +41,7 @@ using namespace comb;
 //===----------------------------------------------------------------------===//
 
 int main(int argc, char **argv) {
+  mlir::registerAllPasses();
   mlir::DialectRegistry registry;
   registry.insert<comb::CombDialect, hw::HWDialect, datapath::DatapathDialect,
                   mlir::equivalence::EquivalenceDialect,
