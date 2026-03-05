@@ -624,20 +624,31 @@ herbie::samplePoint(llvm::ArrayRef<RegionWithHints> regions,
 }
 
 SamplingResult herbie::sampleAndEvaluate(
-    RivalMachine *machine, const SearchResult &searchResult,
-    llvm::ArrayRef<unsigned> floatBitWidths, size_t numRoots,
+    const RivalExprArena *arena, llvm::ArrayRef<uint32_t> roots,
+    llvm::ArrayRef<const char *> varNames, const RivalDiscretization *disc,
+    const SearchResult &searchResult, llvm::ArrayRef<unsigned> floatBitWidths,
     unsigned numSamples, unsigned evalMaxIterations, unsigned evalMaxPrecision,
     unsigned analysisPrecision, uint64_t seed) {
   SamplingResult sr;
+  size_t numRoots = roots.size();
 
   auto &regions = searchResult.sampleableRegions;
   if (regions.empty())
     return sr;
 
+  // Build one RivalMachine per root so that a failure in one expression
+  // (e.g. division by zero) does not discard the entire sample point.
+  std::vector<RivalMachine *> machines(numRoots, nullptr);
+  size_t numVars = varNames.size();
+
+  for (size_t r = 0; r < numRoots; ++r) {
+    uint32_t root = roots[r];
+    machines[r] = rival_machine_new(arena, &root, 1, varNames.data(), numVars,
+                                    disc, evalMaxPrecision, 1000);
+  }
+
   auto cumWeights = buildCumulativeWeights(regions, floatBitWidths);
   std::mt19937_64 rng(seed);
-
-  size_t numVars = floatBitWidths.size();
 
   sr.points.resize(numSamples);
   sr.results.resize(numSamples, std::vector<double>(numRoots));
@@ -649,59 +660,48 @@ SamplingResult herbie::sampleAndEvaluate(
     argPtrs[i] = &argMpfr[i];
   }
 
-  auto *outMpfr = new mpfr_t[numRoots];
-  std::vector<mpfr_t *> outPtrs(numRoots);
-  for (size_t i = 0; i < numRoots; ++i) {
-    mpfr_init2(outMpfr[i], analysisPrecision);
-    outPtrs[i] = &outMpfr[i];
-  }
+  mpfr_t outMpfr;
+  mpfr_init2(outMpfr, analysisPrecision);
+  mpfr_t *outPtr = &outMpfr;
 
-  constexpr unsigned kMaxSkipMultiplier = 8;
-  unsigned maxSkipped = kMaxSkipMultiplier * numSamples;
-
-  while (sr.sampled < numSamples && sr.skipped < maxSkipped) {
+  for (unsigned s = 0; s < numSamples; ++s) {
     auto [pt, regionIdx] =
         samplePoint(regions, cumWeights, floatBitWidths, rng);
 
     for (size_t d = 0; d < numVars; ++d)
       mpfr_set_d(argMpfr[d], pt[d], MPFR_RNDN);
 
-    RivalError err =
-        rival_apply(machine, argPtrs.data(), numVars, outPtrs.data(), numRoots,
-                    nullptr, evalMaxIterations, evalMaxPrecision);
+    sr.points[s] = std::move(pt);
 
-    if (err != RIVAL_ERROR_OK) {
-      ++sr.skipped;
-      continue;
-    }
+    for (size_t r = 0; r < numRoots; ++r) {
+      if (!machines[r]) {
+        sr.results[s][r] = std::numeric_limits<double>::quiet_NaN();
+        continue;
+      }
 
-    bool hasInvalid = false;
-    for (size_t j = 0; j < numRoots; ++j) {
-      if (!mpfr_number_p(outMpfr[j])) {
-        hasInvalid = true;
-        break;
+      RivalError err =
+          rival_apply(machines[r], argPtrs.data(), numVars, &outPtr, 1, nullptr,
+                      evalMaxIterations, evalMaxPrecision);
+
+      if (err != RIVAL_ERROR_OK || !mpfr_number_p(outMpfr)) {
+        sr.results[s][r] = std::numeric_limits<double>::quiet_NaN();
+      } else {
+        sr.results[s][r] = mpfr_get_d(outMpfr, MPFR_RNDN);
       }
     }
-    if (hasInvalid) {
-      ++sr.skipped;
-      continue;
-    }
-
-    sr.points[sr.sampled] = std::move(pt);
-    for (size_t j = 0; j < numRoots; ++j)
-      sr.results[sr.sampled][j] = mpfr_get_d(outMpfr[j], MPFR_RNDN);
-    ++sr.sampled;
   }
 
-  sr.points.resize(sr.sampled);
-  sr.results.resize(sr.sampled);
+  sr.sampled = numSamples;
 
+  mpfr_clear(outMpfr);
   for (size_t i = 0; i < numVars; ++i)
     mpfr_clear(argMpfr[i]);
   delete[] argMpfr;
-  for (size_t i = 0; i < numRoots; ++i)
-    mpfr_clear(outMpfr[i]);
-  delete[] outMpfr;
+
+  for (size_t r = 0; r < numRoots; ++r) {
+    if (machines[r])
+      rival_machine_free(machines[r]);
+  }
 
   return sr;
 }

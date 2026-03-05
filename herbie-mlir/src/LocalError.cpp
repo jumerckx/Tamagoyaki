@@ -116,6 +116,17 @@ computeLocalErrors(ArrayRef<Operation *> sortedOps,
 
     for (unsigned p = 0; p < samplingResult.sampled; ++p) {
       double exactResult = samplingResult.results[p][resRootIdx];
+
+      // If the exact (high-precision) result is NaN, this root failed
+      // evaluation for this point.  Assign max error penalty, mirroring
+      // Herbie's treatment of +nan.bf ground truth.
+      if (std::isnan(exactResult)) {
+        errInfo.maxUlp = UINT64_MAX;
+        errInfo.sumUlp += static_cast<double>(UINT64_MAX);
+        ++errInfo.count;
+        continue;
+      }
+
       double exactRounded = roundToTypeAsDouble(resTy, exactResult);
 
       SmallVector<Attribute> operandAttrs;
@@ -126,6 +137,13 @@ computeLocalErrors(ArrayRef<Operation *> sortedOps,
         Type t = v.getType();
         size_t operandIdx = valueToRootIdx.lookup(v);
         double rivalVal = samplingResult.results[p][operandIdx];
+
+        // If an operand's exact value is NaN, we can't fold meaningfully.
+        // Assign max error for this point.
+        if (std::isnan(rivalVal)) {
+          operandsOk = false;
+          break;
+        }
 
         if (auto ft = dyn_cast<FloatType>(t)) {
           operandAttrs.push_back(makeRoundedFloatAttr(ft, rivalVal));

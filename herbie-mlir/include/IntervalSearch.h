@@ -290,13 +290,16 @@ samplePoint(llvm::ArrayRef<RegionWithHints> regions,
             llvm::ArrayRef<unsigned> floatBitWidths, std::mt19937_64 &rng);
 
 /// Sample numSamples points from the search result's sampleable regions,
-/// evaluate them with the given Rival machine, and return the results.
-SamplingResult
-sampleAndEvaluate(RivalMachine *machine, const SearchResult &searchResult,
-                  llvm::ArrayRef<unsigned> floatBitWidths, size_t numRoots,
-                  unsigned numSamples, unsigned evalMaxIterations,
-                  unsigned evalMaxPrecision, unsigned analysisPrecision,
-                  uint64_t seed = 42);
+/// evaluate them with per-root Rival machines, and return the results.
+/// Each root expression gets its own RivalMachine so that a failure in one
+/// root (e.g. division by zero) does not discard the entire sample point.
+/// Failed roots receive NaN in the results.
+SamplingResult sampleAndEvaluate(
+    const RivalExprArena *arena, llvm::ArrayRef<uint32_t> roots,
+    llvm::ArrayRef<const char *> varNames, const RivalDiscretization *disc,
+    const SearchResult &searchResult, llvm::ArrayRef<unsigned> floatBitWidths,
+    unsigned numSamples, unsigned evalMaxIterations, unsigned evalMaxPrecision,
+    unsigned analysisPrecision, uint64_t seed = 42);
 
 } // namespace herbie
 
