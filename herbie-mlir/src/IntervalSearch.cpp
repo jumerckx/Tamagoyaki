@@ -1,5 +1,6 @@
 #include "IntervalSearch.h"
 #include "HerbieMLIROpInterfaces.h"
+#include "TamagoyakiTiming.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinTypeInterfaces.h"
 #include "mlir/IR/Types.h"
@@ -454,6 +455,7 @@ SearchResult herbie::findIntervals(RivalMachine *machine,
 FunctionIntervalResult
 herbie::runIntervalSearchOnFunction(mlir::func::FuncOp funcOp,
                                     const IntervalSearchConfig &config) {
+  TAMAGOYAKI_SCOPED_TIMER("runIntervalSearchOnFunction");
   FunctionIntervalResult result;
   result.success = false;
 

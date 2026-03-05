@@ -13,6 +13,7 @@ set(HERBIE_MLIR_OPT_LIBS
   MLIREquivalence
   MLIREmatch
   Rival
+  TamagoyakiTiming
 )
 
 # Combine all generated headers this executable depends on

@@ -8,6 +8,7 @@
 
 #include "EmatchDialect.h"
 #include "EmatchUtils.h"
+#include "TamagoyakiTiming.h"
 
 #include "EquivalenceDialect.h"
 #include "Utils/ClassOpUnionFind.h"
@@ -121,6 +122,7 @@ static void populateEmatchToApplyRewritePatterns(RewritePatternSet &patterns) {
 }
 
 void convertEmatchOpsToApplyRewrites(ModuleOp module) {
+  TAMAGOYAKI_SCOPED_TIMER("convertEmatchOpsToApplyRewrites");
   RewritePatternSet patterns(module.getContext());
   populateEmatchToApplyRewritePatterns(patterns);
   GreedyRewriteConfig config;
@@ -134,6 +136,7 @@ void convertEmatchOpsToApplyRewrites(ModuleOp module) {
 /// Returns true on success.
 bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
                    ModuleOp irModule, int maxIters) {
+  TAMAGOYAKI_SCOPED_TIMER("runSaturation");
   RewritePatternSet patternList(ctx);
 
   ClassOpUnionFind uf{};

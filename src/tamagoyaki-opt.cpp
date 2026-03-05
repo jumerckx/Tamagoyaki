@@ -8,6 +8,7 @@
 
 #include "EmatchDialect.h"
 #include "EquivalenceDialect.h"
+#include "TamagoyakiTiming.h"
 
 #include "mlir/InitAllDialects.h"
 #include "mlir/InitAllPasses.h"
@@ -18,6 +19,8 @@ using namespace mlir::equivalence;
 using namespace mlir::ematch;
 
 int main(int argc, char **argv) {
+  tamagoyaki::registerTimingCLOptions();
+
   mlir::registerAllPasses();
   mlir::equivalence::registerEquivalencePasses();
   mlir::ematch::registerEmatchPasses();
@@ -26,6 +29,9 @@ int main(int argc, char **argv) {
                   mlir::ematch::EmatchDialect>();
   registerAllDialects(registry);
 
-  return mlir::asMainReturnCode(
+  int result = mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "Tamagoyaki optimizer driver\n", registry));
+
+  tamagoyaki::printTimingReport();
+  return result;
 }
