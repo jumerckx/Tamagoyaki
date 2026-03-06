@@ -21,6 +21,7 @@ set(DEPS_BUILD_DIR "${CMAKE_CURRENT_BINARY_DIR}/deps-build")
 # Build GMP from source
 ExternalProject_Add(gmp_external
     URL ${GMP_URL}
+    URL_HASH SHA256=a3c2b80201b89e68616f4ad30bc66aee4927c3ce50e33929ca819d5c43538898
     PREFIX ${DEPS_BUILD_DIR}/gmp
     INSTALL_DIR ${DEPS_INSTALL_DIR}
     CONFIGURE_COMMAND <SOURCE_DIR>/configure
@@ -36,6 +37,7 @@ ExternalProject_Add(gmp_external
 # Build MPFR from source (depends on GMP)
 ExternalProject_Add(mpfr_external
     URL ${MPFR_URL}
+    URL_HASH SHA256=277807353a6726978996945af13e52829e3abd7a9a5b7fb2793894e18f1fcbb2
     PREFIX ${DEPS_BUILD_DIR}/mpfr
     INSTALL_DIR ${DEPS_INSTALL_DIR}
     CONFIGURE_COMMAND <SOURCE_DIR>/configure
