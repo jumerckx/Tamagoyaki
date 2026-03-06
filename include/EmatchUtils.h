@@ -1,8 +1,6 @@
 #ifndef EMATCH_UTILS_H
 #define EMATCH_UTILS_H
 
-#include "mlir/Dialect/PDL/IR/PDLOps.h"
-#include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/PatternMatch.h"
@@ -19,9 +17,6 @@ void convertEmatchOpsToApplyRewrites(ModuleOp module);
 /// pattern module. Returns true on success.
 bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
                    ModuleOp irModule, int maxIters);
-
-bool runSaturationWithPDL(MLIRContext *ctx, PDLPatternModule pdlPattern,
-                          ModuleOp irModule, int maxIters);
 
 } // namespace mlir::ematch
 

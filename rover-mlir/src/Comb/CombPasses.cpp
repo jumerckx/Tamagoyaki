@@ -170,7 +170,7 @@ public:
     pdlPattern.registerRewriteFunction("BuildPartialProduct",
                                        rewriterBuildPartialProduct);
     pdlPattern.registerRewriteFunction("BuildCompress", rewriterBuildCompress);
-    bool saturationSuccess = mlir::ematch::runSaturationWithPDL(
+    bool saturationSuccess = mlir::ematch::runSaturation(
         irModule->getContext(), std::move(pdlPattern), irModule, 3);
 
     if (!saturationSuccess) {
@@ -219,6 +219,7 @@ public:
                   auto addArea =
                       addOp.getResult().getType().getIntOrFloatBitWidth();
                   auto addDelay = ceilLog2(addArea);
+                  (void)addDelay;
                   // return std::pair{addArea, addDelay};
                   return std::pair{1000, 1000};
                 })
