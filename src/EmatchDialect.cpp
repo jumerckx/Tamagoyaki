@@ -17,6 +17,7 @@
 #include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/MLIRContext.h"
@@ -25,6 +26,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
+#include "mlir/Parser/Parser.h"
 #include "mlir/Rewrite/FrozenRewritePatternSet.h"
 #include "mlir/Rewrite/PatternApplicator.h"
 #include "mlir/Support/LLVM.h"
@@ -288,13 +290,30 @@ struct EmatchSaturatePass
   void runOnOperation() final {
     ModuleOp module = getOperation();
 
-    ModuleOp patternsModule = module.lookupSymbol<ModuleOp>(
-        StringAttr::get(module->getContext(), "patterns"));
-    ModuleOp irModule = module.lookupSymbol<ModuleOp>(
-        StringAttr::get(module->getContext(), "ir"));
+    ModuleOp patternsModule;
+    ModuleOp irModule;
+    OwningOpRef<ModuleOp> parsedPatternsModule;
 
-    if (!patternsModule || !irModule)
-      return;
+    if (!patternsFile.empty()) {
+      // Parse patterns from external file; the input module is the IR module.
+      irModule = module;
+      parsedPatternsModule =
+          parseSourceFile<ModuleOp>(patternsFile, module.getContext());
+      if (!parsedPatternsModule) {
+        emitError(module.getLoc())
+            << "failed to parse patterns file: " << patternsFile;
+        return signalPassFailure();
+      }
+      patternsModule = parsedPatternsModule.release();
+    } else {
+      patternsModule = module.lookupSymbol<ModuleOp>(
+          StringAttr::get(module->getContext(), "patterns"));
+      irModule = module.lookupSymbol<ModuleOp>(
+          StringAttr::get(module->getContext(), "ir"));
+
+      if (!patternsModule || !irModule)
+        return;
+    }
 
     convertEmatchOpsToApplyRewrites(patternsModule);
 
