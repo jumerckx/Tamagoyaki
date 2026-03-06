@@ -344,12 +344,12 @@ public:
     TAMAGOYAKI_SCOPED_TIMER("HerbieOptimizePass");
     mlir::ModuleOp module = getOperation();
 
-    ModuleOp patternModule = module.lookupSymbol<ModuleOp>(
+    ModuleOp patternsModule = module.lookupSymbol<ModuleOp>(
         StringAttr::get(module->getContext(), "patterns"));
     ModuleOp irModule = module.lookupSymbol<ModuleOp>(
         StringAttr::get(module->getContext(), "ir"));
 
-    if (!patternModule || !irModule)
+    if (!patternsModule || !irModule)
       return;
 
     IntervalSearchConfig intervalConfig;
@@ -412,10 +412,10 @@ public:
     }
 
     // Step 2: Run equality saturation
-    mlir::ematch::convertEmatchOpsToApplyRewrites(patternModule);
+    mlir::ematch::convertEmatchOpsToApplyRewrites(patternsModule);
 
-    patternModule.getOperation()->remove();
-    PDLPatternModule pdlPattern(patternModule);
+    patternsModule.getOperation()->remove();
+    PDLPatternModule pdlPattern(patternsModule);
 
     bool saturationSuccess = mlir::ematch::runSaturation(
         irModule->getContext(), std::move(pdlPattern), irModule,
