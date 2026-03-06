@@ -33,6 +33,10 @@ ExternalProject_Add(gmp_external
     BUILD_COMMAND make -j${CMAKE_BUILD_PARALLEL_LEVEL}
     INSTALL_COMMAND make install
     BUILD_BYPRODUCTS ${DEPS_INSTALL_DIR}/lib/libgmp.a
+    LOG_DOWNLOAD TRUE
+    LOG_CONFIGURE TRUE
+    LOG_BUILD TRUE
+    LOG_INSTALL TRUE
 )
 
 # Build MPFR from source (depends on GMP)
@@ -51,6 +55,10 @@ ExternalProject_Add(mpfr_external
     BUILD_COMMAND make -j${CMAKE_BUILD_PARALLEL_LEVEL}
     INSTALL_COMMAND make install
     BUILD_BYPRODUCTS ${DEPS_INSTALL_DIR}/lib/libmpfr.a
+    LOG_DOWNLOAD TRUE
+    LOG_CONFIGURE TRUE
+    LOG_BUILD TRUE
+    LOG_INSTALL TRUE
     DEPENDS gmp_external
 )
 
