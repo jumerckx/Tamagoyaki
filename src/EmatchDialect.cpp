@@ -25,15 +25,12 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
-#include "mlir/Pass/Pass.h"
 #include "mlir/Rewrite/FrozenRewritePatternSet.h"
 #include "mlir/Rewrite/PatternApplicator.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "vendor/mlir/Bytecode.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <cassert>
@@ -289,8 +286,6 @@ struct EmatchSaturatePass
   }
 
   void runOnOperation() final {
-    auto startTime = std::chrono::high_resolution_clock::now();
-
     ModuleOp module = getOperation();
 
     ModuleOp patternModule = module.lookupSymbol<ModuleOp>(
@@ -308,12 +303,6 @@ struct EmatchSaturatePass
 
     runSaturation(module.getContext(), std::move(pdlPattern), irModule,
                   maxIters);
-
-    auto endTime = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
-        endTime - startTime);
-    LLVM_DEBUG(llvm::dbgs()
-               << "EmatchSaturatePass took " << duration.count() << " µs\n");
   }
 };
 

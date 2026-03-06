@@ -412,32 +412,30 @@ public:
     }
 
     // Step 2: Run equality saturation
-    {
-      TAMAGOYAKI_SCOPED_TIMER("EqualitySaturation");
-      mlir::ematch::convertEmatchOpsToApplyRewrites(patternModule);
+    mlir::ematch::convertEmatchOpsToApplyRewrites(patternModule);
 
-      patternModule.getOperation()->remove();
-      PDLPatternModule pdlPattern(patternModule);
+    patternModule.getOperation()->remove();
+    PDLPatternModule pdlPattern(patternModule);
 
-      bool saturationSuccess = mlir::ematch::runSaturation(
-          irModule->getContext(), std::move(pdlPattern), irModule,
-          maxSaturationIters);
+    bool saturationSuccess = mlir::ematch::runSaturation(
+        irModule->getContext(), std::move(pdlPattern), irModule,
+        maxSaturationIters);
 
-      if (!saturationSuccess) {
-        LLVM_DEBUG(llvm::dbgs() << "Warning: Saturation returned false\n");
-      }
-
-      // Lower herbie sound ops introduced during saturation
-      {
-        TAMAGOYAKI_SCOPED_TIMER("LowerHerbieSoundOpsPatterns");
-        RewritePatternSet patterns(irModule.getContext());
-        populateLowerHerbieSoundOpsPatterns(patterns);
-        GreedyRewriteConfig config;
-        config.enableConstantCSE(false);
-        config.enableFolding(false);
-        (void)applyPatternsGreedily(irModule, std::move(patterns), config);
-      }
+    if (!saturationSuccess) {
+      LLVM_DEBUG(llvm::dbgs() << "Warning: Saturation returned false\n");
     }
+
+    // Lower herbie sound ops introduced during saturation
+    {
+      TAMAGOYAKI_SCOPED_TIMER("LowerHerbieSoundOpsPatterns");
+      RewritePatternSet patterns(irModule.getContext());
+      populateLowerHerbieSoundOpsPatterns(patterns);
+      GreedyRewriteConfig config;
+      config.enableConstantCSE(false);
+      config.enableFolding(false);
+      (void)applyPatternsGreedily(irModule, std::move(patterns), config);
+    }
+
     // Step 3: Initial greedy selection
     irModule.walk(
         [&](GraphOp graphOp) { selectGreedy(graphOp, 1, "herbie.cost"); });
