@@ -1,3 +1,4 @@
+#include "EmatchDialect.h"
 #include "EmatchUtils.h"
 #include "EquivalenceDialect.h"
 #include "EquivalenceUtils.h"
@@ -5,6 +6,7 @@
 #include "HerbieMLIROpInterfaces.h"
 #include "IntervalSearch.h"
 #include "LocalError.h"
+#include "TamagoyakiTiming.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
@@ -18,6 +20,7 @@
 #include "mlir/IR/OwningOpRef.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
+#include "mlir/Parser/Parser.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/ArrayRef.h"
@@ -333,22 +336,33 @@ public:
   using impl::HerbieOptimizePassBase<
       HerbieOptimizePass>::HerbieOptimizePassBase;
 
-  void getDependentDialects(mlir::DialectRegistry &registry) const override {
-    registry.insert<mlir::equivalence::EquivalenceDialect>();
-    registry.insert<mlir::func::FuncDialect>();
-    registry.insert<mlir::pdl_interp::PDLInterpDialect>();
-  }
-
   void runOnOperation() final {
+    TAMAGOYAKI_SCOPED_TIMER("HerbieOptimizePass");
     mlir::ModuleOp module = getOperation();
 
-    ModuleOp patternModule = module.lookupSymbol<ModuleOp>(
-        StringAttr::get(module->getContext(), "patterns"));
-    ModuleOp irModule = module.lookupSymbol<ModuleOp>(
-        StringAttr::get(module->getContext(), "ir"));
+    ModuleOp patternsModule;
+    ModuleOp irModule;
+    OwningOpRef<ModuleOp> parsedPatternsModule;
 
-    if (!patternModule || !irModule)
-      return;
+    if (!patternsFile.empty()) {
+      irModule = module;
+      parsedPatternsModule =
+          parseSourceFile<ModuleOp>(patternsFile, module.getContext());
+      if (!parsedPatternsModule) {
+        emitError(module.getLoc())
+            << "failed to parse patterns file: " << patternsFile;
+        return signalPassFailure();
+      }
+      patternsModule = parsedPatternsModule.release();
+    } else {
+      patternsModule = module.lookupSymbol<ModuleOp>(
+          StringAttr::get(module->getContext(), "patterns"));
+      irModule = module.lookupSymbol<ModuleOp>(
+          StringAttr::get(module->getContext(), "ir"));
+
+      if (!patternsModule || !irModule)
+        return;
+    }
 
     IntervalSearchConfig intervalConfig;
     intervalConfig.maxSearchDepth = maxSearchDepth;
@@ -371,46 +385,49 @@ public:
     SmallVector<SmallVector<Operation *>> allSortedOps;
 
     // Step 1: Run interval search and insert equivalence graphs
-    irModule.walk([&](mlir::func::FuncOp funcOp) {
-      auto &intervalResult = intervalResults.emplace_back(
-          runIntervalSearchOnFunction(funcOp, intervalConfig));
+    {
+      irModule.walk([&](mlir::func::FuncOp funcOp) {
+        auto &intervalResult = intervalResults.emplace_back(
+            runIntervalSearchOnFunction(funcOp, intervalConfig));
 
-      if (!intervalResult.success) {
-        funcOp.emitWarning() << "Interval search failed, continuing anyway";
-      } else {
-        LLVM_DEBUG({
-          llvm::dbgs() << "Interval search for " << funcOp.getName() << ": "
-                       << intervalResult.searchResult.sampleableRegions.size()
-                       << " sampleable regions, valid fraction: "
-                       << intervalResult.searchResult.statistics.validFraction
-                       << "\n";
-        });
-      }
+        if (!intervalResult.success) {
+          funcOp.emitWarning() << "Interval search failed, continuing anyway";
+        } else {
+          LLVM_DEBUG({
+            llvm::dbgs() << "Interval search for " << funcOp.getName() << ": "
+                         << intervalResult.searchResult.sampleableRegions.size()
+                         << " sampleable regions, valid fraction: "
+                         << intervalResult.searchResult.statistics.validFraction
+                         << "\n";
+          });
+        }
 
-      if (mlir::failed(mlir::equivalence::insertGraphInFunction(
-              funcOp, /*insertSingleElementEqs=*/false))) {
-        funcOp.emitError() << "Failed to insert equivalence graph";
-        return signalPassFailure();
-      }
+        if (mlir::failed(mlir::equivalence::insertGraphInFunction(
+                funcOp, /*insertSingleElementEqs=*/false))) {
+          funcOp.emitError() << "Failed to insert equivalence graph";
+          return signalPassFailure();
+        }
 
-      // Map function arguments to rival variables and register as roots
-      for (auto [i, arg] : llvm::enumerate(funcOp.getArguments())) {
-        std::string name = "arg" + std::to_string(i);
-        varNameStorage.push_back(name);
-        uint32_t varExpr = rival_expr_var(arena, varNameStorage.back().c_str());
-        valueToExpr[arg] = varExpr;
+        // Map function arguments to rival variables and register as roots
+        for (auto [i, arg] : llvm::enumerate(funcOp.getArguments())) {
+          std::string name = "arg" + std::to_string(i);
+          varNameStorage.push_back(name);
+          uint32_t varExpr =
+              rival_expr_var(arena, varNameStorage.back().c_str());
+          valueToExpr[arg] = varExpr;
 
-        size_t idx = roots.size();
-        roots.push_back(varExpr);
-        valueToRootIdx[arg] = idx;
-      }
-    });
+          size_t idx = roots.size();
+          roots.push_back(varExpr);
+          valueToRootIdx[arg] = idx;
+        }
+      });
+    }
 
     // Step 2: Run equality saturation
-    mlir::ematch::convertEmatchOpsToApplyRewrites(patternModule);
+    mlir::ematch::convertEmatchOpsToApplyRewrites(patternsModule);
 
-    patternModule.getOperation()->remove();
-    PDLPatternModule pdlPattern(patternModule);
+    patternsModule.getOperation()->remove();
+    PDLPatternModule pdlPattern(patternsModule);
 
     bool saturationSuccess = mlir::ematch::runSaturation(
         irModule->getContext(), std::move(pdlPattern), irModule,
@@ -422,6 +439,7 @@ public:
 
     // Lower herbie sound ops introduced during saturation
     {
+      TAMAGOYAKI_SCOPED_TIMER("LowerHerbieSoundOpsPatterns");
       RewritePatternSet patterns(irModule.getContext());
       populateLowerHerbieSoundOpsPatterns(patterns);
       GreedyRewriteConfig config;
@@ -526,7 +544,7 @@ public:
       allSortedOps.push_back(std::move(allOps));
     });
 
-    // Step 5: Build the rival machine from all collected roots and variables
+    // Step 5: Build variable name pointers for rival
     std::vector<const char *> varNamePtrs;
     varNamePtrs.reserve(varNameStorage.size());
     for (auto &name : varNameStorage) {
@@ -534,32 +552,27 @@ public:
     }
 
     LLVM_DEBUG(llvm::dbgs()
-               << "Building rival machine (" << roots.size() << " roots, "
-               << varNamePtrs.size() << " variables)\n");
+               << "Preparing per-root evaluation (" << roots.size()
+               << " roots, " << varNamePtrs.size() << " variables)\n");
 
     RivalDiscretization *disc = rival_disc_f64(analysisPrecision);
-    RivalMachine *machine = rival_machine_new(
-        arena, roots.data(), roots.size(), varNamePtrs.data(),
-        varNamePtrs.size(), disc, maxRivalPrecision, maxRivalIterations);
 
-    if (!machine) {
-      llvm::errs() << "Failed to create rival machine\n";
-      rival_disc_free(disc);
-      rival_expr_arena_free(arena);
-      return signalPassFailure();
-    }
-
-    // Step 6: Sample points and evaluate
+    // Step 6: Sample points and evaluate per-root
     if (intervalResults.empty() || !intervalResults[0].success) {
       LLVM_DEBUG(llvm::dbgs() << "No valid interval result; skipping sampling "
                                  "and error analysis\n");
     } else {
       auto &intervalResult = intervalResults[0];
 
-      SamplingResult samplingResult = sampleAndEvaluate(
-          machine, intervalResult.searchResult, intervalResult.floatBitWidths,
-          roots.size(), /*numSamples=*/256, /*evalMaxIterations=*/100,
-          /*evalMaxPrecision=*/2000, analysisPrecision);
+      SamplingResult samplingResult;
+      {
+        TAMAGOYAKI_SCOPED_TIMER("SampleAndEvaluate");
+        samplingResult = sampleAndEvaluate(
+            arena, roots, varNamePtrs, disc, intervalResult.searchResult,
+            intervalResult.floatBitWidths, /*numSamples=*/256,
+            /*evalMaxIterations=*/100,
+            /*evalMaxPrecision=*/2000, analysisPrecision);
+      }
 
       LLVM_DEBUG(llvm::dbgs()
                  << "Sampled " << samplingResult.sampled << " / 256 points"
@@ -568,27 +581,30 @@ public:
       // Step 7: Compute local error for each operation
       DenseMap<Operation *, double> opSumDistances;
 
-      for (auto &sortedOps : allSortedOps) {
-        auto localErrors =
-            computeLocalErrors(sortedOps, valueToRootIdx, samplingResult);
+      {
+        TAMAGOYAKI_SCOPED_TIMER("ComputeLocalErrors");
+        for (auto &sortedOps : allSortedOps) {
+          auto localErrors =
+              computeLocalErrors(sortedOps, valueToRootIdx, samplingResult);
 
-        for (auto &errInfo : localErrors) {
-          if (errInfo.count == 0)
-            continue;
+          for (auto &errInfo : localErrors) {
+            if (errInfo.count == 0)
+              continue;
 
-          opSumDistances[errInfo.op] = errInfo.sumUlp;
+            opSumDistances[errInfo.op] = errInfo.sumUlp;
 
-          LLVM_DEBUG({
-            llvm::dbgs() << "  ";
-            errInfo.op->print(llvm::dbgs(),
-                              mlir::OpPrintingFlags().skipRegions());
-            llvm::dbgs() << "\n    max_ulp=" << errInfo.maxUlp
-                         << " mean_ulp=" << errInfo.meanUlp()
-                         << " samples=" << errInfo.count;
-            if (errInfo.foldFailures > 0)
-              llvm::dbgs() << " fold_failures=" << errInfo.foldFailures;
-            llvm::dbgs() << "\n";
-          });
+            LLVM_DEBUG({
+              llvm::dbgs() << "  ";
+              errInfo.op->print(llvm::dbgs(),
+                                mlir::OpPrintingFlags().skipRegions());
+              llvm::dbgs() << "\n    max_ulp=" << errInfo.maxUlp
+                           << " mean_ulp=" << errInfo.meanUlp()
+                           << " samples=" << errInfo.count;
+              if (errInfo.foldFailures > 0)
+                llvm::dbgs() << " fold_failures=" << errInfo.foldFailures;
+              llvm::dbgs() << "\n";
+            });
+          }
         }
       }
 
@@ -621,7 +637,6 @@ public:
       });
     }
 
-    rival_machine_free(machine);
     rival_disc_free(disc);
     rival_expr_arena_free(arena);
   }

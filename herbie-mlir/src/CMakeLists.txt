@@ -41,6 +41,7 @@ add_mlir_library(herbieMLIR
   MLIRArithDialect
   MLIRAnalysis
   Rival
+  TamagoyakiTiming
 )
 
 target_include_directories(herbieMLIR PUBLIC ${HERBIE_MLIR_INCLUDE_DIR})

@@ -8,6 +8,7 @@
 
 #include "EmatchDialect.h"
 #include "EmatchUtils.h"
+#include "TamagoyakiTiming.h"
 
 #include "EquivalenceDialect.h"
 #include "Utils/ClassOpUnionFind.h"
@@ -16,6 +17,7 @@
 #include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/MLIRContext.h"
@@ -24,15 +26,13 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
-#include "mlir/Pass/Pass.h"
+#include "mlir/Parser/Parser.h"
 #include "mlir/Rewrite/FrozenRewritePatternSet.h"
 #include "mlir/Rewrite/PatternApplicator.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "vendor/mlir/Bytecode.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/Support/Casting.h"
-#include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <cassert>
@@ -121,6 +121,7 @@ static void populateEmatchToApplyRewritePatterns(RewritePatternSet &patterns) {
 }
 
 void convertEmatchOpsToApplyRewrites(ModuleOp module) {
+  TAMAGOYAKI_SCOPED_TIMER("convertEmatchOpsToApplyRewrites");
   RewritePatternSet patterns(module.getContext());
   populateEmatchToApplyRewritePatterns(patterns);
   GreedyRewriteConfig config;
@@ -130,10 +131,11 @@ void convertEmatchOpsToApplyRewrites(ModuleOp module) {
 }
 
 /// Run equality saturation on the given IR module using the provided pattern
-/// module. The patternModule is consumed (removed from parent).
+/// module. The patternsModule is consumed (removed from parent).
 /// Returns true on success.
 bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
                    ModuleOp irModule, int maxIters) {
+  TAMAGOYAKI_SCOPED_TIMER("runSaturation");
   RewritePatternSet patternList(ctx);
 
   ClassOpUnionFind uf{};
@@ -286,31 +288,40 @@ struct EmatchSaturatePass
   }
 
   void runOnOperation() final {
-    auto startTime = std::chrono::high_resolution_clock::now();
-
     ModuleOp module = getOperation();
 
-    ModuleOp patternModule = module.lookupSymbol<ModuleOp>(
-        StringAttr::get(module->getContext(), "patterns"));
-    ModuleOp irModule = module.lookupSymbol<ModuleOp>(
-        StringAttr::get(module->getContext(), "ir"));
+    ModuleOp patternsModule;
+    ModuleOp irModule;
+    OwningOpRef<ModuleOp> parsedPatternsModule;
 
-    if (!patternModule || !irModule)
-      return;
+    if (!patternsFile.empty()) {
+      // Parse patterns from external file; the input module is the IR module.
+      irModule = module;
+      parsedPatternsModule =
+          parseSourceFile<ModuleOp>(patternsFile, module.getContext());
+      if (!parsedPatternsModule) {
+        emitError(module.getLoc())
+            << "failed to parse patterns file: " << patternsFile;
+        return signalPassFailure();
+      }
+      patternsModule = parsedPatternsModule.release();
+    } else {
+      patternsModule = module.lookupSymbol<ModuleOp>(
+          StringAttr::get(module->getContext(), "patterns"));
+      irModule = module.lookupSymbol<ModuleOp>(
+          StringAttr::get(module->getContext(), "ir"));
 
-    convertEmatchOpsToApplyRewrites(patternModule);
+      if (!patternsModule || !irModule)
+        return;
+    }
 
-    patternModule.getOperation()->remove();
-    PDLPatternModule pdlPattern(patternModule);
+    convertEmatchOpsToApplyRewrites(patternsModule);
+
+    patternsModule.getOperation()->remove();
+    PDLPatternModule pdlPattern(patternsModule);
 
     runSaturation(module.getContext(), std::move(pdlPattern), irModule,
                   maxIters);
-
-    auto endTime = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
-        endTime - startTime);
-    LLVM_DEBUG(llvm::dbgs()
-               << "EmatchSaturatePass took " << duration.count() << " µs\n");
   }
 };
 
@@ -327,15 +338,15 @@ struct EmatchSaturateBenchmarkPass
   void runOnOperation() final {
     ModuleOp module = getOperation();
 
-    ModuleOp patternModule = module.lookupSymbol<ModuleOp>(
+    ModuleOp patternsModule = module.lookupSymbol<ModuleOp>(
         StringAttr::get(module->getContext(), "patterns"));
     ModuleOp irModule = module.lookupSymbol<ModuleOp>(
         StringAttr::get(module->getContext(), "ir"));
 
-    if (!patternModule || !irModule)
+    if (!patternsModule || !irModule)
       return;
 
-    convertEmatchOpsToApplyRewrites(patternModule);
+    convertEmatchOpsToApplyRewrites(patternsModule);
 
     auto totalStartTime = std::chrono::high_resolution_clock::now();
 
@@ -346,7 +357,7 @@ struct EmatchSaturateBenchmarkPass
       auto startTime = std::chrono::high_resolution_clock::now();
 
       OwningOpRef<ModuleOp> irClone = irModule.clone();
-      OwningOpRef<ModuleOp> patternClone = patternModule.clone();
+      OwningOpRef<ModuleOp> patternClone = patternsModule.clone();
 
       patternClone.get().getOperation()->remove();
       PDLPatternModule pdlPattern(patternClone.release());
@@ -382,16 +393,16 @@ struct ApplyPDLInterpPass
   void runOnOperation() final {
     ModuleOp module = getOperation();
 
-    ModuleOp patternModule = module.lookupSymbol<ModuleOp>(
+    ModuleOp patternsModule = module.lookupSymbol<ModuleOp>(
         StringAttr::get(module->getContext(), "patterns"));
     ModuleOp irModule = module.lookupSymbol<ModuleOp>(
         StringAttr::get(module->getContext(), "ir"));
 
-    if (!patternModule || !irModule)
+    if (!patternsModule || !irModule)
       return;
 
-    patternModule.getOperation()->remove();
-    PDLPatternModule pdlPattern(patternModule);
+    patternsModule.getOperation()->remove();
+    PDLPatternModule pdlPattern(patternsModule);
 
     RewritePatternSet patternList(module->getContext());
     patternList.add(std::move(pdlPattern));
@@ -415,13 +426,13 @@ struct ConvertEmatchToPDLInterpPass
   void runOnOperation() final {
     ModuleOp module = getOperation();
 
-    ModuleOp patternModule = module.lookupSymbol<ModuleOp>(
+    ModuleOp patternsModule = module.lookupSymbol<ModuleOp>(
         StringAttr::get(module->getContext(), "patterns"));
 
-    if (!patternModule)
+    if (!patternsModule)
       return;
 
-    convertEmatchOpsToApplyRewrites(patternModule);
+    convertEmatchOpsToApplyRewrites(patternsModule);
   }
 };
 } // namespace

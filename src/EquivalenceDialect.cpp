@@ -10,6 +10,7 @@
 #include "EquivalenceDialect.h"
 #include "EquivalenceUtils.h"
 
+#include "TamagoyakiTiming.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
@@ -311,6 +312,7 @@ void selectGreedy(GraphOp graphOp, int64_t defaultCost,
   // ClassOps (their results are used by other non-class ops, YieldOp, etc.).
   // Candidate ops (consumed by a ClassOp) do not require their total cost to be
   // tracked.
+  TAMAGOYAKI_SCOPED_TIMER("selectGreedy");
 
   SmallVector<ClassOp> classOps;
   SmallVector<Operation *> otherTrackedOps;
@@ -398,6 +400,7 @@ void selectGreedy(GraphOp graphOp, int64_t defaultCost,
 
 LogicalResult insertGraphInFunction(func::FuncOp funcOp,
                                     bool insertSingleElementEqs) {
+  TAMAGOYAKI_SCOPED_TIMER("insertGraphInFunction");
   Region &funcBody = funcOp.getFunctionBody();
 
   if (!funcBody.hasOneBlock()) {
@@ -451,6 +454,7 @@ LogicalResult insertGraphInFunction(func::FuncOp funcOp,
 }
 
 void clearSelection(GraphOp graphOp, llvm::StringRef costAttributeName) {
+  TAMAGOYAKI_SCOPED_TIMER("clearSelection");
   graphOp.walk([&](Operation *op) {
     if (auto classOp = dyn_cast<ClassOp>(op)) {
       classOp->removeAttr("min_cost_index");
@@ -461,6 +465,7 @@ void clearSelection(GraphOp graphOp, llvm::StringRef costAttributeName) {
 }
 
 void extractFromGraph(GraphOp graphOp) {
+  TAMAGOYAKI_SCOPED_TIMER("extractFromGraph");
   Block &block = graphOp.getBody().front();
 
   SmallVector<ClassOp> classOps;
@@ -506,6 +511,7 @@ void extractFromGraph(GraphOp graphOp) {
 }
 
 void inlineGraphOp(GraphOp graphOp) {
+  TAMAGOYAKI_SCOPED_TIMER("inlineGraphOp");
   Block &graphBlock = graphOp.getBody().front();
 
   auto yieldOp = cast<YieldOp>(graphBlock.getTerminator());
@@ -537,6 +543,7 @@ void inlineGraphOp(GraphOp graphOp) {
 }
 
 SmallVector<Operation *> computeSelectedTopoSort(GraphOp graphOp) {
+  TAMAGOYAKI_SCOPED_TIMER("computeSelectedTopoSort");
   Block &block = graphOp.getBody().front();
 
   DenseSet<Operation *> excludedOps;

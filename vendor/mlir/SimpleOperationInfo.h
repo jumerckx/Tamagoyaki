@@ -1,5 +1,6 @@
 // This file is adapted from mlir/CSE.h (part of the LLVM Project).
 // It contains the SimpleOperationInfo struct used for hashing operations.
+// Importantly, we also add the IgnoreCommutativity flag
 
 #ifndef MLIR_SIMPLE_OPERATION_INFO_H
 #define MLIR_SIMPLE_OPERATION_INFO_H
@@ -16,7 +17,8 @@ struct SimpleOperationInfo : public llvm::DenseMapInfo<Operation *> {
         const_cast<Operation *>(opC),
         /*hashOperands=*/OperationEquivalence::directHashValue,
         /*hashResults=*/OperationEquivalence::ignoreHashValue,
-        OperationEquivalence::IgnoreLocations);
+        OperationEquivalence::IgnoreLocations |
+            OperationEquivalence::IgnoreCommutativity);
   }
   static bool isEqual(const Operation *lhsC, const Operation *rhsC) {
     auto *lhs = const_cast<Operation *>(lhsC);
@@ -28,7 +30,8 @@ struct SimpleOperationInfo : public llvm::DenseMapInfo<Operation *> {
       return false;
     return OperationEquivalence::isEquivalentTo(
         const_cast<Operation *>(lhsC), const_cast<Operation *>(rhsC),
-        OperationEquivalence::IgnoreLocations);
+        OperationEquivalence::IgnoreLocations |
+            OperationEquivalence::IgnoreCommutativity);
   }
 };
 

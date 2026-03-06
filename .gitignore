@@ -1,3 +1,5 @@
+/*.mlir
+
 *.trace
 tablegen_compile_commands.yml
 .zed

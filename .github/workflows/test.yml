@@ -90,10 +90,14 @@ jobs:
           -DCMAKE_PREFIX_PATH=$(uv run python -m mlir_wheel --root-dir)
           -DLLVM_EXTERNAL_LIT=$(uv run which lit)
           -DPython3_EXECUTABLE=$(uv run which python)
-          -DENABLE_HERBIE=OFF
+          -DENABLE_HERBIE=ON
           -B build
           -S $PWD
 
-      - name: Build and test with CMake/lit
+      - name: Build and test tamagoyaki
         run: |
           uv run cmake --build build --target check-tamagoyaki
+
+      - name: Build and test herbie-mlir
+        run: |
+          uv run cmake --build build --target check-herbie-mlir

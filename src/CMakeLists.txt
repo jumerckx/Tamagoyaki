@@ -30,6 +30,20 @@ add_mlir_dialect_library(MLIREquivalence
 )
 
 # ============================================================================
+# Tamagoyaki Timing Library
+# ============================================================================
+add_mlir_library(TamagoyakiTiming
+  TamagoyakiTiming.cpp
+  PARTIAL_SOURCES_INTENDED
+
+  ADDITIONAL_HEADER_DIRS
+  ${PROJECT_SOURCE_DIR}/include
+
+  LINK_LIBS PUBLIC
+  MLIRIR
+)
+
+# ============================================================================
 # Ematch Dialect Library
 # ============================================================================
 set_source_object_depends(
@@ -54,6 +68,7 @@ add_mlir_dialect_library(MLIREmatch
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRRegisterAllDialects
+  TamagoyakiTiming
 )
 
 # ============================================================================
@@ -79,6 +94,7 @@ set(TAMAGOYAKI_OPT_LIBS
   MLIROptLib
   MLIREquivalence
   MLIREmatch
+  TamagoyakiTiming
 )
 
 set_source_object_depends(

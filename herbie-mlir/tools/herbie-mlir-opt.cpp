@@ -8,6 +8,7 @@
 
 #include "EmatchDialect.h"
 #include "EquivalenceDialect.h"
+#include "TamagoyakiTiming.h"
 
 #include "HerbieMLIR.h"
 #include "RivalExternalModels.h"
@@ -21,6 +22,8 @@ namespace herbie {
 } // namespace herbie
 
 int main(int argc, char **argv) {
+  tamagoyaki::registerTimingCLOptions();
+
   mlir::registerAllPasses();
 
   mlir::DialectRegistry registry;
@@ -35,6 +38,9 @@ int main(int argc, char **argv) {
   // Register herbie-mlir passes
   herbie::registerHerbieMLIRPasses();
 
-  return mlir::asMainReturnCode(
+  int result = mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "MLIR optimizer for Herbie", registry));
+
+  tamagoyaki::printTimingReport();
+  return result;
 }

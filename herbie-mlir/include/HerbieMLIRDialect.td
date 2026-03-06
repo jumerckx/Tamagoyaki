@@ -250,7 +250,9 @@ def HerbieOptimizePass : Pass<"herbie-optimize", "::mlir::ModuleOp"> {
     "::mlir::func::FuncDialect",
     "::mlir::arith::ArithDialect",
     "::mlir::equivalence::EquivalenceDialect",
-    "::mlir::pdl_interp::PDLInterpDialect"
+    "::mlir::ematch::EmatchDialect",
+    "::mlir::pdl_interp::PDLInterpDialect",
+    "herbie::HerbieMLIRDialect",
   ];
   let options = [
     // Interval search options
@@ -266,7 +268,10 @@ def HerbieOptimizePass : Pass<"herbie-optimize", "::mlir::ModuleOp"> {
            "Max Rival iterations per interval analysis">,
     // Saturation options
     Option<"maxSaturationIters", "max-saturation-iters", "int", "4",
-           "Maximum number of equality saturation iterations">
+           "Maximum number of equality saturation iterations">,
+    Option<"patternsFile", "patterns-file", "std::string", /*default=*/"\"\"",
+           "Path to an MLIR file containing the patterns module. "
+           "When set, the input module is treated as the IR module directly.">
   ];
 }
 

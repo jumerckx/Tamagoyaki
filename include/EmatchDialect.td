@@ -169,7 +169,10 @@ def EmatchSaturatePass : Pass<"ematch-saturate", "::mlir::ModuleOp"> {
     let dependentDialects = ["::mlir::ematch::EmatchDialect"];
     let options = [
         Option<"maxIters", "max-iters", "int", "4",
-               "Maximum number of iterations before equality saturation times out.">
+               "Maximum number of iterations before equality saturation times out.">,
+        Option<"patternsFile", "patterns-file", "std::string", /*default=*/"\"\"",
+               "Path to an MLIR file containing the patterns module. "
+               "When set, the input module is treated as the IR module directly.">
     ];
 }
 
