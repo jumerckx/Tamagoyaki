@@ -48,3 +48,11 @@ option(BUILD_HERBIE_MLIR "Build herbie-mlir subproject" ON)
 if(BUILD_HERBIE_MLIR)
   add_subdirectory(herbie-mlir)
 endif()
+
+# check-all: run all test suites that are enabled
+set(CHECK_ALL_DEPENDS check-tamagoyaki)
+if(BUILD_HERBIE_MLIR)
+  list(APPEND CHECK_ALL_DEPENDS check-herbie-mlir)
+endif()
+add_custom_target(check-all DEPENDS ${CHECK_ALL_DEPENDS})
+set_target_properties(check-all PROPERTIES FOLDER "Tests")
