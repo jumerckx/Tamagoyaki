@@ -94,6 +94,10 @@ jobs:
           -B build
           -S $PWD
 
-      - name: Build and test with CMake/lit
+      - name: Build and test tamagoyaki
         run: |
-          uv run cmake --build build --target check-all
+          uv run cmake --build build --target check-tamagoyaki
+
+      - name: Build and test herbie-mlir
+        run: |
+          uv run cmake --build build --target check-herbie-mlir
