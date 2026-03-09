@@ -1,7 +1,3 @@
-# /// script
-# requires-python = ">=3.10"
-# dependencies = ["xdsl"]
-# ///
 """Convert Herbie rewrite rules (S-expression .rkt files) to PDL MLIR dialect."""
 
 import argparse
@@ -397,5 +393,9 @@ def main(args: list[str] | None = None) -> int:
         raise
 
 
-if __name__ == "__main__":
+def entry() -> None:
     sys.exit(main())
+
+
+if __name__ == "__main__":
+    entry()

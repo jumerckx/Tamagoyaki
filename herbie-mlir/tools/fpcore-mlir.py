@@ -1,8 +1,3 @@
-# /// script
-# requires-python = ">=3.12"
-# dependencies = ["xdsl"]
-# ///
-
 import argparse
 import re
 import sys
@@ -523,5 +518,9 @@ def main(args: list[str] | None = None) -> int:
         return 1
 
 
-if __name__ == "__main__":
+def entry() -> None:
     sys.exit(main())
+
+
+if __name__ == "__main__":
+    entry()

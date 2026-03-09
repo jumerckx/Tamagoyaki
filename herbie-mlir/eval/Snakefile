@@ -24,7 +24,7 @@ rule convert_rules_to_pdl:
     output:
         f"{RULES_DIR}/rules_pdl.mlir"
     shell:
-        "uv run ../tools/herbie-pdl.py ../rules.rkt > {output}"
+        "uv run herbie-pdl ../rules.rkt > {output}"
 
 rule convert_pdl_to_pdl_interp:
     input:
@@ -42,7 +42,7 @@ rule fpcore_to_mlir:
     output:
         f"{MLIR_DIR}/{{benchmark}}.mlir"
     shell:
-        "uv run ../tools/fpcore-mlir.py {input} > {output}"
+        "uv run fpcore-mlir {input} > {output}"
 
 rule optimize:
     input:

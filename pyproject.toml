@@ -25,7 +25,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel.force-include]
-"herbie-mlir/tools" = "herbie_mlir/tools"
+"herbie-mlir/__init__.py" = "herbie_mlir/__init__.py"
+"herbie-mlir/tools/__init__.py" = "herbie_mlir/tools/__init__.py"
+"herbie-mlir/tools/fpcore-mlir.py" = "herbie_mlir/tools/fpcore_mlir.py"
+"herbie-mlir/tools/herbie-pdl.py" = "herbie_mlir/tools/herbie_pdl.py"
+
+[project.scripts]
+fpcore-mlir = "herbie_mlir.tools.fpcore_mlir:entry"
+herbie-pdl = "herbie_mlir.tools.herbie_pdl:entry"
 
 [dependency-groups]
 dev = [
