@@ -249,6 +249,7 @@ def HerbieOptimizePass : Pass<"herbie-optimize", "::mlir::ModuleOp"> {
   let dependentDialects = [
     "::mlir::func::FuncDialect",
     "::mlir::arith::ArithDialect",
+    "::mlir::math::MathDialect",
     "::mlir::equivalence::EquivalenceDialect",
     "::mlir::ematch::EmatchDialect",
     "::mlir::pdl_interp::PDLInterpDialect",

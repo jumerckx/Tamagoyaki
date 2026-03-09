@@ -1,0 +1,60 @@
+import os
+import glob
+
+herbie_mlir_opt_path = "../../build/bin/herbie-mlir-opt"
+
+# Get all benchmark names from fpcore files
+benchmark_names = [
+    os.path.splitext(os.path.basename(f))[0]
+    for f in glob.glob("fpcore/*.fpcore")
+]
+
+OUT_DIR = "out"
+RULES_DIR = f"{OUT_DIR}/rules"
+MLIR_DIR = f"{OUT_DIR}/mlir"
+OPTIMIZED_DIR = f"{OUT_DIR}/optimized"
+
+rule all:
+    input:
+        expand(f"{OPTIMIZED_DIR}/{{benchmark}}.mlir", benchmark=benchmark_names),
+
+# ============ Rules Processing Pipeline ============
+
+rule convert_rules_to_pdl:
+    output:
+        f"{RULES_DIR}/rules_pdl.mlir"
+    shell:
+        "uv run ../tools/herbie-pdl.py ../rules.rkt > {output}"
+
+rule convert_pdl_to_pdl_interp:
+    input:
+        f"{RULES_DIR}/rules_pdl.mlir"
+    output:
+        f"{RULES_DIR}/rules_pdl_interp.mlir"
+    shell:
+        "uv run xdsl-opt -p 'convert-pdl-to-pdl-interp{{optimize_for_eqsat=true}}' {input} -o {output}"
+
+# ============ Benchmark Processing Pipeline ============
+
+rule fpcore_to_mlir:
+    input:
+        "fpcore/{benchmark}.fpcore"
+    output:
+        f"{MLIR_DIR}/{{benchmark}}.mlir"
+    shell:
+        "uv run ../tools/fpcore-mlir.py {input} > {output}"
+
+rule optimize:
+    input:
+        mlir = f"{MLIR_DIR}/{{benchmark}}.mlir",
+        pdl_interp = f"{RULES_DIR}/rules_pdl_interp.mlir"
+    output:
+        f"{OPTIMIZED_DIR}/{{benchmark}}.mlir"
+    shell:
+        '{herbie_mlir_opt_path} -herbie-optimize="max-saturation-iters=4 patterns-file={input.pdl_interp}" --remove-dead-values {input.mlir} > {output}'
+
+# ============ Utility Rules ============
+
+rule clean:
+    shell:
+        f"rm -rf {OUT_DIR}"

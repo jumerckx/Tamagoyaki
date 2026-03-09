@@ -1,0 +1,7 @@
+(FPCore
+ (re im)
+ :name
+ "Complex sine and cosine"
+ :cite
+ (herbie-2015)
+ (* (* 1/2 (sin re)) (- (exp (- im)) (exp im))))

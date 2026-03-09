@@ -330,6 +330,31 @@ static void populateLowerHerbieSoundOpsPatterns(RewritePatternSet &patterns) {
           patterns.getContext());
 }
 
+// ===----------------------------------------------------------------------===
+// // Herbie Constant Ops lowering patterns (shared by
+// LowerHerbieConstantOpsPass
+// // and HerbieOptimizePass)
+// ===----------------------------------------------------------------------===
+
+struct LowerHerbieConstantPattern : public OpRewritePattern<ConstantOp> {
+  using OpRewritePattern<ConstantOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(ConstantOp herbieConstOp,
+                                PatternRewriter &rewriter) const final {
+    double value = getConstantValue(herbieConstOp.getSymbol());
+
+    auto resultType = herbieConstOp.getResult().getType();
+    auto floatAttr = rewriter.getFloatAttr(resultType, value);
+
+    rewriter.replaceOpWithNewOp<arith::ConstantOp>(herbieConstOp, floatAttr);
+    return success();
+  }
+};
+
+static void populateLowerHerbieConstantPatterns(RewritePatternSet &patterns) {
+  patterns.add<LowerHerbieConstantPattern>(patterns.getContext());
+}
+
 class HerbieOptimizePass
     : public impl::HerbieOptimizePassBase<HerbieOptimizePass> {
 public:
@@ -442,6 +467,7 @@ public:
       TAMAGOYAKI_SCOPED_TIMER("LowerHerbieSoundOpsPatterns");
       RewritePatternSet patterns(irModule.getContext());
       populateLowerHerbieSoundOpsPatterns(patterns);
+      populateLowerHerbieConstantPatterns(patterns);
       GreedyRewriteConfig config;
       config.enableConstantCSE(false);
       config.enableFolding(false);
@@ -663,25 +689,6 @@ public:
 // ===----------------------------------------------------------------------===
 // // LowerHerbieConstantPass
 // ===----------------------------------------------------------------------===
-
-struct LowerHerbieConstantPattern : public OpRewritePattern<ConstantOp> {
-  using OpRewritePattern<ConstantOp>::OpRewritePattern;
-
-  LogicalResult matchAndRewrite(ConstantOp herbieConstOp,
-                                PatternRewriter &rewriter) const final {
-    double value = getConstantValue(herbieConstOp.getSymbol());
-
-    auto resultType = herbieConstOp.getResult().getType();
-    auto floatAttr = rewriter.getFloatAttr(resultType, value);
-
-    rewriter.replaceOpWithNewOp<arith::ConstantOp>(herbieConstOp, floatAttr);
-    return success();
-  }
-};
-
-static void populateLowerHerbieConstantPatterns(RewritePatternSet &patterns) {
-  patterns.add<LowerHerbieConstantPattern>(patterns.getContext());
-}
 
 class LowerHerbieConstantPass
     : public impl::LowerHerbieConstantPassBase<LowerHerbieConstantPass> {

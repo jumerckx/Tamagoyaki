@@ -1,3 +1,7 @@
+# Evaluation artifacts
+.snakemake
+eval/out/
+
 # Build artifacts
 build/
 *.o
