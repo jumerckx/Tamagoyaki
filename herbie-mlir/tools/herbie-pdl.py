@@ -1,6 +1,6 @@
 # /// script
 # requires-python = ">=3.10"
-# dependencies = ["xdsl", "mpmath"]
+# dependencies = ["xdsl"]
 # ///
 """Convert Herbie rewrite rules (S-expression .rkt files) to PDL MLIR dialect."""
 
