@@ -13,3 +13,29 @@ dependencies = [
 ]
 [tool.uv]
 find-links = ["https://llvm.github.io/eudsl"]
+
+[tool.uv.workspace]
+members = [
+    ".",
+]
+
+[tool.uv.sources]
+tamagoyaki = { workspace = true }
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.package-dir]
+herbie_mlir = "herbie-mlir"
+
+[tool.setuptools]
+packages = ["herbie_mlir", "herbie_mlir.tools"]
+
+[dependency-groups]
+dev = [
+    "tamagoyaki",
+]
+
+[project.entry-points.'xdsl.universe']
+tools = 'herbie_mlir.tools:EQSAT_UNIVERSE'
