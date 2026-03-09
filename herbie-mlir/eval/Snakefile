@@ -1,6 +1,8 @@
 import os
 import glob
 
+herbie_mlir_opt_path = "../../build/bin/herbie-mlir-opt"
+
 # Get all benchmark names from fpcore files
 benchmark_names = [
     os.path.splitext(os.path.basename(f))[0]
@@ -49,7 +51,7 @@ rule optimize:
     output:
         f"{OPTIMIZED_DIR}/{{benchmark}}.mlir"
     shell:
-        'herbie-mlir-opt -herbie-optimize="max-saturation-iters=4 patterns-file={input.pdl_interp}" {input.mlir} > {output}'
+        '{herbie_mlir_opt_path} -herbie-optimize="max-saturation-iters=4 patterns-file={input.pdl_interp}" --remove-dead-values {input.mlir} > {output}'
 
 # ============ Utility Rules ============
 
