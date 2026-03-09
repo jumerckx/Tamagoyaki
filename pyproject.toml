@@ -11,8 +11,6 @@ dependencies = [
     "snakemake-executor-plugin-cluster-generic>=1",
     "xdsl>=0.56.2",
 ]
-[tool.uv]
-find-links = ["https://llvm.github.io/eudsl"]
 
 [tool.uv.workspace]
 members = [
@@ -39,3 +37,6 @@ dev = [
 
 [project.entry-points.'xdsl.universe']
 tools = 'herbie_mlir.tools:EQSAT_UNIVERSE'
+
+[tool.uv]
+find-links = ["https://llvm.github.io/eudsl"]
