@@ -13,10 +13,11 @@ OUT_DIR = "out"
 RULES_DIR = f"{OUT_DIR}/rules"
 MLIR_DIR = f"{OUT_DIR}/mlir"
 OPTIMIZED_DIR = f"{OUT_DIR}/optimized"
+OPTIMIZED_FPCORE_DIR = f"{OUT_DIR}/optimized_fpcore"
 
 rule all:
     input:
-        expand(f"{OPTIMIZED_DIR}/{{benchmark}}.mlir", benchmark=benchmark_names),
+        expand(f"{OPTIMIZED_FPCORE_DIR}/{{benchmark}}.fpcore", benchmark=benchmark_names),
 
 # ============ Rules Processing Pipeline ============
 
@@ -52,6 +53,14 @@ rule optimize:
         f"{OPTIMIZED_DIR}/{{benchmark}}.mlir"
     shell:
         '{herbie_mlir_opt_path} -herbie-optimize="max-saturation-iters=4 patterns-file={input.pdl_interp}" --remove-dead-values {input.mlir} > {output}'
+
+rule optimized_mlir_to_fpcore:
+    input:
+        f"{OPTIMIZED_DIR}/{{benchmark}}.mlir"
+    output:
+        f"{OPTIMIZED_FPCORE_DIR}/{{benchmark}}.fpcore"
+    shell:
+        "uv run mlir-fpcore {input} > {output}"
 
 # ============ Utility Rules ============
 

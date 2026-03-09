@@ -29,10 +29,12 @@ build-backend = "hatchling.build"
 "herbie-mlir/tools/__init__.py" = "herbie_mlir/tools/__init__.py"
 "herbie-mlir/tools/fpcore-mlir.py" = "herbie_mlir/tools/fpcore_mlir.py"
 "herbie-mlir/tools/herbie-pdl.py" = "herbie_mlir/tools/herbie_pdl.py"
+"herbie-mlir/tools/mlir-fpcore.py" = "herbie_mlir/tools/mlir_fpcore.py"
 
 [project.scripts]
 fpcore-mlir = "herbie_mlir.tools.fpcore_mlir:entry"
 herbie-pdl = "herbie_mlir.tools.herbie_pdl:entry"
+mlir-fpcore = "herbie_mlir.tools.mlir_fpcore:entry"
 
 [dependency-groups]
 dev = [
