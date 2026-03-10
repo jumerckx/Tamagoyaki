@@ -31,6 +31,7 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
+#include "llvm/Support/Casting.h"
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -469,7 +470,13 @@ void extractFromGraph(GraphOp graphOp) {
   Block &block = graphOp.getBody().front();
 
   SmallVector<ClassOp> classOps;
-  block.walk([&](ClassOp classOp) { classOps.push_back(classOp); });
+  block.walk([&](Operation *op) {
+    if (auto classOp = llvm::dyn_cast<ClassOp>(op)) {
+      classOps.push_back(classOp);
+    } else {
+      op->removeAttr("equivalence.cost");
+    }
+  });
 
   for (ClassOp classOp : classOps) {
     if (classOp.getResult().use_empty()) {
@@ -504,9 +511,6 @@ void extractFromGraph(GraphOp graphOp) {
     }
     for (Operation *op : toErase)
       op->erase();
-
-    if (Operation *selectedOp = selected.getDefiningOp())
-      selectedOp->removeAttr("equivalence.cost");
   }
 }
 
