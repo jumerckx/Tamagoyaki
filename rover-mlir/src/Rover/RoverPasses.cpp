@@ -1,10 +1,11 @@
-#include "Comb.h"
+#include "Comb/Comb.h"
 #include "Datapath/Datapath.h"
 #include "EmatchDialect.h"
 #include "EmatchUtils.h"
 #include "EquivalenceDialect.h"
 #include "EquivalenceUtils.h"
 #include "HW/HW.h"
+#include "Rover/Rover.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
 #include "mlir/IR/Block.h"
@@ -30,16 +31,14 @@
 #include <optional>
 #include <utility>
 
-namespace comb {
+namespace rover {
 
 #define GEN_PASS_DEF_ROVERSATURATEPASS
 #define GEN_PASS_DEF_ROVEREXTRACTPASS
-#include "CombPasses.h.inc"
+#include "RoverPasses.h.inc"
 
 using namespace mlir;
 using namespace mlir::equivalence;
-
-#include <cassert>
 
 static unsigned ceilLog2(unsigned v) {
   assert(v > 0 && "undefined for zero");
@@ -292,4 +291,4 @@ public:
   }
 };
 
-} // namespace comb
+} // namespace rover

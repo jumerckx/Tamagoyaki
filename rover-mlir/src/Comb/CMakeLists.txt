@@ -10,7 +10,6 @@ set(HW_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../include/)
 # ============================================================================
 set(COMB_SOURCES
   CombDialect.cpp
-  CombPasses.cpp
 )
 
 set_source_object_depends(
