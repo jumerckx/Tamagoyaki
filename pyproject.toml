@@ -31,12 +31,14 @@ build-backend = "hatchling.build"
 "herbie-mlir/tools/herbie-pdl.py" = "herbie_mlir/tools/herbie_pdl.py"
 "herbie-mlir/tools/mlir-fpcore.py" = "herbie_mlir/tools/mlir_fpcore.py"
 "herbie-mlir/tools/insert-fpcore-alternative.py" = "herbie_mlir/tools/insert_fpcore_alternative.py"
+"herbie-mlir/tools/extract-accuracies.py" = "herbie_mlir/tools/extract_accuracies.py"
 
 [project.scripts]
 fpcore-mlir = "herbie_mlir.tools.fpcore_mlir:entry"
 herbie-pdl = "herbie_mlir.tools.herbie_pdl:entry"
 mlir-fpcore = "herbie_mlir.tools.mlir_fpcore:entry"
 insert-fpcore-alternative = "herbie_mlir.tools.insert_fpcore_alternative:entry"
+extract-accuracies = "herbie_mlir.tools.extract_accuracies:entry"
 
 [dependency-groups]
 dev = [
