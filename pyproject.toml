@@ -36,6 +36,7 @@ build-backend = "hatchling.build"
 "herbie-mlir/tools/insert-fpcore-alternative.py" = "herbie_mlir/tools/insert_fpcore_alternative.py"
 "herbie-mlir/tools/extract-accuracies.py" = "herbie_mlir/tools/extract_accuracies.py"
 "herbie-mlir/tools/plot-accuracies.py" = "herbie_mlir/tools/plot_accuracies.py"
+"herbie-mlir/tools/plot-timing.py" = "herbie_mlir/tools/plot_timing.py"
 
 [project.scripts]
 fpcore-mlir = "herbie_mlir.tools.fpcore_mlir:entry"
@@ -44,6 +45,8 @@ mlir-fpcore = "herbie_mlir.tools.mlir_fpcore:entry"
 insert-fpcore-alternative = "herbie_mlir.tools.insert_fpcore_alternative:entry"
 extract-accuracies = "herbie_mlir.tools.extract_accuracies:entry"
 plot-accuracies = "herbie_mlir.tools.plot_accuracies:entry"
+plot-timing = "herbie_mlir.tools.plot_timing:entry"
+
 
 [dependency-groups]
 dev = [
