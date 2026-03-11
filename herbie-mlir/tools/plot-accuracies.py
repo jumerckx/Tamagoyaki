@@ -151,7 +151,7 @@ def main():
     legend_elements = [
         Patch(facecolor=color_original, alpha=1.0, label="Original"),
         Patch(facecolor=color_herbie, alpha=0.8, label="Herbie"),
-        Patch(facecolor=color_target, alpha=0.8, label="eqsat (ours)"),
+        Patch(facecolor=color_target, alpha=0.8, label="Herbie-MLIR (ours)"),
     ]
 
     # Add data labels on top of bars with smaller font

@@ -91,7 +91,7 @@ def main():
     width = 0.25
 
     # Define bar colors (matching accuracy plot style)
-    color_eqsat = "#33a02c"  # Green for eqsat (ours)
+    color_eqsat = "#33a02c"  # Green for Herbie-MLIR (ours)
     color_herbie = "#1f78b4"  # Blue for Herbie
 
     # Create bars (Herbie first, then eqsat)
@@ -125,7 +125,7 @@ def main():
     # Create custom legend (Herbie first, then eqsat)
     legend_elements = [
         Patch(facecolor=color_herbie, alpha=0.8, label="Herbie"),
-        Patch(facecolor=color_eqsat, alpha=0.8, label="eqsat (ours)"),
+        Patch(facecolor=color_eqsat, alpha=0.8, label="Herbie-MLIR (ours)"),
     ]
 
     # Add speedup labels on top of bars
