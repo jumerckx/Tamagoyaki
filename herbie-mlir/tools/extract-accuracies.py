@@ -1,6 +1,5 @@
 import csv
 import json
-import re
 import sys
 from pathlib import Path
 from typing import Any, TypedDict, cast
@@ -20,83 +19,6 @@ class ResultData(TypedDict, total=False):
     """Type for the top-level results data."""
 
     tests: list[TestResult]
-
-
-def extract_filename_from_target_prog(target_prog: str) -> str:
-    """Extract filename from target_prog field.
-
-    Args:
-        target_prog: The target_prog field containing a filename in a Racket-like structure.
-
-    Returns:
-        The extracted filename.
-
-    Raises:
-        ValueError: If filename cannot be extracted.
-    """
-    # Extract filename from patterns like "(((! :filename \"nmse-problem-3.4.4_pi_false\" ..."
-    match = re.search(r':filename\s+"([^"]+)"', target_prog)
-    if not match:
-        raise ValueError(f"Could not extract filename from target_prog: {target_prog}")
-    return match.group(1)
-
-
-def extract_snakemake_tsv_timing(tsv_path: Path) -> str:
-    """Extract the timing value from the first column of a TSV file.
-
-    Args:
-        tsv_path: Path to the TSV file.
-
-    Returns:
-        The first column value from the second row as a string.
-
-    Raises:
-        FileNotFoundError: If the TSV file does not exist.
-        ValueError: If the TSV file is malformed.
-    """
-    if not tsv_path.exists():
-        raise FileNotFoundError(f"TSV file not found: {tsv_path}")
-
-    with open(tsv_path) as f:
-        lines = f.readlines()
-
-    if len(lines) < 2:
-        raise ValueError(f"TSV file has fewer than 2 lines: {tsv_path}")
-
-    # Skip header, get first data row
-    first_data_row = lines[1].strip()
-    if not first_data_row:
-        raise ValueError(f"Second row of TSV file is empty: {tsv_path}")
-
-    # Split by tab and get first column
-    columns = first_data_row.split("\t")
-    if not columns:
-        raise ValueError(f"Could not parse TSV file: {tsv_path}")
-
-    return columns[0]
-
-
-def extract_timing_report_tsv(timing_report_path: Path) -> str:
-    """Extract the timing value from a timing report TSV file."""
-    if not timing_report_path.exists():
-        raise FileNotFoundError(f"TSV file not found: {timing_report_path}")
-
-    with open(timing_report_path) as f:
-        lines = f.readlines()
-
-    if len(lines) < 1:
-        raise ValueError(f"TSV file has fewer than 2 lines: {timing_report_path}")
-    # Skip header, get first data row
-    first_data_row = lines[0].strip()
-    if not first_data_row:
-        raise ValueError(f"First row of TSV file is empty: {timing_report_path}")
-
-    # Split by tab and get first column
-    columns = first_data_row.split("\t")
-    if not columns:
-        raise ValueError(f"Could not parse TSV file: {timing_report_path}")
-
-    return columns[1]
 
 
 def extract_target_accuracy(target: Any) -> str:
@@ -189,17 +111,16 @@ def extract_herbie_timings(timeline_path: Path) -> tuple[str, str]:
     return str(herbie_wo_sampling), str(herbie_sampling)
 
 
-def extract_accuracies(json_file: str, results_dir: str = "results") -> None:
+def extract_accuracies(json_file: str) -> None:
     """Extract accuracy metrics from a Herbie results JSON file and output as CSV.
 
     Args:
         json_file: Path to the JSON results file.
-        results_dir: Base directory for results (default: "results").
 
     Raises:
         KeyError: If required fields are missing from the JSON.
         ValueError: If data format is invalid.
-        FileNotFoundError: If TSV files are not found.
+        FileNotFoundError: If timeline files are not found.
     """
     with open(json_file) as f:
         data: dict[str, Any] = json.load(f)
@@ -212,8 +133,6 @@ def extract_accuracies(json_file: str, results_dir: str = "results") -> None:
             "original_accuracy_bits",
             "optimized_accuracy_bits",
             "target_accuracy_bits",
-            "eqsat_saturation",
-            "eqsat_total",
             "herbie_wo_sampling",
             "herbie_sampling",
         ],
@@ -228,31 +147,8 @@ def extract_accuracies(json_file: str, results_dir: str = "results") -> None:
             start: str = str(test["start"])
             end: str = str(test["end"])
             target: str = extract_target_accuracy(test["target"])
-            target_prog: str = str(test["target-prog"])
         except KeyError as e:
             raise KeyError(f"Test {i}: Missing required field {e}")
-
-        # Extract timing data from TSV files
-        try:
-            filename: str = extract_filename_from_target_prog(target_prog)
-            eqsat_saturate_timing: float = float(
-                extract_timing_report_tsv(
-                    Path(results_dir) / "saturated" / f"{filename}_timing_report.tsv"
-                )
-            )
-            eqsat_herbie_timing: float = float(
-                extract_snakemake_tsv_timing(
-                    Path(results_dir) / "saturated" / f"{filename}.tsv"
-                )
-            )
-            extract_timing: float = float(
-                extract_snakemake_tsv_timing(
-                    Path(results_dir) / "optimized" / f"{filename}.tsv"
-                )
-            )
-            eqsat_timing: str = str(eqsat_herbie_timing + extract_timing)
-        except (ValueError, FileNotFoundError) as e:
-            raise ValueError(f"Test {i} ({name}): {e}")
 
         # Extract Herbie timing data from timeline.json
         try:
@@ -269,8 +165,6 @@ def extract_accuracies(json_file: str, results_dir: str = "results") -> None:
                 "original_accuracy_bits": start,
                 "optimized_accuracy_bits": end,
                 "target_accuracy_bits": target,
-                "eqsat_saturation": eqsat_saturate_timing,
-                "eqsat_total": eqsat_timing,
                 "herbie_wo_sampling": herbie_wo_sampling,
                 "herbie_sampling": herbie_sampling,
             }
