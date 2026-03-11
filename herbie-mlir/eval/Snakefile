@@ -23,6 +23,7 @@ PLOTS_DIR = f"{OUT_DIR}/plots"
 rule all:
     input:
         f"{PLOTS_DIR}/accuracy_comparison.pdf",
+        f"{PLOTS_DIR}/timing_comparison.pdf",
 
 # ============ Rules Processing Pipeline ============
 
@@ -118,6 +119,14 @@ rule generate_accuracy_plot:
         f"{PLOTS_DIR}/accuracy_comparison.pdf"
     shell:
         "uv run plot-accuracies {input} -o {output}"
+
+rule generate_timing_plot:
+    input:
+        f"{OUT_DIR}/evaluation.csv"
+    output:
+        f"{PLOTS_DIR}/timing_comparison.pdf"
+    shell:
+        "uv run plot-timing {input} -o {output}"
 
 # ============ Utility Rules ============
 
