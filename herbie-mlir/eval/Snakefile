@@ -17,10 +17,11 @@ OPTIMIZED_DIR = f"{OUT_DIR}/optimized"
 OPTIMIZED_FPCORE_DIR = f"{OUT_DIR}/optimized_fpcore"
 FPCORE_MERGED_DIR = f"{OUT_DIR}/fpcore_merged"
 HERBIE_EVAL_DIR = f"{OUT_DIR}/herbie_eval"
+PLOTS_DIR = f"{OUT_DIR}/plots"
 
 rule all:
     input:
-        directory(f"{HERBIE_EVAL_DIR}/herbie_report"),
+        f"{PLOTS_DIR}/accuracy_comparison.pdf",
 
 # ============ Rules Processing Pipeline ============
 
@@ -93,6 +94,26 @@ rule run_herbie_report:
         directory(f"{HERBIE_EVAL_DIR}/herbie_report")
     shell:
         'PLTADDONDIR={herbie_racket_prefix} racket -l herbie report --disable setup:preprocess --disable reduce:regimes --disable generate:taylor --disable generate:proofs  --platform math --num-iters 1 {input} {output}'
+
+# ============ Evaluation Export Pipeline ============
+
+rule extract_evaluation_csv:
+    input:
+        report = f"{HERBIE_EVAL_DIR}/herbie_report"
+    output:
+        f"{OUT_DIR}/evaluation.csv"
+    shell:
+        "uv run python ../tools/extract-accuracies.py {input.report}/results.json > {output}"
+
+# ============ Plotting Pipeline ============
+
+rule generate_accuracy_plot:
+    input:
+        f"{OUT_DIR}/evaluation.csv"
+    output:
+        f"{PLOTS_DIR}/accuracy_comparison.pdf"
+    shell:
+        "uv run plot-accuracies {input} -o {output}"
 
 # ============ Utility Rules ============
 
