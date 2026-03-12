@@ -23,6 +23,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Operation.h"
 // IWYU pragma: no_include "mlir/IR/PDLPatternMatch.h.inc"
+#include "mlir/IR/OwningOpRef.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
@@ -135,7 +136,7 @@ void convertEmatchOpsToApplyRewrites(ModuleOp module) {
 /// module. The patternsModule is consumed (removed from parent).
 /// Returns true on success.
 bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
-                   ModuleOp irModule, int maxIters) {
+                   ModuleOp irModule, int maxIters, int maxNodes) {
   TAMAGOYAKI_SCOPED_TIMER("runSaturation");
   RewritePatternSet patternList(ctx);
 
@@ -146,11 +147,12 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
     Region *region = &(graph.getBody());
     auto scope = hashconsRewriter.createRootScope(region);
 
-    graph->walk([&scope](Operation *op) {
+    graph->walk([&](Operation *op) {
       if (dyn_cast<equivalence::ClassOp>(*op)) {
         return;
       }
       scope->insert(op, op);
+      hashconsRewriter.setNodeCount(hashconsRewriter.getNodeCount() + 1);
     });
   });
 
@@ -271,6 +273,15 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
       allMatches.clear();
       bytecodeState.cleanupAfterMatchAndRewrite();
     }
+
+    // Check if node limit exceeded
+    if (maxNodes > 0 && hashconsRewriter.getNodeCount() > (uint64_t)maxNodes) {
+      LLVM_DEBUG(llvm::dbgs()
+                 << "Node limit exceeded: " << hashconsRewriter.getNodeCount()
+                 << " > " << maxNodes << "\n");
+      break;
+    }
+
     bool didRebuild = uf.rebuild(hashconsRewriter);
     if (!didRebuild) {
       break;
@@ -325,7 +336,7 @@ struct EmatchSaturatePass
     PDLPatternModule pdlPattern(patternsModule);
 
     runSaturation(module.getContext(), std::move(pdlPattern), irModule,
-                  maxIters);
+                  maxIters, maxNodes);
   }
 };
 
@@ -367,7 +378,7 @@ struct EmatchSaturateBenchmarkPass
       PDLPatternModule pdlPattern(patternClone.release());
 
       runSaturation(module.getContext(), std::move(pdlPattern), irClone.get(),
-                    maxIters);
+                    maxIters, 0);
 
       auto endTime = std::chrono::high_resolution_clock::now();
       auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
