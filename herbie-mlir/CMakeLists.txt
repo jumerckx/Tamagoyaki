@@ -5,10 +5,7 @@ add_subdirectory(include)
 add_subdirectory(src)
 add_subdirectory(rival)
 
-option(HERBIE_MLIR_BUILD_TOOLS "Build herbie-mlir tools (herbie-mlir-opt)" ON)
-if(HERBIE_MLIR_BUILD_TOOLS)
-    add_subdirectory(tools)
-endif()
+add_subdirectory(tools)
 
 add_subdirectory(test)
 
@@ -22,6 +19,7 @@ if(HERBIE_MLIR_BUILD_HERBIE)
     GIT_REPOSITORY https://github.com/herbie-fp/herbie
     GIT_TAG        main
     GIT_SHALLOW    TRUE
+    UPDATE_DISCONNECTED TRUE
     SOURCE_DIR     ${CMAKE_CURRENT_BINARY_DIR}/herbie-src
     CONFIGURE_COMMAND ""
     BUILD_COMMAND     ${CMAKE_COMMAND} -E env
@@ -29,7 +27,6 @@ if(HERBIE_MLIR_BUILD_HERBIE)
                         make -C <SOURCE_DIR> install
     INSTALL_COMMAND   ""
     BUILD_IN_SOURCE   TRUE
-    BUILD_BYPRODUCTS  ""
     LOG_BUILD         TRUE
   )
 
