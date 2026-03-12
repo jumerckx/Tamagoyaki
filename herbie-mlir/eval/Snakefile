@@ -60,7 +60,7 @@ rule optimize:
     benchmark:
         f"{BENCHMARKS_DIR}/{{benchmark}}.tsv"
     shell:
-        '{herbie_mlir_opt_path} -herbie-optimize="max-saturation-iters=4 patterns-file={input.pdl_interp}" --remove-dead-values {input.mlir} > {output}'
+        '{herbie_mlir_opt_path} -herbie-optimize="max-saturation-iters=20 max-nodes=4000 patterns-file={input.pdl_interp}" --remove-dead-values {input.mlir} > {output}'
 
 rule optimized_mlir_to_fpcore:
     input:
