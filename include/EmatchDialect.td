@@ -170,6 +170,8 @@ def EmatchSaturatePass : Pass<"ematch-saturate", "::mlir::ModuleOp"> {
     let options = [
         Option<"maxIters", "max-iters", "int", "4",
                "Maximum number of iterations before equality saturation times out.">,
+        Option<"maxNodes", "max-nodes", "int", "0",
+               "Maximum number of nodes in the e-graph (0 = unlimited).">,
         Option<"patternsFile", "patterns-file", "std::string", /*default=*/"\"\"",
                "Path to an MLIR file containing the patterns module. "
                "When set, the input module is treated as the IR module directly.">
@@ -187,7 +189,9 @@ def EmatchSaturateBenchmarkPass : Pass<"ematch-saturate-benchmark", "::mlir::Mod
         Option<"numRuns", "num-runs", "int", "10",
                "Number of times to run equality saturation.">,
         Option<"maxIters", "max-iters", "int", "4",
-               "Maximum number of iterations before equality saturation times out.">
+               "Maximum number of iterations before equality saturation times out.">,
+        Option<"maxNodes", "max-nodes", "int", "0",
+               "Maximum number of nodes in the e-graph (0 = unlimited).">
     ];
 }
 

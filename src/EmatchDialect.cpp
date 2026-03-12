@@ -23,6 +23,7 @@
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/Operation.h"
 // IWYU pragma: no_include "mlir/IR/PDLPatternMatch.h.inc"
+#include "mlir/IR/OwningOpRef.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
@@ -135,7 +136,7 @@ void convertEmatchOpsToApplyRewrites(ModuleOp module) {
 /// module. The patternsModule is consumed (removed from parent).
 /// Returns true on success.
 bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
-                   ModuleOp irModule, int maxIters) {
+                   ModuleOp irModule, int maxIters, int maxNodes) {
   TAMAGOYAKI_SCOPED_TIMER("runSaturation");
   RewritePatternSet patternList(ctx);
 
@@ -146,11 +147,12 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
     Region *region = &(graph.getBody());
     auto scope = hashconsRewriter.createRootScope(region);
 
-    graph->walk([&scope](Operation *op) {
+    graph->walk([&](Operation *op) {
       if (dyn_cast<equivalence::ClassOp>(*op)) {
         return;
       }
       scope->insert(op, op);
+      hashconsRewriter.setNodeCount(hashconsRewriter.getNodeCount() + 1);
     });
   });
 
@@ -210,7 +212,7 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
   mlir::detail::PDLByteCodeMutableState bytecodeState;
 
   int nIters = 0;
-
+  bool maxNodesExceeded = false;
   while (true) {
     TAMAGOYAKI_SCOPED_TIMER("iteration " + std::to_string(nIters + 1));
     LLVM_DEBUG({
@@ -267,12 +269,22 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
         hashconsRewriter.setInsertionPoint(pm.op);
         (void)bytecode->rewrite(hashconsRewriter, pm.matchResult,
                                 bytecodeState);
+        // Check if node limit exceeded
+        if (maxNodes > 0 &&
+            hashconsRewriter.getNodeCount() > (uint64_t)maxNodes) {
+          LLVM_DEBUG(llvm::dbgs() << "Node limit exceeded: "
+                                  << hashconsRewriter.getNodeCount() << " > "
+                                  << maxNodes << "\n");
+          maxNodesExceeded = true;
+          break;
+        }
       }
       allMatches.clear();
       bytecodeState.cleanupAfterMatchAndRewrite();
     }
+
     bool didRebuild = uf.rebuild(hashconsRewriter);
-    if (!didRebuild) {
+    if (maxNodesExceeded || !didRebuild) {
       break;
     }
   }
@@ -325,7 +337,7 @@ struct EmatchSaturatePass
     PDLPatternModule pdlPattern(patternsModule);
 
     runSaturation(module.getContext(), std::move(pdlPattern), irModule,
-                  maxIters);
+                  maxIters, maxNodes);
   }
 };
 
@@ -367,7 +379,7 @@ struct EmatchSaturateBenchmarkPass
       PDLPatternModule pdlPattern(patternClone.release());
 
       runSaturation(module.getContext(), std::move(pdlPattern), irClone.get(),
-                    maxIters);
+                    maxIters, 0);
 
       auto endTime = std::chrono::high_resolution_clock::now();
       auto duration = std::chrono::duration_cast<std::chrono::microseconds>(

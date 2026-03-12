@@ -69,6 +69,9 @@ LogicalResult HashConsPatternRewriter::erase(Operation *op) {
       llvm::dbgs() << "did not find operation to erase " << *op << "\n";
     }
   });
+  if (erased) {
+    nodeCount--;
+  }
   return success();
 }
 
@@ -89,6 +92,7 @@ LogicalResult HashConsPatternRewriter::insert(Operation *op) {
   }
 
   scope->insert(op, op);
+  nodeCount++;
   LLVM_DEBUG(llvm::dbgs() << "inserted operation into hash-cons scope: " << *op
                           << "\n");
   return success();

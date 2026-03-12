@@ -64,11 +64,20 @@ public:
   /// Remove a scope registration (does not destroy the scope)
   void removeScope(Region *region);
 
+  /// Get the current node count
+  uint64_t getNodeCount() const { return nodeCount; }
+
+  /// Set the current node count
+  void setNodeCount(uint64_t count) { nodeCount = count; }
+
 private:
   ScopedMapTy hashcons;
 
   /// Maps regions to their corresponding hash-cons scopes
   llvm::DenseMap<Region *, std::unique_ptr<ScopedMapTy::ScopeTy>> scopeMap;
+
+  /// Counter for the number of nodes in the e-graph
+  uint64_t nodeCount = 0;
 };
 
 } // namespace mlir::ematch

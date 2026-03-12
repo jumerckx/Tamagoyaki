@@ -16,7 +16,7 @@ void convertEmatchOpsToApplyRewrites(ModuleOp module);
 /// Run equality saturation on the given IR module using the provided PDL
 /// pattern module. Returns true on success.
 bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
-                   ModuleOp irModule, int maxIters);
+                   ModuleOp irModule, int maxIters, int maxNodes);
 
 } // namespace mlir::ematch
 

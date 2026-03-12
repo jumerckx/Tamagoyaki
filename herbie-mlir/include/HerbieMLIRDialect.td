@@ -270,6 +270,8 @@ def HerbieOptimizePass : Pass<"herbie-optimize", "::mlir::ModuleOp"> {
     // Saturation options
     Option<"maxSaturationIters", "max-saturation-iters", "int", "4",
            "Maximum number of equality saturation iterations">,
+    Option<"maxNodes", "max-nodes", "int", "4000",
+        "Maximum number of nodes in the e-graph (0 = unlimited).">,
     Option<"patternsFile", "patterns-file", "std::string", /*default=*/"\"\"",
            "Path to an MLIR file containing the patterns module. "
            "When set, the input module is treated as the IR module directly.">
