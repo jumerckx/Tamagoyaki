@@ -31,6 +31,9 @@ MLIR_TO_FPCORE_UNARY = {
     math.CosOp: "cos",
     math.TanOp: "tan",
     math.AtanOp: "atan",
+    math.SinhOp: "sinh",
+    math.CoshOp: "cosh",
+    math.TanhOp: "tanh",
 }
 
 MLIR_TO_FPCORE_TERNARY = {

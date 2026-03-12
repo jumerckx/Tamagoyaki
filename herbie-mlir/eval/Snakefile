@@ -2,6 +2,7 @@ import os
 import glob
 
 herbie_mlir_opt_path = "../../build/bin/herbie-mlir-opt"
+herbie_racket_prefix = "../../build/herbie-mlir/racket-pkgs"
 
 # Get all benchmark names from fpcore files
 benchmark_names = [
@@ -14,10 +15,15 @@ RULES_DIR = f"{OUT_DIR}/rules"
 MLIR_DIR = f"{OUT_DIR}/mlir"
 OPTIMIZED_DIR = f"{OUT_DIR}/optimized"
 OPTIMIZED_FPCORE_DIR = f"{OUT_DIR}/optimized_fpcore"
+FPCORE_MERGED_DIR = f"{OUT_DIR}/fpcore_merged"
+HERBIE_EVAL_DIR = f"{OUT_DIR}/herbie_eval"
+BENCHMARKS_DIR = f"{OUT_DIR}/benchmarks"
+PLOTS_DIR = f"{OUT_DIR}/plots"
 
 rule all:
     input:
-        expand(f"{OPTIMIZED_FPCORE_DIR}/{{benchmark}}.fpcore", benchmark=benchmark_names),
+        f"{PLOTS_DIR}/accuracy_comparison.pdf",
+        f"{PLOTS_DIR}/timing_comparison.pdf",
 
 # ============ Rules Processing Pipeline ============
 
@@ -51,6 +57,8 @@ rule optimize:
         pdl_interp = f"{RULES_DIR}/rules_pdl_interp.mlir"
     output:
         f"{OPTIMIZED_DIR}/{{benchmark}}.mlir"
+    benchmark:
+        f"{BENCHMARKS_DIR}/{{benchmark}}.tsv"
     shell:
         '{herbie_mlir_opt_path} -herbie-optimize="max-saturation-iters=4 patterns-file={input.pdl_interp}" --remove-dead-values {input.mlir} > {output}'
 
@@ -61,6 +69,64 @@ rule optimized_mlir_to_fpcore:
         f"{OPTIMIZED_FPCORE_DIR}/{{benchmark}}.fpcore"
     shell:
         "uv run mlir-fpcore {input} > {output}"
+
+# ============ FPCore Merging Pipeline ============
+
+rule insert_fpcore_alternatives:
+    input:
+        original = "fpcore/{benchmark}.fpcore",
+        optimized = f"{OPTIMIZED_FPCORE_DIR}/{{benchmark}}.fpcore"
+    output:
+        f"{FPCORE_MERGED_DIR}/{{benchmark}}.fpcore"
+    shell:
+        "uv run insert-fpcore-alternative {input.original} {input.optimized} > {output}"
+
+rule concatenate_merged_fpcores:
+    input:
+        expand(f"{FPCORE_MERGED_DIR}/{{benchmark}}.fpcore", benchmark=benchmark_names)
+    output:
+        f"{OUT_DIR}/herbie_input.fpcore"
+    shell:
+        "cat {input} > {output}"
+
+# ============ Herbie Evaluation Pipeline ============
+
+rule run_herbie_report:
+    input:
+        f"{OUT_DIR}/herbie_input.fpcore"
+    output:
+        directory(f"{HERBIE_EVAL_DIR}/herbie_report")
+    shell:
+        'PLTADDONDIR={herbie_racket_prefix} racket -l herbie report --disable setup:preprocess --disable reduce:regimes --disable generate:taylor --disable generate:proofs  --platform math --num-iters 1 {input} {output}'
+
+# ============ Evaluation Export Pipeline ============
+
+rule extract_evaluation_csv:
+    input:
+        report = f"{HERBIE_EVAL_DIR}/herbie_report",
+        benchmarks = expand(f"{BENCHMARKS_DIR}/{{benchmark}}.tsv", benchmark=benchmark_names)
+    output:
+        f"{OUT_DIR}/evaluation.csv"
+    shell:
+        "uv run python ../tools/extract-accuracies.py {input.report}/results.json {BENCHMARKS_DIR} > {output}"
+
+# ============ Plotting Pipeline ============
+
+rule generate_accuracy_plot:
+    input:
+        f"{OUT_DIR}/evaluation.csv"
+    output:
+        f"{PLOTS_DIR}/accuracy_comparison.pdf"
+    shell:
+        "uv run plot-accuracies {input} -o {output}"
+
+rule generate_timing_plot:
+    input:
+        f"{OUT_DIR}/evaluation.csv"
+    output:
+        f"{PLOTS_DIR}/timing_comparison.pdf"
+    shell:
+        "uv run plot-timing {input} -o {output}"
 
 # ============ Utility Rules ============
 

@@ -5,7 +5,10 @@ requires-python = ">=3.13"
 dependencies = [
     "cmake-format>=0.6.13",
     "lit>=18.1.8",
+    "matplotlib>=3.10.8",
     "mlir-wheel>=20260304",
+    "numpy>=2.4.3",
+    "pandas>=3.0.1",
     "pre-commit>=4.5.1",
     "snakemake>=9",
     "snakemake-executor-plugin-cluster-generic>=1",
@@ -30,11 +33,20 @@ build-backend = "hatchling.build"
 "herbie-mlir/tools/fpcore-mlir.py" = "herbie_mlir/tools/fpcore_mlir.py"
 "herbie-mlir/tools/herbie-pdl.py" = "herbie_mlir/tools/herbie_pdl.py"
 "herbie-mlir/tools/mlir-fpcore.py" = "herbie_mlir/tools/mlir_fpcore.py"
+"herbie-mlir/tools/insert-fpcore-alternative.py" = "herbie_mlir/tools/insert_fpcore_alternative.py"
+"herbie-mlir/tools/extract-accuracies.py" = "herbie_mlir/tools/extract_accuracies.py"
+"herbie-mlir/tools/plot-accuracies.py" = "herbie_mlir/tools/plot_accuracies.py"
+"herbie-mlir/tools/plot-timing.py" = "herbie_mlir/tools/plot_timing.py"
 
 [project.scripts]
 fpcore-mlir = "herbie_mlir.tools.fpcore_mlir:entry"
 herbie-pdl = "herbie_mlir.tools.herbie_pdl:entry"
 mlir-fpcore = "herbie_mlir.tools.mlir_fpcore:entry"
+insert-fpcore-alternative = "herbie_mlir.tools.insert_fpcore_alternative:entry"
+extract-accuracies = "herbie_mlir.tools.extract_accuracies:entry"
+plot-accuracies = "herbie_mlir.tools.plot_accuracies:entry"
+plot-timing = "herbie_mlir.tools.plot_timing:entry"
+
 
 [dependency-groups]
 dev = [
