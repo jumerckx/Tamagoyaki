@@ -389,9 +389,8 @@ public:
         return;
     }
 
-    IntervalSearchConfig intervalConfig;
+    IntervalSearchOptions intervalConfig;
     intervalConfig.maxSearchDepth = maxSearchDepth;
-    intervalConfig.maxRegions = maxRegions;
     intervalConfig.analysisPrecision = analysisPrecision;
     intervalConfig.maxRivalPrecision = maxRivalPrecision;
     intervalConfig.maxRivalIterations = maxRivalIterations;

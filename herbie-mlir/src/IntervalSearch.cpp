@@ -328,7 +328,7 @@ void herbie::searchStep(RivalMachine *machine, SearchSpace &space,
         rival_hints_free(result.hints);
     } else if (!result.maybe_error && result.converged) {
       // Definitely valid region
-      region.hints.reset(result.hints);
+      region.hints = makeRivalHints(result.hints);
       space.trueRegions.push_back(std::move(region));
     } else {
       // Uncertain - try to subdivide
@@ -344,12 +344,12 @@ void herbie::searchStep(RivalMachine *machine, SearchSpace &space,
         hiRect[splitDimension].setLo(midpoints->hiMid);
 
         // Transfer hints to both (they'll be refined on next analysis)
-        // Note: we can't share hints, so we only give hints to one
-        newOther.emplace_back(std::move(loRect), result.hints);
-        newOther.emplace_back(std::move(hiRect), nullptr);
+        auto sharedHints = makeRivalHints(result.hints);
+        newOther.emplace_back(std::move(loRect), sharedHints);
+        newOther.emplace_back(std::move(hiRect), sharedHints);
       } else {
         // Can't split further - keep as uncertain
-        region.hints.reset(result.hints);
+        region.hints = makeRivalHints(result.hints);
         newOther.push_back(std::move(region));
       }
     }
@@ -389,7 +389,9 @@ herbie::computeStatistics(const SearchSpace &space,
   table.validFraction = validWeight / total;
   table.invalidFraction = invalidWeight / total;
   table.unknownFraction = unknownWeight / total;
-  table.preconditionFraction = 0; // Future: precondition support
+  double sum =
+      table.validFraction + table.invalidFraction + table.unknownFraction;
+  table.preconditionFraction = std::max(0.0, 1.0 - sum);
 
   return table;
 }
@@ -423,9 +425,11 @@ SearchResult herbie::findIntervals(RivalMachine *machine,
     if (space.otherRegions.empty())
       break;
 
-    size_t totalRegions = space.trueRegions.size() + space.falseRegions.size() +
-                          space.otherRegions.size();
-    if (totalRegions >= options.maxRegions)
+    // Racket: (>= (length other) (expt 2 depth))
+    // For depth >= 64, 2^depth overflows size_t, so the condition is
+    // unreachable — matching Racket's behavior with fuel=128.
+    if (options.maxSearchDepth < 64 &&
+        space.otherRegions.size() >= (size_t(1) << options.maxSearchDepth))
       break;
 
     unsigned splitDim = n % numVars;
@@ -454,7 +458,7 @@ SearchResult herbie::findIntervals(RivalMachine *machine,
 
 FunctionIntervalResult
 herbie::runIntervalSearchOnFunction(mlir::func::FuncOp funcOp,
-                                    const IntervalSearchConfig &config) {
+                                    const IntervalSearchOptions &config) {
   TAMAGOYAKI_SCOPED_TIMER("runIntervalSearchOnFunction");
   FunctionIntervalResult result;
   result.success = false;
@@ -531,20 +535,12 @@ herbie::runIntervalSearchOnFunction(mlir::func::FuncOp funcOp,
     return result;
   }
 
-  IntervalSearchOptions options;
-  options.maxSearchDepth = config.maxSearchDepth;
-  options.maxRegions = config.maxRegions;
-  options.analysisPrecision = config.analysisPrecision;
-  options.maxRivalPrecision = config.maxRivalPrecision;
-  options.maxRivalIterations = config.maxRivalIterations;
-  options.emitStatistics = false;
-
   std::vector<Hyperrect> initialRects;
   initialRects.push_back(
       createFullDomainRect(result.floatBitWidths, config.analysisPrecision));
 
   result.searchResult =
-      findIntervals(machine, initialRects, result.floatBitWidths, options);
+      findIntervals(machine, initialRects, result.floatBitWidths, config);
   result.success = true;
 
   rival_machine_free(machine);

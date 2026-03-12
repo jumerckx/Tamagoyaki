@@ -257,13 +257,11 @@ def HerbieOptimizePass : Pass<"herbie-optimize", "::mlir::ModuleOp"> {
   ];
   let options = [
     // Interval search options
-    Option<"maxSearchDepth", "max-depth", "unsigned", "128",
+    Option<"maxSearchDepth", "max-depth", "unsigned", "12",
            "Maximum subdivision iterations for interval search">,
-    Option<"maxRegions", "max-regions", "unsigned", "131072",
-           "Stop interval search if region count exceeds this">,
     Option<"analysisPrecision", "analysis-precision", "unsigned", "128",
            "MPFR precision for interval bounds">,
-    Option<"maxRivalPrecision", "max-rival-precision", "unsigned", "2000",
+    Option<"maxRivalPrecision", "max-rival-precision", "unsigned", "10000",
            "Max precision for Rival analysis">,
     Option<"maxRivalIterations", "max-rival-iterations", "unsigned", "5",
            "Max Rival iterations per interval analysis">,
