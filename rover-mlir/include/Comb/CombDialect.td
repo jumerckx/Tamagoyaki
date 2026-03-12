@@ -150,6 +150,8 @@ def RoverSaturatePass : Pass<"rover-saturate", "::mlir::ModuleOp"> {
   let options = [
     Option<"maxIters", "max-iters", "int", "3",
            "Maximum number of iterations before equality saturation times out.">,
+    Option<"maxNodes", "max-nodes", "int", "0",
+           "Maximum number of nodes in the e-graph (0 = unlimited).">,
     Option<"patternsFile", "patterns-file", "std::string", /*default=*/"\"\"",
            "Path to an MLIR file containing the patterns module. "
            "When set, the input module is treated as the IR module directly.">

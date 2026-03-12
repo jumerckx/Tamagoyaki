@@ -456,7 +456,7 @@ public:
 
     bool saturationSuccess = mlir::ematch::runSaturation(
         irModule->getContext(), std::move(pdlPattern), irModule,
-        maxSaturationIters, 0);
+        maxSaturationIters, maxNodes);
 
     if (!saturationSuccess) {
       LLVM_DEBUG(llvm::dbgs() << "Warning: Saturation returned false\n");

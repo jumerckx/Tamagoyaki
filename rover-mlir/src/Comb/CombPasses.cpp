@@ -176,7 +176,8 @@ public:
                                        rewriterBuildPartialProduct);
     pdlPattern.registerRewriteFunction("BuildCompress", rewriterBuildCompress);
     bool saturationSuccess = mlir::ematch::runSaturation(
-        irModule->getContext(), std::move(pdlPattern), irModule, maxIters, 0);
+        irModule->getContext(), std::move(pdlPattern), irModule, maxIters,
+        maxNodes);
 
     if (!saturationSuccess) {
       llvm::errs() << "  Warning: Saturation returned false\n";
