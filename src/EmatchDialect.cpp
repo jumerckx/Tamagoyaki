@@ -212,7 +212,7 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
   mlir::detail::PDLByteCodeMutableState bytecodeState;
 
   int nIters = 0;
-
+  bool maxNodesExceeded = false;
   while (true) {
     TAMAGOYAKI_SCOPED_TIMER("iteration " + std::to_string(nIters + 1));
     LLVM_DEBUG({
@@ -269,21 +269,22 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
         hashconsRewriter.setInsertionPoint(pm.op);
         (void)bytecode->rewrite(hashconsRewriter, pm.matchResult,
                                 bytecodeState);
+        // Check if node limit exceeded
+        if (maxNodes > 0 &&
+            hashconsRewriter.getNodeCount() > (uint64_t)maxNodes) {
+          LLVM_DEBUG(llvm::dbgs() << "Node limit exceeded: "
+                                  << hashconsRewriter.getNodeCount() << " > "
+                                  << maxNodes << "\n");
+          maxNodesExceeded = true;
+          break;
+        }
       }
       allMatches.clear();
       bytecodeState.cleanupAfterMatchAndRewrite();
     }
 
-    // Check if node limit exceeded
-    if (maxNodes > 0 && hashconsRewriter.getNodeCount() > (uint64_t)maxNodes) {
-      LLVM_DEBUG(llvm::dbgs()
-                 << "Node limit exceeded: " << hashconsRewriter.getNodeCount()
-                 << " > " << maxNodes << "\n");
-      break;
-    }
-
     bool didRebuild = uf.rebuild(hashconsRewriter);
-    if (!didRebuild) {
+    if (maxNodesExceeded || !didRebuild) {
       break;
     }
   }
