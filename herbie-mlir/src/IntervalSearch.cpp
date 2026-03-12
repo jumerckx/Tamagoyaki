@@ -7,6 +7,9 @@
 #include "mlir/Support/LLVM.h"
 #include "rival.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/Format.h"
+#include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -20,6 +23,8 @@
 #include <vector>
 
 using namespace herbie;
+
+#define DEBUG_TYPE "interval-search"
 
 // ============================================================================
 // Interval Implementation
@@ -420,6 +425,24 @@ SearchResult herbie::findIntervals(RivalMachine *machine,
 
   unsigned numVars = floatBitWidths.size();
 
+  LLVM_DEBUG({
+    llvm::dbgs() << "interval-search: starting search with " << numVars
+                 << " variables, max depth " << options.maxSearchDepth << "\n";
+    llvm::dbgs() << llvm::format("%-6s %10s %10s %10s %10s | %8s %8s %8s\n",
+                                 "Iter", "Valid%", "Invalid%", "Unknown%",
+                                 "Precond%", "#true", "#false", "#other");
+    llvm::dbgs() << std::string(78, '-') << "\n";
+
+    // Log initial state (iter 0)
+    SamplingTable initStats = computeStatistics(space, floatBitWidths);
+    llvm::dbgs() << llvm::format(
+        "%-6u %9.1f%% %9.1f%% %9.1f%% %9.1f%% | %8zu %8zu %8zu\n", 0u,
+        initStats.validFraction * 100.0, initStats.invalidFraction * 100.0,
+        initStats.unknownFraction * 100.0,
+        initStats.preconditionFraction * 100.0, space.trueRegions.size(),
+        space.falseRegions.size(), space.otherRegions.size());
+  });
+
   // Main search loop
   for (unsigned n = 0; n < options.maxSearchDepth; ++n) {
     if (space.otherRegions.empty())
@@ -434,7 +457,24 @@ SearchResult herbie::findIntervals(RivalMachine *machine,
 
     unsigned splitDim = n % numVars;
     searchStep(machine, space, splitDim, floatBitWidths);
+
+    LLVM_DEBUG({
+      SamplingTable stats = computeStatistics(space, floatBitWidths);
+      llvm::dbgs() << llvm::format(
+          "%-6u %9.1f%% %9.1f%% %9.1f%% %9.1f%% | %8zu %8zu %8zu\n", n + 1,
+          stats.validFraction * 100.0, stats.invalidFraction * 100.0,
+          stats.unknownFraction * 100.0, stats.preconditionFraction * 100.0,
+          space.trueRegions.size(), space.falseRegions.size(),
+          space.otherRegions.size());
+    });
   }
+
+  LLVM_DEBUG({
+    llvm::dbgs() << std::string(78, '-') << "\n";
+    llvm::dbgs() << "interval-search: finished — " << space.trueRegions.size()
+                 << " true, " << space.falseRegions.size() << " false, "
+                 << space.otherRegions.size() << " undetermined regions\n";
+  });
 
   // Build result: sampleable = true ∪ other
   SearchResult result;
