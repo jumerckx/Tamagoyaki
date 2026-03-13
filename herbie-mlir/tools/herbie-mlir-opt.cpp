@@ -25,6 +25,8 @@ int main(int argc, char **argv) {
   tamagoyaki::registerTimingCLOptions();
 
   mlir::registerAllPasses();
+  mlir::equivalence::registerEquivalencePasses();
+  mlir::ematch::registerEmatchPasses();
 
   mlir::DialectRegistry registry;
   registry
