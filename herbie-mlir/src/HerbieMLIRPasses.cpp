@@ -16,6 +16,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/IR/OwningOpRef.h"
 #include "mlir/IR/PatternMatch.h"
@@ -409,43 +410,40 @@ public:
     SmallVector<SmallVector<Operation *>> allSortedOps;
 
     // Step 1: Run interval search and insert equivalence graphs
-    {
-      irModule.walk([&](mlir::func::FuncOp funcOp) {
-        auto &intervalResult = intervalResults.emplace_back(
-            runIntervalSearchOnFunction(funcOp, intervalConfig));
+    irModule.walk([&](mlir::func::FuncOp funcOp) {
+      auto &intervalResult = intervalResults.emplace_back(
+          runIntervalSearchOnFunction(funcOp, intervalConfig));
 
-        if (!intervalResult.success) {
-          funcOp.emitWarning() << "Interval search failed, continuing anyway";
-        } else {
-          LLVM_DEBUG({
-            llvm::dbgs() << "Interval search for " << funcOp.getName() << ": "
-                         << intervalResult.searchResult.sampleableRegions.size()
-                         << " sampleable regions, valid fraction: "
-                         << intervalResult.searchResult.statistics.validFraction
-                         << "\n";
-          });
-        }
+      if (!intervalResult.success) {
+        funcOp.emitWarning() << "Interval search failed, continuing anyway";
+      } else {
+        LLVM_DEBUG({
+          llvm::dbgs() << "Interval search for " << funcOp.getName() << ": "
+                       << intervalResult.searchResult.sampleableRegions.size()
+                       << " sampleable regions, valid fraction: "
+                       << intervalResult.searchResult.statistics.validFraction
+                       << "\n";
+        });
+      }
 
-        if (mlir::failed(mlir::equivalence::insertGraphInFunction(
-                funcOp, /*insertSingleElementEqs=*/false))) {
-          funcOp.emitError() << "Failed to insert equivalence graph";
-          return signalPassFailure();
-        }
+      if (mlir::failed(mlir::equivalence::insertGraphInFunction(
+              funcOp, /*insertSingleElementEqs=*/false))) {
+        funcOp.emitError() << "Failed to insert equivalence graph";
+        return signalPassFailure();
+      }
 
-        // Map function arguments to rival variables and register as roots
-        for (auto [i, arg] : llvm::enumerate(funcOp.getArguments())) {
-          std::string name = "arg" + std::to_string(i);
-          varNameStorage.push_back(name);
-          uint32_t varExpr =
-              rival_expr_var(arena, varNameStorage.back().c_str());
-          valueToExpr[arg] = varExpr;
+      // Map function arguments to rival variables and register as roots
+      for (auto [i, arg] : llvm::enumerate(funcOp.getArguments())) {
+        std::string name = "arg" + std::to_string(i);
+        varNameStorage.push_back(name);
+        uint32_t varExpr = rival_expr_var(arena, varNameStorage.back().c_str());
+        valueToExpr[arg] = varExpr;
 
-          size_t idx = roots.size();
-          roots.push_back(varExpr);
-          valueToRootIdx[arg] = idx;
-        }
-      });
-    }
+        size_t idx = roots.size();
+        roots.push_back(varExpr);
+        valueToRootIdx[arg] = idx;
+      }
+    });
 
     // Step 2: Run equality saturation
     mlir::ematch::convertEmatchOpsToApplyRewrites(patternsModule);
