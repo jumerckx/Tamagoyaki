@@ -356,6 +356,29 @@ static void populateLowerHerbieConstantPatterns(RewritePatternSet &patterns) {
   patterns.add<LowerHerbieConstantPattern>(patterns.getContext());
 }
 
+class OriginalOpTracker : public mlir::RewriterBase::Listener {
+public:
+  void trackOriginal(mlir::Operation *op) { ops.insert(op); }
+
+  void notifyOperationReplaced(mlir::Operation *op,
+                               mlir::ValueRange newValues) override {
+    if (!ops.erase(op))
+      return;
+    if (!newValues.empty())
+      if (auto *newOp = newValues[0].getDefiningOp())
+        ops.insert(newOp);
+  }
+
+  void notifyOperationErased(mlir::Operation *op) override { ops.erase(op); }
+
+  bool isOriginal(mlir::Operation *op) const { return ops.contains(op); }
+
+  const llvm::DenseSet<mlir::Operation *> &getOps() const { return ops; }
+
+private:
+  llvm::DenseSet<mlir::Operation *> ops;
+};
+
 class HerbieOptimizePass
     : public impl::HerbieOptimizePassBase<HerbieOptimizePass> {
 public:
@@ -445,6 +468,16 @@ public:
       }
     });
 
+    OriginalOpTracker tracker;
+    irModule.walk([&](mlir::equivalence::GraphOp graphOp) {
+      graphOp.walk([&](Operation *op) {
+        if (!isa<equivalence::ClassOp, equivalence::GraphOp,
+                 equivalence::YieldOp>(op)) {
+          tracker.trackOriginal(op);
+        }
+      });
+    });
+
     // Step 2: Run equality saturation
     mlir::ematch::convertEmatchOpsToApplyRewrites(patternsModule);
 
@@ -453,11 +486,16 @@ public:
 
     bool saturationSuccess = mlir::ematch::runSaturation(
         irModule->getContext(), std::move(pdlPattern), irModule,
-        maxSaturationIters, maxNodes);
+        maxSaturationIters, maxNodes, &tracker);
 
     if (!saturationSuccess) {
       LLVM_DEBUG(llvm::dbgs() << "Warning: Saturation returned false\n");
     }
+
+    for (Operation *op : tracker.getOps()) {
+      op->setAttr("herbie.is_original", UnitAttr::get(op->getContext()));
+    }
+    return;
 
     // Lower herbie sound ops introduced during saturation
     {
