@@ -31,6 +31,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
@@ -403,77 +404,90 @@ private:
   llvm::DenseSet<mlir::Operation *> ops;
 };
 
+/// Recursively evaluate a single Value by walking backwards through the
+/// selected program.  ClassOps forward to their selected operand;
+/// ordinary ops are folded from their operands.  Results are cached in
+/// \p valueMap so each Value is computed at most once.
+static std::optional<Attribute>
+evalValue(Value v, DenseMap<Value, Attribute> &valueMap) {
+  // Already computed (or seeded as a function argument)?
+  auto it = valueMap.find(v);
+  if (it != valueMap.end())
+    return it->second;
+
+  Operation *op = v.getDefiningOp();
+  if (!op)
+    return std::nullopt; // Block argument that wasn't seeded – shouldn't
+                         // happen.
+
+  // ClassOps just forward their selected operand's value.
+  if (auto classOp = dyn_cast<ClassOp>(op)) {
+    auto mci = classOp.getMinCostIndex();
+    if (!mci)
+      return std::nullopt;
+    Value selected = classOp->getOperand(*mci);
+    auto result = evalValue(selected, valueMap);
+    if (!result)
+      return std::nullopt;
+    valueMap[classOp.getResult()] = *result;
+    return *result;
+  }
+
+  // Recursively evaluate operands.
+  SmallVector<Attribute> constOperands;
+  for (Value operand : op->getOperands()) {
+    auto operandAttr = evalValue(operand, valueMap);
+    if (!operandAttr)
+      return std::nullopt;
+    constOperands.push_back(*operandAttr);
+  }
+
+  // Fold this op on concrete constants.
+  SmallVector<OpFoldResult> foldResults;
+  if (failed(op->fold(constOperands, foldResults)))
+    return std::nullopt;
+
+  // Map each result to its folded attribute.
+  for (auto [val, fr] : llvm::zip(op->getResults(), foldResults)) {
+    auto attr = fr.dyn_cast<Attribute>();
+    if (!attr)
+      return std::nullopt;
+    valueMap[val] = attr;
+  }
+
+  // Return the attribute for the specific result we were asked about.
+  auto found = valueMap.find(v);
+  if (found == valueMap.end())
+    return std::nullopt;
+  return found->second;
+}
+
 /// Evaluate the currently-selected program inside \p graphOp on a single
-/// sample point.  Function arguments (the block arguments of the function
-/// that encloses the graph) are mapped to the doubles in \p inputValues.
+/// sample point.  Function arguments are mapped to the doubles in
+/// \p inputValues.
 ///
-/// The evaluation walks the selected operations in topological order and
-/// uses MLIR's fold() infrastructure to compute each operation's result
-/// from constant operand attributes.  Returns the graph's output as a
-/// double, or std::nullopt if any fold fails.
+/// Instead of computing a full topological sort, this walks backwards
+/// from the graph's yield operand, evaluating only the operations on
+/// the selected path.
 static std::optional<double> foldSelectedProgram(GraphOp graphOp,
                                                  ArrayRef<Value> funcArgs,
                                                  ArrayRef<double> inputValues) {
   DenseMap<Value, Attribute> valueMap;
 
   // Seed function arguments with concrete FloatAttr values.
-  for (auto [arg, val] : llvm::zip(funcArgs, inputValues)) {
+  for (auto [arg, val] : llvm::zip(funcArgs, inputValues))
     valueMap[arg] = FloatAttr::get(arg.getType(), val);
-  }
-
-  auto sortedOps = computeSelectedTopoSort(graphOp);
-
-  for (Operation *op : sortedOps) {
-    // ClassOps just forward their selected operand's value.
-    if (auto classOp = dyn_cast<ClassOp>(op)) {
-      auto mci = classOp.getMinCostIndex();
-      if (!mci)
-        return std::nullopt;
-      Value selected = classOp->getOperand(*mci);
-      auto it = valueMap.find(selected);
-      if (it == valueMap.end())
-        return std::nullopt;
-      valueMap[classOp.getResult()] = it->second;
-      continue;
-    }
-
-    // Collect operand attributes for folding.
-    SmallVector<Attribute> constOperands;
-    bool allFound = true;
-    for (Value operand : op->getOperands()) {
-      auto it = valueMap.find(operand);
-      if (it == valueMap.end()) {
-        allFound = false;
-        break;
-      }
-      constOperands.push_back(it->second);
-    }
-    if (!allFound)
-      return std::nullopt;
-
-    // Use MLIR fold() to evaluate this op on concrete constants.
-    SmallVector<OpFoldResult> foldResults;
-    if (failed(op->fold(constOperands, foldResults)))
-      return std::nullopt;
-
-    // Map each result to its folded attribute.
-    for (auto [val, fr] : llvm::zip(op->getResults(), foldResults)) {
-      auto attr = fr.dyn_cast<Attribute>();
-      if (!attr)
-        return std::nullopt;
-      valueMap[val] = attr;
-    }
-  }
 
   // Read the graph's output from its yield operand.
   auto yieldOp = cast<YieldOp>(graphOp.getBody().front().getTerminator());
   if (yieldOp.getNumOperands() == 0)
     return std::nullopt;
-  auto it = valueMap.find(yieldOp.getOperand(0));
-  if (it == valueMap.end())
+
+  auto result = evalValue(yieldOp.getOperand(0), valueMap);
+  if (!result)
     return std::nullopt;
 
-  if (auto floatAttr = dyn_cast<FloatAttr>(it->second))
+  if (auto floatAttr = dyn_cast<FloatAttr>(*result))
     return floatAttr.getValueAsDouble();
   return std::nullopt;
 }
@@ -672,8 +686,6 @@ public:
     if (!saturationSuccess) {
       LLVM_DEBUG(llvm::dbgs() << "Warning: Saturation returned false\n");
     }
-
-    // (original ops are accessible via tracker.getOps())
 
     // Lower herbie sound ops / constants introduced during saturation.
     {
