@@ -12,17 +12,20 @@
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
+#include "mlir/IR/Attributes.h"
 #include "mlir/IR/Block.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/DialectRegistry.h"
+#include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/OwningOpRef.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Support/LLVM.h"
+#include "mlir/Support/WalkResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
@@ -462,13 +465,9 @@ evalValue(Value v, DenseMap<Value, Attribute> &valueMap) {
   return found->second;
 }
 
-/// Evaluate the currently-selected program inside \p graphOp on a single
+/// Evaluate the currently-selected program inside `graphOp` on a single
 /// sample point.  Function arguments are mapped to the doubles in
-/// \p inputValues.
-///
-/// Instead of computing a full topological sort, this walks backwards
-/// from the graph's yield operand, evaluating only the operations on
-/// the selected path.
+/// `inputValues`.
 static std::optional<double> foldSelectedProgram(GraphOp graphOp,
                                                  ArrayRef<Value> funcArgs,
                                                  ArrayRef<double> inputValues) {
@@ -492,16 +491,323 @@ static std::optional<double> foldSelectedProgram(GraphOp graphOp,
   return std::nullopt;
 }
 
+// ===----------------------------------------------------------------------===
+// // HerbieOptimizePass
+// ===----------------------------------------------------------------------===
+
 class HerbieOptimizePass
     : public impl::HerbieOptimizePassBase<HerbieOptimizePass> {
 public:
   using impl::HerbieOptimizePassBase<
       HerbieOptimizePass>::HerbieOptimizePassBase;
 
+  /// Compile the original (flat) function body to a set of Rival
+  /// expression roots suitable for ground-truth evaluation.
+  LogicalResult compileGroundTruth(mlir::func::FuncOp funcOp,
+                                   RivalExprArena *arena,
+                                   std::vector<std::string> &varNameStorage,
+                                   SmallVectorImpl<uint32_t> &roots) {
+    DenseMap<Value, uint32_t> valToExpr;
+
+    for (auto [i, arg] : llvm::enumerate(funcOp.getArguments())) {
+      std::string name = "arg" + std::to_string(i);
+      varNameStorage.push_back(name);
+      valToExpr[arg] = rival_expr_var(arena, varNameStorage.back().c_str());
+    }
+
+    for (Operation &op : funcOp.front()) {
+      if (isa<mlir::func::ReturnOp>(&op))
+        continue;
+
+      auto iface = dyn_cast<RivalCompileableInterface>(&op);
+      if (!iface) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "Ground-truth compile: skipping " << op.getName()
+                   << " (no RivalCompileableInterface)\n");
+        continue;
+      }
+
+      SmallVector<uint32_t> operandExprs;
+      for (Value operand : op.getOperands()) {
+        if (!valToExpr.contains(operand))
+          return op.emitError()
+                 << "operand not compiled prior to use in ground-truth";
+        operandExprs.push_back(valToExpr[operand]);
+      }
+      auto resultExprs = iface.compile(arena, operandExprs);
+      for (auto [v, e] : llvm::zip(op.getResults(), resultExprs))
+        valToExpr[v] = e;
+    }
+
+    funcOp.walk([&](mlir::func::ReturnOp retOp) {
+      for (Value operand : retOp.getOperands()) {
+        assert(valToExpr.contains(operand));
+        roots.push_back(valToExpr[operand]);
+      }
+    });
+
+    if (roots.empty())
+      return funcOp.emitError() << "function has no return values to optimize";
+
+    return success();
+  }
+
+  /// Run the full optimization pipeline on a single function:
+  /// interval search, ground-truth evaluation, equality saturation,
+  /// alternative evaluation, and extraction.
+  LogicalResult processFunction(mlir::func::FuncOp funcOp,
+                                ModuleOp convertedPatterns) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "=== Optimizing " << funcOp.getName() << " ===\n");
+
+    IntervalSearchOptions intervalConfig;
+    intervalConfig.maxSearchDepth = maxSearchDepth;
+    intervalConfig.analysisPrecision = analysisPrecision;
+    intervalConfig.maxRivalPrecision = maxRivalPrecision;
+    intervalConfig.maxRivalIterations = maxRivalIterations;
+
+    // ---------------------------------------------------------------
+    // Step 1: Interval search on the original (flat) function.
+    // ---------------------------------------------------------------
+    auto intervalResult = runIntervalSearchOnFunction(funcOp, intervalConfig);
+    if (!intervalResult.success)
+      return funcOp.emitError() << "interval search failed";
+
+    LLVM_DEBUG({
+      llvm::dbgs() << "Interval search: "
+                   << intervalResult.searchResult.sampleableRegions.size()
+                   << " sampleable regions, valid fraction: "
+                   << intervalResult.searchResult.statistics.validFraction
+                   << "\n";
+    });
+
+    // ---------------------------------------------------------------
+    // Step 2: Compile the original body to Rival and evaluate
+    //         ground truth at high precision.
+    // ---------------------------------------------------------------
+    SamplingResult groundTruth;
+    {
+      TAMAGOYAKI_SCOPED_TIMER("GroundTruthCompileAndEvaluate");
+
+      RivalExprArena *gtArena = rival_expr_arena_new();
+      if (!gtArena)
+        return funcOp.emitError() << "failed to create rival expression arena";
+
+      std::vector<std::string> varNameStorage;
+      SmallVector<uint32_t> gtRoots;
+
+      if (failed(
+              compileGroundTruth(funcOp, gtArena, varNameStorage, gtRoots))) {
+        rival_expr_arena_free(gtArena);
+        return failure();
+      }
+
+      std::vector<const char *> varNamePtrs;
+      varNamePtrs.reserve(varNameStorage.size());
+      for (auto &name : varNameStorage)
+        varNamePtrs.push_back(name.c_str());
+
+      RivalDiscretization *disc = rival_disc_f64(analysisPrecision);
+      groundTruth = sampleAndEvaluate(
+          gtArena, gtRoots, varNamePtrs, disc, intervalResult.searchResult,
+          intervalResult.floatBitWidths,
+          /*numSamples=*/256,
+          /*evalMaxIterations=*/100,
+          /*evalMaxPrecision=*/2000, analysisPrecision);
+      rival_disc_free(disc);
+      rival_expr_arena_free(gtArena);
+
+      if (groundTruth.sampled == 0 || groundTruth.results.empty())
+        return funcOp.emitError()
+               << "ground-truth evaluation produced no valid samples";
+
+      LLVM_DEBUG(llvm::dbgs()
+                 << "Ground truth: " << groundTruth.sampled
+                 << " / 256 points (skipped " << groundTruth.skipped << ")\n");
+    }
+
+    // ---------------------------------------------------------------
+    // Step 3: Insert equivalence graph, track original operations.
+    // ---------------------------------------------------------------
+    if (failed(mlir::equivalence::insertGraphInFunction(
+            funcOp, /*insertSingleElementEqs=*/false)))
+      return funcOp.emitError() << "failed to insert equivalence graph";
+
+    OriginalOpTracker tracker;
+    funcOp.walk([&](equivalence::GraphOp graphOp) {
+      graphOp.walk([&](Operation *op) {
+        if (!isa<equivalence::ClassOp, equivalence::GraphOp,
+                 equivalence::YieldOp>(op))
+          tracker.trackOriginal(op);
+      });
+    });
+
+    // ---------------------------------------------------------------
+    // Step 4: Equality saturation with a fresh clone of the patterns.
+    // ---------------------------------------------------------------
+    {
+      TAMAGOYAKI_SCOPED_TIMER("EqualitySaturation");
+
+      // auto clonedPatterns =
+      //     cast<ModuleOp>(convertedPatterns->clone());
+      PDLPatternModule pdlPattern(convertedPatterns);
+
+      ModuleOp parentModule = funcOp->getParentOfType<ModuleOp>();
+      bool ok = mlir::ematch::runSaturation(
+          parentModule->getContext(), std::move(pdlPattern), parentModule,
+          maxSaturationIters, maxNodes, &tracker);
+      if (!ok)
+        return funcOp.emitError() << "equality saturation failed";
+    }
+
+    // Lower herbie sound ops / constants introduced during saturation.
+    {
+      TAMAGOYAKI_SCOPED_TIMER("LowerHerbieSoundOpsPatterns");
+      RewritePatternSet patterns(funcOp->getContext());
+      populateLowerHerbieSoundOpsPatterns(patterns);
+      populateLowerHerbieConstantPatterns(patterns);
+      GreedyRewriteConfig config;
+      config.enableConstantCSE(false);
+      config.enableFolding(false);
+      (void)applyPatternsGreedily(funcOp, std::move(patterns), config);
+    }
+
+    // ---------------------------------------------------------------
+    // Step 5: Greedy initial selection.
+    // ---------------------------------------------------------------
+    funcOp.walk(
+        [&](GraphOp graphOp) { selectGreedy(graphOp, 1, "herbie.cost"); });
+
+    // for each original operation, collect its class (deduplicate classes).
+    // for each class:
+    //   for each operand in class:
+    //     * set min_cost_index of class to point to this operand
+    //     * evaluate the "selected" program on the samples
+    //       do this by collecting the operations to execute through a backwards
+    //       walk (from yield to operands) put the loop over samples innermost:
+    //       for op in operations { for sample in samples: run op}
+    //     * compute the cost as the ulp difference with groundtruth.
+    // When all classes are processed, pick the single min_cost_index which has
+    // the lowest total ulp. Finally, extract the graph.
+
+    // ---------------------------------------------------------------
+    // Step 6: Per-class alternative evaluation and extraction.
+    // ---------------------------------------------------------------
+    {
+      TAMAGOYAKI_SCOPED_TIMER("PerClassAlternativeEvaluation");
+
+      SmallVector<Value> funcArgs(funcOp.getArguments());
+
+      funcOp.walk([&](GraphOp graphOp) {
+        // Collect equivalence classes that contain original alternatives.
+        struct ClassCandidate {
+          ClassOp classOp;
+          SmallVector<unsigned> originalIndices;
+        };
+        llvm::DenseMap<Operation *, ClassCandidate> candidateMap;
+
+        for (Operation *origOp : tracker.getOps()) {
+          for (Value result : origOp->getResults()) {
+            for (OpOperand &use : result.getUses()) {
+              auto classOp = dyn_cast<ClassOp>(use.getOwner());
+              if (!classOp || classOp->getParentOp() != graphOp.getOperation())
+                continue;
+              unsigned idx = use.getOperandNumber();
+              auto &entry = candidateMap[classOp.getOperation()];
+              if (!entry.classOp)
+                entry.classOp = classOp;
+              entry.originalIndices.push_back(idx);
+            }
+          }
+        }
+
+        LLVM_DEBUG(llvm::dbgs()
+                   << "Alternative evaluation: " << candidateMap.size()
+                   << " classes with original ops\n");
+
+        struct BestChoice {
+          ClassOp classOp;
+          unsigned bestIndex;
+        };
+        SmallVector<BestChoice> bestChoices;
+
+        for (auto &[_, cand] : candidateMap) {
+          std::optional<uint64_t> savedMCI = cand.classOp.getMinCostIndex();
+
+          // Evaluate the current (greedy) selection as the baseline.
+          double baselineError = 0.0;
+          for (size_t s = 0; s < groundTruth.points.size(); ++s) {
+            auto computed =
+                foldSelectedProgram(graphOp, funcArgs, groundTruth.points[s]);
+            if (!computed)
+              continue;
+            baselineError += ulpDistance(*computed, groundTruth.results[s][0]);
+          }
+
+          double bestError = baselineError;
+          unsigned bestIdx = static_cast<unsigned>(savedMCI.value_or(0));
+
+          // Try each original alternative.
+          for (unsigned origIdx : cand.originalIndices) {
+            cand.classOp.setMinCostIndex(origIdx);
+
+            double totalError = 0.0;
+            for (size_t s = 0; s < groundTruth.points.size(); ++s) {
+              auto computed =
+                  foldSelectedProgram(graphOp, funcArgs, groundTruth.points[s]);
+              if (!computed)
+                continue;
+              totalError += ulpDistance(*computed, groundTruth.results[s][0]);
+            }
+
+            LLVM_DEBUG({
+              llvm::dbgs() << "  Class ";
+              cand.classOp->print(llvm::dbgs(),
+                                  OpPrintingFlags().skipRegions());
+              llvm::dbgs() << " alt " << origIdx << ": totalUlp=" << totalError
+                           << "\n";
+            });
+
+            if (totalError < bestError) {
+              bestError = totalError;
+              bestIdx = origIdx;
+            }
+          }
+
+          // Reset to initial greedy selection before recording.
+          if (savedMCI)
+            cand.classOp.setMinCostIndex(*savedMCI);
+
+          bestChoices.push_back({cand.classOp, bestIdx});
+        }
+
+        // Apply best selections, extract, and inline.
+        for (auto &choice : bestChoices) {
+          choice.classOp.setMinCostIndex(choice.bestIndex);
+          LLVM_DEBUG({
+            llvm::dbgs() << "Best selection for class: idx=" << choice.bestIndex
+                         << " ";
+            choice.classOp->print(llvm::dbgs(),
+                                  OpPrintingFlags().skipRegions());
+            llvm::dbgs() << "\n";
+          });
+        }
+
+        extractFromGraph(graphOp);
+        inlineGraphOp(graphOp);
+      });
+    }
+
+    return success();
+  }
+
   void runOnOperation() final {
     TAMAGOYAKI_SCOPED_TIMER("HerbieOptimizePass");
     mlir::ModuleOp module = getOperation();
 
+    // ---------------------------------------------------------------
+    // Resolve the patterns and IR modules.
+    // ---------------------------------------------------------------
     ModuleOp patternsModule;
     ModuleOp irModule;
     OwningOpRef<ModuleOp> parsedPatternsModule;
@@ -522,336 +828,27 @@ public:
       irModule = module.lookupSymbol<ModuleOp>(
           StringAttr::get(module->getContext(), "ir"));
 
-      if (!patternsModule || !irModule)
-        return;
-    }
-
-    IntervalSearchOptions intervalConfig;
-    intervalConfig.maxSearchDepth = maxSearchDepth;
-    intervalConfig.analysisPrecision = analysisPrecision;
-    intervalConfig.maxRivalPrecision = maxRivalPrecision;
-    intervalConfig.maxRivalIterations = maxRivalIterations;
-
-    // =================================================================
-    // Step 1: Interval search and ground-truth evaluation.
-    //
-    // We evaluate the *original* function at high precision BEFORE
-    // inserting equivalence graphs.  Only the function return value(s)
-    // are compiled to Rival roots – we do not need sub-expression
-    // values since accuracy will be assessed by folding the whole
-    // selected program later.
-    // =================================================================
-
-    SmallVector<FunctionIntervalResult> intervalResults;
-
-    RivalExprArena *gtArena = rival_expr_arena_new();
-    if (!gtArena) {
-      llvm::errs() << "Failed to create rival expression arena\n";
-      return signalPassFailure();
-    }
-
-    // One root per function return value; variable names shared across
-    // functions (they are positional: arg0, arg1, …).
-    SmallVector<uint32_t> gtRoots;
-    std::vector<std::string> gtVarNameStorage;
-    size_t totalFuncArgs = 0;
-
-    irModule.walk([&](mlir::func::FuncOp funcOp) {
-      // 1a. Interval search on the original (flat) function.
-      auto &intervalResult = intervalResults.emplace_back(
-          runIntervalSearchOnFunction(funcOp, intervalConfig));
-
-      if (!intervalResult.success) {
-        funcOp.emitWarning() << "Interval search failed, continuing anyway";
-        return;
-      }
-
-      LLVM_DEBUG({
-        llvm::dbgs() << "Interval search for " << funcOp.getName() << ": "
-                     << intervalResult.searchResult.sampleableRegions.size()
-                     << " sampleable regions, valid fraction: "
-                     << intervalResult.searchResult.statistics.validFraction
-                     << "\n";
-      });
-
-      // 1b. Compile the original function body to Rival.
-      size_t numArgs = funcOp.getNumArguments();
-      DenseMap<Value, uint32_t> valToExpr;
-
-      for (auto [i, arg] : llvm::enumerate(funcOp.getArguments())) {
-        std::string name = "arg" + std::to_string(i);
-        gtVarNameStorage.push_back(name);
-        uint32_t varExpr =
-            rival_expr_var(gtArena, gtVarNameStorage.back().c_str());
-        valToExpr[arg] = varExpr;
-      }
-      totalFuncArgs = std::max(totalFuncArgs, numArgs);
-
-      // Walk operations in the function body (before graph insertion
-      // the body is a flat sequence of ops).
-      for (Operation &op : funcOp.front()) {
-        if (isa<mlir::func::ReturnOp>(&op))
-          continue;
-
-        auto iface = dyn_cast<RivalCompileableInterface>(&op);
-        if (!iface) {
-          LLVM_DEBUG(llvm::dbgs()
-                     << "Ground-truth compile: skipping " << op.getName()
-                     << " (no RivalCompileableInterface)\n");
-          continue;
-        }
-
-        SmallVector<uint32_t> operandExprs;
-        for (Value operand : op.getOperands()) {
-          assert(valToExpr.contains(operand) &&
-                 "operand must have been compiled already");
-          operandExprs.push_back(valToExpr[operand]);
-        }
-        auto resultExprs = iface.compile(gtArena, operandExprs);
-        for (auto [v, e] : llvm::zip(op.getResults(), resultExprs))
-          valToExpr[v] = e;
-      }
-
-      // Register only the function return value(s) as roots.
-      funcOp.walk([&](mlir::func::ReturnOp retOp) {
-        for (Value operand : retOp.getOperands()) {
-          assert(valToExpr.contains(operand));
-          gtRoots.push_back(valToExpr[operand]);
-        }
-      });
-    });
-
-    // 1c. Sample input points and evaluate ground truth at high precision.
-    std::vector<const char *> gtVarNamePtrs;
-    gtVarNamePtrs.reserve(gtVarNameStorage.size());
-    for (auto &name : gtVarNameStorage)
-      gtVarNamePtrs.push_back(name.c_str());
-
-    RivalDiscretization *disc = rival_disc_f64(analysisPrecision);
-    SamplingResult groundTruth;
-    bool hasGroundTruth = false;
-
-    if (!intervalResults.empty() && intervalResults[0].success &&
-        !gtRoots.empty()) {
-      TAMAGOYAKI_SCOPED_TIMER("GroundTruthSampleAndEvaluate");
-      groundTruth = sampleAndEvaluate(
-          gtArena, gtRoots, gtVarNamePtrs, disc,
-          intervalResults[0].searchResult, intervalResults[0].floatBitWidths,
-          /*numSamples=*/256,
-          /*evalMaxIterations=*/100,
-          /*evalMaxPrecision=*/2000, analysisPrecision);
-      hasGroundTruth = groundTruth.sampled > 0 && !groundTruth.results.empty();
-
-      LLVM_DEBUG(llvm::dbgs()
-                 << "Ground truth: sampled " << groundTruth.sampled
-                 << " / 256 points (skipped " << groundTruth.skipped << ")\n");
-    }
-
-    rival_disc_free(disc);
-    rival_expr_arena_free(gtArena);
-
-    // =================================================================
-    // Step 2: Insert equivalence graphs, track original operations,
-    //         run equality saturation, and lower sound ops.
-    // =================================================================
-
-    irModule.walk([&](mlir::func::FuncOp funcOp) {
-      if (mlir::failed(mlir::equivalence::insertGraphInFunction(
-              funcOp, /*insertSingleElementEqs=*/false))) {
-        funcOp.emitError() << "Failed to insert equivalence graph";
+      if (!patternsModule || !irModule) {
+        emitError(module.getLoc()) << "missing 'patterns' or 'ir' submodule";
         return signalPassFailure();
       }
-    });
+    }
 
-    // Track which operations existed before saturation.
-    OriginalOpTracker tracker;
-    irModule.walk([&](mlir::equivalence::GraphOp graphOp) {
-      graphOp.walk([&](Operation *op) {
-        if (!isa<equivalence::ClassOp, equivalence::GraphOp,
-                 equivalence::YieldOp>(op)) {
-          tracker.trackOriginal(op);
-        }
-      });
-    });
-
-    // Run equality saturation.
+    // Convert ematch ops once; each function will clone from this.
     mlir::ematch::convertEmatchOpsToApplyRewrites(patternsModule);
-    patternsModule.getOperation()->remove();
-    PDLPatternModule pdlPattern(patternsModule);
 
-    bool saturationSuccess = mlir::ematch::runSaturation(
-        irModule->getContext(), std::move(pdlPattern), irModule,
-        maxSaturationIters, maxNodes, &tracker);
-
-    if (!saturationSuccess) {
-      LLVM_DEBUG(llvm::dbgs() << "Warning: Saturation returned false\n");
-    }
-
-    // Lower herbie sound ops / constants introduced during saturation.
-    {
-      TAMAGOYAKI_SCOPED_TIMER("LowerHerbieSoundOpsPatterns");
-      RewritePatternSet patterns(irModule.getContext());
-      populateLowerHerbieSoundOpsPatterns(patterns);
-      populateLowerHerbieConstantPatterns(patterns);
-      GreedyRewriteConfig config;
-      config.enableConstantCSE(false);
-      config.enableFolding(false);
-      (void)applyPatternsGreedily(irModule, std::move(patterns), config);
-    }
-
-    // =================================================================
-    // Step 3: Initial greedy selection based on default cost.
-    // =================================================================
-
-    irModule.walk(
-        [&](GraphOp graphOp) { selectGreedy(graphOp, 1, "herbie.cost"); });
-
-    // =================================================================
-    // Step 4: Per-class alternative evaluation.
-    //
-    // For every equivalence class that contains the result of an
-    // *original* operation, we temporarily switch the class's selection
-    // to that original alternative, fold the entire selected program on
-    // every sampled point, and compute an accuracy score (total ULP
-    // distance to the high-precision ground truth).  After all
-    // alternatives in a class have been tried we reset the selection to
-    // the initial greedy choice, then record which alternative was best.
-    // =================================================================
-
-    if (hasGroundTruth) {
-      TAMAGOYAKI_SCOPED_TIMER("PerClassAlternativeEvaluation");
-
-      // Collect the unique ClassOps that contain results of original
-      // ops, by walking the tracker's set and finding each op's
-      // parent ClassOp via its result uses.
-      struct ClassCandidate {
-        ClassOp classOp;
-        SmallVector<unsigned> originalIndices;
-      };
-      llvm::DenseMap<Operation *, ClassCandidate> candidateMap;
-
-      for (Operation *origOp : tracker.getOps()) {
-        for (Value result : origOp->getResults()) {
-          for (OpOperand &use : result.getUses()) {
-            auto classOp = dyn_cast<ClassOp>(use.getOwner());
-            if (!classOp)
-              continue;
-            unsigned idx = use.getOperandNumber();
-            auto &entry = candidateMap[classOp.getOperation()];
-            if (!entry.classOp)
-              entry.classOp = classOp;
-            entry.originalIndices.push_back(idx);
-          }
-        }
-      }
-
-      SmallVector<ClassCandidate> candidates;
-      for (auto &[_, cand] : candidateMap)
-        candidates.push_back(std::move(cand));
-
-      LLVM_DEBUG(llvm::dbgs() << "Alternative evaluation: " << candidates.size()
-                              << " classes with original ops\n");
-
-      irModule.walk([&](mlir::func::FuncOp funcOp) {
-        SmallVector<Value> funcArgs(funcOp.getArguments());
-
-        funcOp.walk([&](GraphOp graphOp) {
-          struct BestChoice {
-            ClassOp classOp;
-            unsigned bestIndex;
-          };
-          SmallVector<BestChoice> bestChoices;
-
-          for (auto &cand : candidates) {
-            // Only consider candidates inside this graphOp.
-            if (cand.classOp->getParentOp() != graphOp.getOperation())
-              continue;
-
-            std::optional<uint64_t> savedMCI = cand.classOp.getMinCostIndex();
-
-            // Evaluate the current (greedy) selection as the baseline.
-            double baselineError = 0.0;
-            size_t baselineCount = 0;
-            for (size_t s = 0; s < groundTruth.points.size(); ++s) {
-              auto computed =
-                  foldSelectedProgram(graphOp, funcArgs, groundTruth.points[s]);
-              if (!computed)
-                continue;
-              double gt = groundTruth.results[s][0];
-              baselineError += ulpDistance(*computed, gt);
-              ++baselineCount;
-            }
-
-            double bestError = baselineError;
-            unsigned bestIdx = static_cast<unsigned>(savedMCI.value_or(0));
-
-            // Try each original alternative.
-            for (unsigned origIdx : cand.originalIndices) {
-              cand.classOp.setMinCostIndex(origIdx);
-
-              double totalError = 0.0;
-              size_t count = 0;
-              for (size_t s = 0; s < groundTruth.sampled; ++s) {
-                auto computed = foldSelectedProgram(graphOp, funcArgs,
-                                                    groundTruth.points[s]);
-                if (!computed)
-                  continue;
-                double gt = groundTruth.results[s][0];
-                totalError += ulpDistance(*computed, gt);
-                ++count;
-              }
-
-              LLVM_DEBUG({
-                llvm::dbgs() << "  Class ";
-                cand.classOp->print(llvm::dbgs(),
-                                    OpPrintingFlags().skipRegions());
-                llvm::dbgs()
-                    << " alt " << origIdx << ": totalUlp=" << totalError
-                    << " samples=" << count << "\n";
-              });
-
-              if (totalError < bestError) {
-                bestError = totalError;
-                bestIdx = origIdx;
-              }
-            }
-
-            // Reset to initial greedy selection.
-            if (savedMCI)
-              cand.classOp.setMinCostIndex(*savedMCI);
-
-            bestChoices.push_back({cand.classOp, bestIdx});
-          }
-
-          // =========================================================
-          // Step 5: Apply best selections, extract, and inline.
-          // =========================================================
-
-          for (auto &choice : bestChoices) {
-            choice.classOp.setMinCostIndex(choice.bestIndex);
-            LLVM_DEBUG({
-              llvm::dbgs() << "Best selection for class: idx="
-                           << choice.bestIndex << " ";
-              choice.classOp->print(llvm::dbgs(),
-                                    OpPrintingFlags().skipRegions());
-              llvm::dbgs() << "\n";
-            });
-          }
-
-          extractFromGraph(graphOp);
-          inlineGraphOp(graphOp);
+    // ---------------------------------------------------------------
+    // Process each function independently.
+    // ---------------------------------------------------------------
+    auto walkResult =
+        irModule.walk([&](mlir::func::FuncOp funcOp) -> WalkResult {
+          if (failed(processFunction(funcOp, patternsModule)))
+            return WalkResult::interrupt();
+          return WalkResult::advance();
         });
-      });
-    } else {
-      // No ground truth available; just extract with the greedy
-      // selection and inline.
-      LLVM_DEBUG(llvm::dbgs()
-                 << "No ground truth; extracting with greedy selection\n");
-      irModule.walk([&](GraphOp graphOp) {
-        extractFromGraph(graphOp);
-        inlineGraphOp(graphOp);
-      });
-    }
+
+    if (walkResult.wasInterrupted())
+      return signalPassFailure();
   }
 };
 
