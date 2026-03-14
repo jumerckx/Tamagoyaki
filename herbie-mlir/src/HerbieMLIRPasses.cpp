@@ -30,6 +30,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
@@ -40,6 +41,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <functional>
+#include <limits>
 #include <math.h>
 #include <mpfr.h>
 #include <optional>
@@ -119,6 +122,176 @@ static double ulpDistance(double a, double b) {
     bi = INT64_MIN - bi;
   int64_t diff = ai - bi;
   return static_cast<double>(diff < 0 ? -diff : diff);
+}
+
+/// Evaluate the currently-selected program inside `graphOp` on multiple
+/// sample points simultaneously.  Function arguments are mapped column-wise
+/// from `inputColumns` (one vector per argument, each of length
+/// `numSamples`).  Operations are processed in topological order with the
+/// sample loop innermost for cache-friendliness.
+///
+/// Returns one output double per sample, or std::nullopt on failure.
+static std::optional<SmallVector<double>>
+foldSelectedProgramBatch(GraphOp graphOp, ArrayRef<Value> funcArgs,
+                         ArrayRef<SmallVector<double>> inputColumns,
+                         size_t numSamples) {
+  // Map each Value to a vector of Attributes, one per sample.
+  DenseMap<Value, SmallVector<Attribute>> valueMap;
+
+  // Seed function arguments with concrete FloatAttr columns.
+  for (auto [arg, col] : llvm::zip(funcArgs, inputColumns)) {
+    auto &attrs = valueMap[arg];
+    attrs.reserve(numSamples);
+    for (size_t s = 0; s < numSamples; ++s)
+      attrs.push_back(FloatAttr::get(arg.getType(), col[s]));
+  }
+
+  auto yieldOp = cast<YieldOp>(graphOp.getBody().front().getTerminator());
+  if (yieldOp.getNumOperands() != 1)
+    return std::nullopt;
+
+  Value outputVal = yieldOp.getOperand(0);
+
+  SmallVector<Operation *> sortedOps;
+  DenseSet<Operation *> visited;
+
+  // Walk backwards from a value to its defining op and recurse on operands.
+  // Returns false on failure (e.g. missing min-cost index on a ClassOp).
+  std::function<bool(Value)> visit = [&](Value val) -> bool {
+    Operation *defOp = val.getDefiningOp();
+    if (!defOp)
+      return true; // block argument — already seeded in valueMap
+
+    if (!visited.insert(defOp).second)
+      return true; // already scheduled
+
+    // For ClassOps only follow the selected (min-cost) operand.
+    if (auto classOp = dyn_cast<ClassOp>(defOp)) {
+      auto mci = classOp.getMinCostIndex();
+      if (!mci)
+        return false;
+      if (!visit(classOp->getOperand(*mci)))
+        return false;
+    } else {
+      for (Value operand : defOp->getOperands())
+        if (!visit(operand))
+          return false;
+    }
+
+    // Post-order: all dependencies are already in sortedOps.
+    sortedOps.push_back(defOp);
+    return true;
+  };
+
+  if (!visit(outputVal))
+    return std::nullopt;
+
+  // For each op in topological order, evaluate across all samples
+  // (sample loop innermost).
+  for (Operation *op : sortedOps) {
+    if (isa<YieldOp>(op))
+      continue;
+
+    // ClassOps just forward their selected operand's column.
+    if (auto classOp = dyn_cast<ClassOp>(op)) {
+      auto mci = classOp.getMinCostIndex();
+      if (!mci)
+        return std::nullopt;
+      Value selected = classOp->getOperand(*mci);
+      auto it = valueMap.find(selected);
+      if (it == valueMap.end())
+        return std::nullopt;
+      auto col = it->second;
+      valueMap[classOp.getResult()] = std::move(col);
+      continue;
+    }
+
+    // Don't try to simulate the results of a region operation as we can't
+    // guarantee that folding will be out-of-place. We don't allow in-place
+    // folds as the desire here is for simulated execution, and not general
+    // folding.
+    if (op->getNumRegions())
+      return std::nullopt;
+
+    // Pre-allocate result columns for this op.
+    for (Value result : op->getResults())
+      valueMap[result].resize(numSamples);
+
+    // Inner loop over samples.
+    for (size_t s = 0; s < numSamples; ++s) {
+      SmallVector<Attribute> constOperands;
+      constOperands.reserve(op->getNumOperands());
+      bool operandMissing = false;
+      for (Value operand : op->getOperands()) {
+        auto it = valueMap.find(operand);
+        if (it == valueMap.end() || !it->second[s]) {
+          operandMissing = true;
+          break;
+        }
+        constOperands.push_back(it->second[s]);
+      }
+      if (operandMissing)
+        return std::nullopt;
+
+      // Save the original operands and attributes just in case the operation
+      // folds in-place. The constant passed in may not correspond to the real
+      // runtime value, so in-place updates are not allowed.
+      SmallVector<Value, 8> originalOperands(op->getOperands());
+      DictionaryAttr originalAttrs = op->getAttrDictionary();
+
+      // Simulate the result of folding this operation to a constant. If
+      // folding fails, bail out.
+      SmallVector<OpFoldResult> foldResults;
+      foldResults.reserve(op->getNumResults());
+      if (failed(op->fold(constOperands, foldResults))) {
+        return std::nullopt;
+      }
+
+      // If the folding was in-place, reset the operation and bail out. We
+      // don't allow in-place folds as the desire here is for simulated
+      // execution, and not general folding.
+      if (foldResults.empty()) {
+        op->setOperands(originalOperands);
+        op->setAttrs(originalAttrs);
+        return std::nullopt;
+      }
+
+      assert(foldResults.size() == op->getNumResults() &&
+             "invalid result size");
+
+      // Merge the fold results into the value map for this sample.
+      for (auto [val, fr] : llvm::zip(op->getResults(), foldResults)) {
+        if (auto attr = llvm::dyn_cast_if_present<Attribute>(fr)) {
+          valueMap[val][s] = attr;
+        } else {
+          // The fold result is a Value — look it up in our value map.
+          Value foldedVal = cast<Value>(fr);
+          auto it = valueMap.find(foldedVal);
+          if (it == valueMap.end() || !it->second[s])
+            return std::nullopt;
+          valueMap[val][s] = it->second[s];
+        }
+      }
+    }
+  }
+
+  // Read output from the yield operand.
+  if (yieldOp.getNumOperands() == 0)
+    return std::nullopt;
+
+  auto it = valueMap.find(outputVal);
+  if (it == valueMap.end())
+    return std::nullopt;
+
+  SmallVector<double> results;
+  results.reserve(numSamples);
+  for (size_t s = 0; s < numSamples; ++s) {
+    if (auto fa = dyn_cast<FloatAttr>(it->second[s]))
+      results.push_back(fa.getValueAsDouble());
+    else
+      return std::nullopt;
+  }
+  return results;
 }
 
 namespace {
@@ -407,90 +580,6 @@ private:
   llvm::DenseSet<mlir::Operation *> ops;
 };
 
-/// Recursively evaluate a single Value by walking backwards through the
-/// selected program.  ClassOps forward to their selected operand;
-/// ordinary ops are folded from their operands.  Results are cached in
-/// \p valueMap so each Value is computed at most once.
-static std::optional<Attribute>
-evalValue(Value v, DenseMap<Value, Attribute> &valueMap) {
-  // Already computed (or seeded as a function argument)?
-  auto it = valueMap.find(v);
-  if (it != valueMap.end())
-    return it->second;
-
-  Operation *op = v.getDefiningOp();
-  if (!op)
-    return std::nullopt; // Block argument that wasn't seeded – shouldn't
-                         // happen.
-
-  // ClassOps just forward their selected operand's value.
-  if (auto classOp = dyn_cast<ClassOp>(op)) {
-    auto mci = classOp.getMinCostIndex();
-    if (!mci)
-      return std::nullopt;
-    Value selected = classOp->getOperand(*mci);
-    auto result = evalValue(selected, valueMap);
-    if (!result)
-      return std::nullopt;
-    valueMap[classOp.getResult()] = *result;
-    return *result;
-  }
-
-  // Recursively evaluate operands.
-  SmallVector<Attribute> constOperands;
-  for (Value operand : op->getOperands()) {
-    auto operandAttr = evalValue(operand, valueMap);
-    if (!operandAttr)
-      return std::nullopt;
-    constOperands.push_back(*operandAttr);
-  }
-
-  // Fold this op on concrete constants.
-  SmallVector<OpFoldResult> foldResults;
-  if (failed(op->fold(constOperands, foldResults)))
-    return std::nullopt;
-
-  // Map each result to its folded attribute.
-  for (auto [val, fr] : llvm::zip(op->getResults(), foldResults)) {
-    auto attr = fr.dyn_cast<Attribute>();
-    if (!attr)
-      return std::nullopt;
-    valueMap[val] = attr;
-  }
-
-  // Return the attribute for the specific result we were asked about.
-  auto found = valueMap.find(v);
-  if (found == valueMap.end())
-    return std::nullopt;
-  return found->second;
-}
-
-/// Evaluate the currently-selected program inside `graphOp` on a single
-/// sample point.  Function arguments are mapped to the doubles in
-/// `inputValues`.
-static std::optional<double> foldSelectedProgram(GraphOp graphOp,
-                                                 ArrayRef<Value> funcArgs,
-                                                 ArrayRef<double> inputValues) {
-  DenseMap<Value, Attribute> valueMap;
-
-  // Seed function arguments with concrete FloatAttr values.
-  for (auto [arg, val] : llvm::zip(funcArgs, inputValues))
-    valueMap[arg] = FloatAttr::get(arg.getType(), val);
-
-  // Read the graph's output from its yield operand.
-  auto yieldOp = cast<YieldOp>(graphOp.getBody().front().getTerminator());
-  if (yieldOp.getNumOperands() == 0)
-    return std::nullopt;
-
-  auto result = evalValue(yieldOp.getOperand(0), valueMap);
-  if (!result)
-    return std::nullopt;
-
-  if (auto floatAttr = dyn_cast<FloatAttr>(*result))
-    return floatAttr.getValueAsDouble();
-  return std::nullopt;
-}
-
 // ===----------------------------------------------------------------------===
 // // HerbieOptimizePass
 // ===----------------------------------------------------------------------===
@@ -632,14 +721,18 @@ public:
     if (failed(mlir::equivalence::insertGraphInFunction(
             funcOp, /*insertSingleElementEqs=*/false)))
       return funcOp.emitError() << "failed to insert equivalence graph";
+    GraphOp graphOp;
+    // graphOp = dyn_cast<GraphOp>(&funcOp.front().front());
+    // assert(graphOp);
+
+    graphOp = llvm::dyn_cast<GraphOp>(*funcOp.getOps().begin());
+    assert(graphOp);
 
     OriginalOpTracker tracker;
-    funcOp.walk([&](equivalence::GraphOp graphOp) {
-      graphOp.walk([&](Operation *op) {
-        if (!isa<equivalence::ClassOp, equivalence::GraphOp,
-                 equivalence::YieldOp>(op))
-          tracker.trackOriginal(op);
-      });
+    graphOp.walk([&](Operation *op) {
+      if (!isa<equivalence::ClassOp, equivalence::GraphOp,
+               equivalence::YieldOp>(op))
+        tracker.trackOriginal(op);
     });
 
     // ---------------------------------------------------------------
@@ -675,128 +768,97 @@ public:
     // ---------------------------------------------------------------
     // Step 5: Greedy initial selection.
     // ---------------------------------------------------------------
-    funcOp.walk(
-        [&](GraphOp graphOp) { selectGreedy(graphOp, 1, "herbie.cost"); });
-
-    // for each original operation, collect its class (deduplicate classes).
-    // for each class:
-    //   for each operand in class:
-    //     * set min_cost_index of class to point to this operand
-    //     * evaluate the "selected" program on the samples
-    //       do this by collecting the operations to execute through a backwards
-    //       walk (from yield to operands) put the loop over samples innermost:
-    //       for op in operations { for sample in samples: run op}
-    //     * compute the cost as the ulp difference with groundtruth.
-    // When all classes are processed, pick the single min_cost_index which has
-    // the lowest total ulp. Finally, extract the graph.
+    selectGreedy(graphOp, 1, "herbie.cost");
 
     // ---------------------------------------------------------------
-    // Step 6: Per-class alternative evaluation and extraction.
+    // Step 6: Per-class optimization via sample-based ULP evaluation.
     // ---------------------------------------------------------------
     {
-      TAMAGOYAKI_SCOPED_TIMER("PerClassAlternativeEvaluation");
+      TAMAGOYAKI_SCOPED_TIMER("PerClassOptimization");
 
       SmallVector<Value> funcArgs(funcOp.getArguments());
+      size_t numSamples = groundTruth.sampled;
+      size_t numArgs = funcArgs.size();
 
-      funcOp.walk([&](GraphOp graphOp) {
-        // Collect equivalence classes that contain original alternatives.
-        struct ClassCandidate {
-          ClassOp classOp;
-          SmallVector<unsigned> originalIndices;
-        };
-        llvm::DenseMap<Operation *, ClassCandidate> candidateMap;
+      // Build per-argument input columns from ground truth samples.
+      SmallVector<SmallVector<double>> inputColumns(numArgs);
+      for (size_t a = 0; a < numArgs; ++a) {
+        inputColumns[a].reserve(numSamples);
+        for (size_t s = 0; s < numSamples; ++s)
+          inputColumns[a].push_back(groundTruth.points[s][a]);
+      }
 
-        for (Operation *origOp : tracker.getOps()) {
-          for (Value result : origOp->getResults()) {
-            for (OpOperand &use : result.getUses()) {
-              auto classOp = dyn_cast<ClassOp>(use.getOwner());
-              if (!classOp || classOp->getParentOp() != graphOp.getOperation())
-                continue;
-              unsigned idx = use.getOperandNumber();
-              auto &entry = candidateMap[classOp.getOperation()];
-              if (!entry.classOp)
-                entry.classOp = classOp;
-              entry.originalIndices.push_back(idx);
+      // Collect ground truth output values.
+      SmallVector<double> gtOutputs;
+      gtOutputs.reserve(numSamples);
+      for (size_t s = 0; s < numSamples; ++s)
+        gtOutputs.push_back(groundTruth.results[s][0]);
+
+      // Collect unique ClassOps that contain at least one original
+      // operation among their operands (i.e. classes with alternatives).
+      SmallVector<ClassOp> classesToOptimize;
+      DenseSet<Operation *> seenClasses;
+      for (Operation *origOp : tracker.getOps()) {
+        for (Value result : origOp->getResults()) {
+          for (Operation *user : result.getUsers()) {
+            if (auto classOp = dyn_cast<ClassOp>(user)) {
+              if (seenClasses.insert(classOp.getOperation()).second)
+                classesToOptimize.push_back(classOp);
             }
           }
         }
+      }
 
-        LLVM_DEBUG(llvm::dbgs()
-                   << "Alternative evaluation: " << candidateMap.size()
-                   << " classes with original ops\n");
+      LLVM_DEBUG(llvm::dbgs() << "Optimizing " << classesToOptimize.size()
+                              << " equivalence classes\n");
 
-        struct BestChoice {
-          ClassOp classOp;
-          unsigned bestIndex;
-        };
-        SmallVector<BestChoice> bestChoices;
+      // For each class, try every operand and keep the one with the
+      // lowest total ULP distance to the ground truth.
+      for (ClassOp classOp : classesToOptimize) {
+        unsigned numOperands = classOp.getNumOperands();
+        if (numOperands <= 1)
+          continue;
 
-        for (auto &[_, cand] : candidateMap) {
-          std::optional<uint64_t> savedMCI = cand.classOp.getMinCostIndex();
+        double bestCost = std::numeric_limits<double>::infinity();
+        unsigned bestIndex = classOp.getMinCostIndex().value_or(0);
 
-          // Evaluate the current (greedy) selection as the baseline.
-          double baselineError = 0.0;
-          for (size_t s = 0; s < groundTruth.points.size(); ++s) {
-            auto computed =
-                foldSelectedProgram(graphOp, funcArgs, groundTruth.points[s]);
-            if (!computed)
-              continue;
-            baselineError += ulpDistance(*computed, groundTruth.results[s][0]);
+        for (unsigned i = 0; i < numOperands; ++i) {
+          // Temporarily point this class at operand i.
+          classOp.setMinCostIndex(i);
+
+          auto maybeOutputs = foldSelectedProgramBatch(
+              graphOp, funcArgs, inputColumns, numSamples);
+          if (!maybeOutputs)
+            continue;
+
+          // Sum the per-sample ULP distances.
+          double totalUlp = 0.0;
+          for (size_t s = 0; s < numSamples; ++s)
+            totalUlp += ulpDistance((*maybeOutputs)[s], gtOutputs[s]);
+
+          LLVM_DEBUG(llvm::dbgs()
+                     << "  Class " << classOp.getLoc() << " operand " << i
+                     << ": total ULP = " << totalUlp << "\n");
+
+          if (totalUlp < bestCost) {
+            bestCost = totalUlp;
+            bestIndex = i;
           }
-
-          double bestError = baselineError;
-          unsigned bestIdx = static_cast<unsigned>(savedMCI.value_or(0));
-
-          // Try each original alternative.
-          for (unsigned origIdx : cand.originalIndices) {
-            cand.classOp.setMinCostIndex(origIdx);
-
-            double totalError = 0.0;
-            for (size_t s = 0; s < groundTruth.points.size(); ++s) {
-              auto computed =
-                  foldSelectedProgram(graphOp, funcArgs, groundTruth.points[s]);
-              if (!computed)
-                continue;
-              totalError += ulpDistance(*computed, groundTruth.results[s][0]);
-            }
-
-            LLVM_DEBUG({
-              llvm::dbgs() << "  Class ";
-              cand.classOp->print(llvm::dbgs(),
-                                  OpPrintingFlags().skipRegions());
-              llvm::dbgs() << " alt " << origIdx << ": totalUlp=" << totalError
-                           << "\n";
-            });
-
-            if (totalError < bestError) {
-              bestError = totalError;
-              bestIdx = origIdx;
-            }
-          }
-
-          // Reset to initial greedy selection before recording.
-          if (savedMCI)
-            cand.classOp.setMinCostIndex(*savedMCI);
-
-          bestChoices.push_back({cand.classOp, bestIdx});
         }
 
-        // Apply best selections, extract, and inline.
-        for (auto &choice : bestChoices) {
-          choice.classOp.setMinCostIndex(choice.bestIndex);
-          LLVM_DEBUG({
-            llvm::dbgs() << "Best selection for class: idx=" << choice.bestIndex
-                         << " ";
-            choice.classOp->print(llvm::dbgs(),
-                                  OpPrintingFlags().skipRegions());
-            llvm::dbgs() << "\n";
-          });
-        }
+        // Commit the best choice.
+        classOp.setMinCostIndex(bestIndex);
 
-        extractFromGraph(graphOp);
-        inlineGraphOp(graphOp);
-      });
+        LLVM_DEBUG(llvm::dbgs() << "  -> selected operand " << bestIndex
+                                << " (total ULP = " << bestCost << ")\n");
+      }
     }
+
+    // ---------------------------------------------------------------
+    // Step 7: Extract and inline the optimized graph.
+    // ---------------------------------------------------------------
+    extractFromGraph(graphOp);
+    inlineGraphOp(graphOp);
 
     return success();
   }
