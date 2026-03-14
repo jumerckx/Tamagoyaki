@@ -124,174 +124,406 @@ static double ulpDistance(double a, double b) {
   return static_cast<double>(diff < 0 ? -diff : diff);
 }
 
-/// Evaluate the currently-selected program inside `graphOp` on multiple
-/// sample points simultaneously.  Function arguments are mapped column-wise
-/// from `inputColumns` (one vector per argument, each of length
-/// `numSamples`).  Operations are processed in topological order with the
-/// sample loop innermost for cache-friendliness.
-///
-/// Returns one output double per sample, or std::nullopt on failure.
-static std::optional<SmallVector<double>>
-foldSelectedProgramBatch(GraphOp graphOp, ArrayRef<Value> funcArgs,
-                         ArrayRef<SmallVector<double>> inputColumns,
-                         size_t numSamples) {
-  // Map each Value to a vector of Attributes, one per sample.
-  DenseMap<Value, SmallVector<Attribute>> valueMap;
+/// A single patch: one alternative operand choice in one patchable ClassOp.
+struct PatchDesc {
+  ClassOp classOp;
+  unsigned operandIndex;
+};
 
-  // Seed function arguments with concrete FloatAttr columns.
-  for (auto [arg, col] : llvm::zip(funcArgs, inputColumns)) {
-    auto &attrs = valueMap[arg];
-    attrs.reserve(numSamples);
-    for (size_t s = 0; s < numSamples; ++s)
-      attrs.push_back(FloatAttr::get(arg.getType(), col[s]));
-  }
+/// Per-Value execution state: a baseline column plus sparse per-patch
+/// override columns.
+struct ValueColumns {
+  SmallVector<Attribute> baseline; // [numSamples]
+  DenseMap<unsigned /*patchId*/, SmallVector<Attribute>> overrides;
+};
 
-  auto yieldOp = cast<YieldOp>(graphOp.getBody().front().getTerminator());
-  if (yieldOp.getNumOperands() != 1)
+/// Fold one sample of a regular (non-ClassOp) operation.
+/// Returns the fold-result Attributes on success, std::nullopt on failure.
+/// Restores the operation if folding was in-place.
+static std::optional<SmallVector<Attribute>>
+foldOneSample(Operation *op, ArrayRef<Attribute> constOperands) {
+  SmallVector<Value, 8> originalOperands(op->getOperands());
+  DictionaryAttr originalAttrs = op->getAttrDictionary();
+
+  SmallVector<OpFoldResult> foldResults;
+  foldResults.reserve(op->getNumResults());
+  if (failed(op->fold(constOperands, foldResults)))
     return std::nullopt;
 
+  if (foldResults.empty()) {
+    op->setOperands(originalOperands);
+    op->setAttrs(originalAttrs);
+    return std::nullopt;
+  }
+
+  assert(foldResults.size() == op->getNumResults() && "invalid result size");
+
+  SmallVector<Attribute> results;
+  results.reserve(foldResults.size());
+  for (auto fr : foldResults) {
+    if (auto attr = llvm::dyn_cast_if_present<Attribute>(fr))
+      results.push_back(attr);
+    else
+      results.push_back(Attribute()); // placeholder — caller resolves Values
+  }
+  return results;
+}
+
+/// Evaluate all patches simultaneously inside `graphOp`.
+///
+/// A "patch" is a (ClassOp, operandIndex) pair representing one alternative
+/// choice in a patchable class, applied on top of the greedy baseline.
+/// All patches are evaluated in a single traversal.
+///
+/// `patchableClassOps` contains the set of ClassOps that have original-op
+/// alternatives (i.e. classes worth optimizing).
+///
+/// On success, writes the best operand index for each patchable ClassOp
+/// via setMinCostIndex. Returns true on success, false on failure.
+static bool
+evaluateAllPatchesBatched(GraphOp graphOp, ArrayRef<Value> funcArgs,
+                          ArrayRef<SmallVector<double>> inputColumns,
+                          size_t numSamples, ArrayRef<double> gtOutputs,
+                          const DenseSet<Operation *> &patchableClassSet) {
+  using namespace mlir;
+  using namespace mlir::equivalence;
+
+  // ------------------------------------------------------------------
+  // 1. Traversal: post-order walk from yield, visiting all operands
+  //    of patchable ClassOps and only the greedy-selected operand of
+  //    non-patchable ClassOps.
+  // ------------------------------------------------------------------
+  auto yieldOp = cast<YieldOp>(graphOp.getBody().front().getTerminator());
+  if (yieldOp.getNumOperands() != 1)
+    return false;
   Value outputVal = yieldOp.getOperand(0);
 
   SmallVector<Operation *> sortedOps;
   DenseSet<Operation *> visited;
+  DenseSet<Operation *> onStack; // for cycle detection
 
-  // Walk backwards from a value to its defining op and recurse on operands.
-  // Returns false on failure (e.g. missing min-cost index on a ClassOp).
   std::function<bool(Value)> visit = [&](Value val) -> bool {
     Operation *defOp = val.getDefiningOp();
     if (!defOp)
-      return true; // block argument — already seeded in valueMap
+      return true; // block argument
+
+    if (onStack.contains(defOp))
+      return true; // cycle — skip, will produce NaN
 
     if (!visited.insert(defOp).second)
       return true; // already scheduled
 
-    // For ClassOps only follow the selected (min-cost) operand.
+    onStack.insert(defOp);
+
     if (auto classOp = dyn_cast<ClassOp>(defOp)) {
-      auto mci = classOp.getMinCostIndex();
-      if (!mci)
-        return false;
-      if (!visit(classOp->getOperand(*mci)))
-        return false;
+      if (patchableClassSet.contains(defOp)) {
+        // Patchable: visit ALL operands.
+        for (Value operand : classOp->getOperands())
+          visit(operand);
+      } else {
+        // Non-patchable: only the greedy-selected operand.
+        auto mci = classOp.getMinCostIndex();
+        if (!mci)
+          return false;
+        if (!visit(classOp->getOperand(*mci)))
+          return false;
+      }
     } else {
       for (Value operand : defOp->getOperands())
         if (!visit(operand))
           return false;
     }
 
-    // Post-order: all dependencies are already in sortedOps.
+    onStack.erase(defOp);
     sortedOps.push_back(defOp);
     return true;
   };
 
   if (!visit(outputVal))
-    return std::nullopt;
+    return false;
 
-  // For each op in topological order, evaluate across all samples
-  // (sample loop innermost).
+  // ------------------------------------------------------------------
+  // 2. Build patch registry.
+  // ------------------------------------------------------------------
+  SmallVector<PatchDesc> patchRegistry;
+  DenseMap<Operation *, unsigned> classToFirstPatch;
+
+  for (Operation *op : sortedOps) {
+    auto classOp = dyn_cast<ClassOp>(op);
+    if (!classOp || !patchableClassSet.contains(op))
+      continue;
+    classToFirstPatch[op] = patchRegistry.size();
+    for (unsigned i = 0; i < classOp.getNumOperands(); ++i)
+      patchRegistry.push_back({classOp, i});
+  }
+
+  unsigned P = patchRegistry.size();
+  if (P == 0)
+    return true; // nothing to patch
+
+  // ------------------------------------------------------------------
+  // 3. Seed function-argument ValueColumns (baseline only, no overrides).
+  // ------------------------------------------------------------------
+  DenseMap<Value, ValueColumns> valueMap;
+  for (auto [arg, col] : llvm::zip(funcArgs, inputColumns)) {
+    auto &vc = valueMap[arg];
+    vc.baseline.reserve(numSamples);
+    for (size_t s = 0; s < numSamples; ++s)
+      vc.baseline.push_back(FloatAttr::get(arg.getType(), col[s]));
+  }
+
+  // A helper to produce a column of NaN Attributes for a given type.
+  auto nanColumn = [&](Type ty) -> SmallVector<Attribute> {
+    SmallVector<Attribute> col(numSamples);
+    Attribute nanAttr =
+        FloatAttr::get(ty, std::numeric_limits<double>::quiet_NaN());
+    for (size_t s = 0; s < numSamples; ++s)
+      col[s] = nanAttr;
+    return col;
+  };
+
+  // ------------------------------------------------------------------
+  // 4. Batched execution.
+  // ------------------------------------------------------------------
   for (Operation *op : sortedOps) {
     if (isa<YieldOp>(op))
       continue;
 
-    // ClassOps just forward their selected operand's column.
+    // ---- Case A & B: ClassOp ----
     if (auto classOp = dyn_cast<ClassOp>(op)) {
       auto mci = classOp.getMinCostIndex();
       if (!mci)
-        return std::nullopt;
+        return false;
       Value selected = classOp->getOperand(*mci);
-      auto it = valueMap.find(selected);
-      if (it == valueMap.end())
-        return std::nullopt;
-      auto col = it->second;
-      valueMap[classOp.getResult()] = std::move(col);
+
+      auto &resultVC = valueMap[classOp.getResult()];
+
+      // Baseline: forward greedy-selected operand's baseline.
+      auto selIt = valueMap.find(selected);
+      if (selIt != valueMap.end())
+        resultVC.baseline = selIt->second.baseline;
+      else
+        resultVC.baseline = nanColumn(classOp.getResult().getType());
+
+      if (patchableClassSet.contains(op)) {
+        // Case B: patchable ClassOp.
+        unsigned firstPatch = classToFirstPatch[op];
+
+        // (B.1) New patches originating here: for each operand i,
+        //       the override is that operand's baseline.
+        for (unsigned i = 0; i < classOp.getNumOperands(); ++i) {
+          unsigned patchId = firstPatch + i;
+          Value operand = classOp->getOperand(i);
+          auto opIt = valueMap.find(operand);
+          if (opIt != valueMap.end())
+            resultVC.overrides[patchId] = opIt->second.baseline;
+          else
+            resultVC.overrides[patchId] =
+                nanColumn(classOp.getResult().getType());
+        }
+
+        // (B.2) Upstream patches passing through on the greedy path.
+        if (selIt != valueMap.end()) {
+          for (auto &[pid, col] : selIt->second.overrides)
+            resultVC.overrides[pid] = col;
+        }
+      } else {
+        // Case A: non-patchable — forward all overrides from selected.
+        if (selIt != valueMap.end())
+          resultVC.overrides = selIt->second.overrides;
+      }
       continue;
     }
 
-    // Don't try to simulate the results of a region operation as we can't
-    // guarantee that folding will be out-of-place. We don't allow in-place
-    // folds as the desire here is for simulated execution, and not general
-    // folding.
+    // ---- Case C: Regular op ----
+
+    // Skip region ops (can't guarantee out-of-place fold).
     if (op->getNumRegions())
-      return std::nullopt;
+      return false;
 
-    // Pre-allocate result columns for this op.
+    // Collect the union of all patchIds present in any operand.
+    DenseSet<unsigned> activePatchIds;
+    for (Value operand : op->getOperands()) {
+      auto it = valueMap.find(operand);
+      if (it != valueMap.end())
+        for (auto &[pid, _] : it->second.overrides)
+          activePatchIds.insert(pid);
+    }
+
+    // --- Baseline fold ---
     for (Value result : op->getResults())
-      valueMap[result].resize(numSamples);
+      valueMap[result].baseline.resize(numSamples);
 
-    // Inner loop over samples.
     for (size_t s = 0; s < numSamples; ++s) {
       SmallVector<Attribute> constOperands;
       constOperands.reserve(op->getNumOperands());
-      bool operandMissing = false;
+      bool missing = false;
       for (Value operand : op->getOperands()) {
         auto it = valueMap.find(operand);
-        if (it == valueMap.end() || !it->second[s]) {
-          operandMissing = true;
+        if (it == valueMap.end() || s >= it->second.baseline.size() ||
+            !it->second.baseline[s]) {
+          missing = true;
           break;
         }
-        constOperands.push_back(it->second[s]);
-      }
-      if (operandMissing)
-        return std::nullopt;
-
-      // Save the original operands and attributes just in case the operation
-      // folds in-place. The constant passed in may not correspond to the real
-      // runtime value, so in-place updates are not allowed.
-      SmallVector<Value, 8> originalOperands(op->getOperands());
-      DictionaryAttr originalAttrs = op->getAttrDictionary();
-
-      // Simulate the result of folding this operation to a constant. If
-      // folding fails, bail out.
-      SmallVector<OpFoldResult> foldResults;
-      foldResults.reserve(op->getNumResults());
-      if (failed(op->fold(constOperands, foldResults))) {
-        return std::nullopt;
+        constOperands.push_back(it->second.baseline[s]);
       }
 
-      // If the folding was in-place, reset the operation and bail out. We
-      // don't allow in-place folds as the desire here is for simulated
-      // execution, and not general folding.
-      if (foldResults.empty()) {
-        op->setOperands(originalOperands);
-        op->setAttrs(originalAttrs);
-        return std::nullopt;
+      if (missing) {
+        for (Value result : op->getResults())
+          valueMap[result].baseline[s] = FloatAttr::get(
+              result.getType(), std::numeric_limits<double>::quiet_NaN());
+        continue;
       }
 
-      assert(foldResults.size() == op->getNumResults() &&
-             "invalid result size");
+      auto foldResult = foldOneSample(op, constOperands);
+      if (!foldResult) {
+        for (Value result : op->getResults())
+          valueMap[result].baseline[s] = FloatAttr::get(
+              result.getType(), std::numeric_limits<double>::quiet_NaN());
+        continue;
+      }
 
-      // Merge the fold results into the value map for this sample.
-      for (auto [val, fr] : llvm::zip(op->getResults(), foldResults)) {
-        if (auto attr = llvm::dyn_cast_if_present<Attribute>(fr)) {
-          valueMap[val][s] = attr;
-        } else {
-          // The fold result is a Value — look it up in our value map.
-          Value foldedVal = cast<Value>(fr);
-          auto it = valueMap.find(foldedVal);
-          if (it == valueMap.end() || !it->second[s])
-            return std::nullopt;
-          valueMap[val][s] = it->second[s];
+      for (auto [val, attr] : llvm::zip(op->getResults(), *foldResult)) {
+        if (attr)
+          valueMap[val].baseline[s] = attr;
+        else
+          valueMap[val].baseline[s] = FloatAttr::get(
+              val.getType(), std::numeric_limits<double>::quiet_NaN());
+      }
+    }
+
+    // --- Override folds ---
+    for (unsigned pid : activePatchIds) {
+      // Check if any operand actually differs from baseline for this patch.
+      bool hasDifference = false;
+      for (Value operand : op->getOperands()) {
+        auto it = valueMap.find(operand);
+        if (it != valueMap.end() && it->second.overrides.count(pid)) {
+          hasDifference = true;
+          break;
+        }
+      }
+      if (!hasDifference)
+        continue; // result is identical to baseline
+
+      for (Value result : op->getResults())
+        valueMap[result].overrides[pid].resize(numSamples);
+
+      for (size_t s = 0; s < numSamples; ++s) {
+        SmallVector<Attribute> constOperands;
+        constOperands.reserve(op->getNumOperands());
+        bool missing = false;
+        for (Value operand : op->getOperands()) {
+          auto it = valueMap.find(operand);
+          if (it == valueMap.end()) {
+            missing = true;
+            break;
+          }
+          // Use override if present, otherwise fall back to baseline.
+          auto overIt = it->second.overrides.find(pid);
+          if (overIt != it->second.overrides.end() &&
+              s < overIt->second.size() && overIt->second[s])
+            constOperands.push_back(overIt->second[s]);
+          else if (s < it->second.baseline.size() && it->second.baseline[s])
+            constOperands.push_back(it->second.baseline[s]);
+          else {
+            missing = true;
+            break;
+          }
+        }
+
+        if (missing) {
+          for (Value result : op->getResults())
+            valueMap[result].overrides[pid][s] = FloatAttr::get(
+                result.getType(), std::numeric_limits<double>::quiet_NaN());
+          continue;
+        }
+
+        auto foldResult = foldOneSample(op, constOperands);
+        if (!foldResult) {
+          for (Value result : op->getResults())
+            valueMap[result].overrides[pid][s] = FloatAttr::get(
+                result.getType(), std::numeric_limits<double>::quiet_NaN());
+          continue;
+        }
+
+        for (auto [val, attr] : llvm::zip(op->getResults(), *foldResult)) {
+          if (attr)
+            valueMap[val].overrides[pid][s] = attr;
+          else
+            valueMap[val].overrides[pid][s] = FloatAttr::get(
+                val.getType(), std::numeric_limits<double>::quiet_NaN());
         }
       }
     }
   }
 
-  // Read output from the yield operand.
-  if (yieldOp.getNumOperands() == 0)
-    return std::nullopt;
+  // ------------------------------------------------------------------
+  // 5. Result collection and selection.
+  // ------------------------------------------------------------------
+  auto outIt = valueMap.find(outputVal);
+  if (outIt == valueMap.end())
+    return false;
 
-  auto it = valueMap.find(outputVal);
-  if (it == valueMap.end())
-    return std::nullopt;
+  const ValueColumns &outVC = outIt->second;
 
-  SmallVector<double> results;
-  results.reserve(numSamples);
+  // Compute baseline ULP for reference.
+  double baselineUlp = 0.0;
   for (size_t s = 0; s < numSamples; ++s) {
-    if (auto fa = dyn_cast<FloatAttr>(it->second[s]))
-      results.push_back(fa.getValueAsDouble());
-    else
-      return std::nullopt;
+    if (s < outVC.baseline.size()) {
+      if (auto fa = dyn_cast_or_null<FloatAttr>(outVC.baseline[s]))
+        baselineUlp += ulpDistance(fa.getValueAsDouble(), gtOutputs[s]);
+      else
+        baselineUlp += static_cast<double>(1ULL << 62);
+    } else {
+      baselineUlp += static_cast<double>(1ULL << 62);
+    }
   }
-  return results;
+
+  // For each patchable ClassOp, pick the operand with lowest ULP.
+  for (auto &[opPtr, firstPatch] : classToFirstPatch) {
+    auto classOp = cast<ClassOp>(opPtr);
+    unsigned numOperands = classOp.getNumOperands();
+
+    double bestCost = std::numeric_limits<double>::infinity();
+    unsigned bestIndex = classOp.getMinCostIndex().value_or(0);
+
+    for (unsigned i = 0; i < numOperands; ++i) {
+      unsigned patchId = firstPatch + i;
+      auto overIt = outVC.overrides.find(patchId);
+
+      double totalUlp = 0.0;
+      if (overIt != outVC.overrides.end()) {
+        for (size_t s = 0; s < numSamples; ++s) {
+          if (s < overIt->second.size()) {
+            if (auto fa = dyn_cast_or_null<FloatAttr>(overIt->second[s]))
+              totalUlp += ulpDistance(fa.getValueAsDouble(), gtOutputs[s]);
+            else
+              totalUlp += static_cast<double>(1ULL << 62);
+          } else {
+            totalUlp += static_cast<double>(1ULL << 62);
+          }
+        }
+      } else {
+        // No override means this patch is identical to baseline.
+        totalUlp = baselineUlp;
+      }
+
+      LLVM_DEBUG(llvm::dbgs() << "  Class " << classOp.getLoc() << " operand "
+                              << i << ": total ULP = " << totalUlp << "\n");
+
+      if (totalUlp < bestCost) {
+        bestCost = totalUlp;
+        bestIndex = i;
+      }
+    }
+
+    classOp.setMinCostIndex(bestIndex);
+    LLVM_DEBUG(llvm::dbgs() << "  -> selected operand " << bestIndex
+                            << " (total ULP = " << bestCost << ")\n");
+  }
+
+  return true;
 }
 
 namespace {
@@ -771,7 +1003,8 @@ public:
     selectGreedy(graphOp, 1, "herbie.cost");
 
     // ---------------------------------------------------------------
-    // Step 6: Per-class optimization via sample-based ULP evaluation.
+    // Step 6: Batched per-class optimization via sample-based ULP
+    //         evaluation — all patches evaluated in one traversal.
     // ---------------------------------------------------------------
     {
       TAMAGOYAKI_SCOPED_TIMER("PerClassOptimization");
@@ -796,62 +1029,24 @@ public:
 
       // Collect unique ClassOps that contain at least one original
       // operation among their operands (i.e. classes with alternatives).
-      SmallVector<ClassOp> classesToOptimize;
-      DenseSet<Operation *> seenClasses;
+      DenseSet<Operation *> patchableClassSet;
       for (Operation *origOp : tracker.getOps()) {
         for (Value result : origOp->getResults()) {
           for (Operation *user : result.getUsers()) {
             if (auto classOp = dyn_cast<ClassOp>(user)) {
-              if (seenClasses.insert(classOp.getOperation()).second)
-                classesToOptimize.push_back(classOp);
+              if (classOp.getNumOperands() > 1)
+                patchableClassSet.insert(classOp.getOperation());
             }
           }
         }
       }
 
-      LLVM_DEBUG(llvm::dbgs() << "Optimizing " << classesToOptimize.size()
-                              << " equivalence classes\n");
+      LLVM_DEBUG(llvm::dbgs() << "Optimizing " << patchableClassSet.size()
+                              << " equivalence classes (batched)\n");
 
-      // For each class, try every operand and keep the one with the
-      // lowest total ULP distance to the ground truth.
-      for (ClassOp classOp : classesToOptimize) {
-        unsigned numOperands = classOp.getNumOperands();
-        if (numOperands <= 1)
-          continue;
-
-        double bestCost = std::numeric_limits<double>::infinity();
-        unsigned bestIndex = classOp.getMinCostIndex().value_or(0);
-
-        for (unsigned i = 0; i < numOperands; ++i) {
-          // Temporarily point this class at operand i.
-          classOp.setMinCostIndex(i);
-
-          auto maybeOutputs = foldSelectedProgramBatch(
-              graphOp, funcArgs, inputColumns, numSamples);
-          if (!maybeOutputs)
-            continue;
-
-          // Sum the per-sample ULP distances.
-          double totalUlp = 0.0;
-          for (size_t s = 0; s < numSamples; ++s)
-            totalUlp += ulpDistance((*maybeOutputs)[s], gtOutputs[s]);
-
-          LLVM_DEBUG(llvm::dbgs()
-                     << "  Class " << classOp.getLoc() << " operand " << i
-                     << ": total ULP = " << totalUlp << "\n");
-
-          if (totalUlp < bestCost) {
-            bestCost = totalUlp;
-            bestIndex = i;
-          }
-        }
-
-        // Commit the best choice.
-        classOp.setMinCostIndex(bestIndex);
-
-        LLVM_DEBUG(llvm::dbgs() << "  -> selected operand " << bestIndex
-                                << " (total ULP = " << bestCost << ")\n");
-      }
+      if (!evaluateAllPatchesBatched(graphOp, funcArgs, inputColumns,
+                                     numSamples, gtOutputs, patchableClassSet))
+        return funcOp.emitError() << "batched patch evaluation failed";
     }
 
     // ---------------------------------------------------------------
