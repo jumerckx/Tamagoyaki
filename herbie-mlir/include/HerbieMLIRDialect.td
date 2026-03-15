@@ -315,4 +315,25 @@ def RivalCompileableInterface : OpInterface<"RivalCompileableInterface"> {
   ];
 }
 
+def BatchEvaluateInterface : OpInterface<"BatchEvaluateInterface"> {
+  let description = [{
+    Interface for batch-evaluating an operation over arrays of double samples.
+    This bypasses the Attribute-based fold infrastructure for performance.
+  }];
+
+  let cppNamespace = "::herbie";
+
+  let methods = [
+    InterfaceMethod<
+      "Evaluate the operation on batched double arrays. "
+      "inputColumns has one const double* per operand, each of length numSamples. "
+      "outputColumn is a pre-allocated buffer of length numSamples.",
+      "void", "batchEvaluate",
+      (ins "::llvm::ArrayRef<const double *>":$inputColumns,
+           "double *":$outputColumn,
+           "size_t":$numSamples)
+    >
+  ];
+}
+
 #endif // HERBIE_MLIR_DIALECT
