@@ -27,17 +27,15 @@ public:
     llvm::errs() << "=== Interval Search: " << funcOp.getName() << " ===\n";
 
     // Build config from pass options
-    IntervalSearchConfig config;
+    IntervalSearchOptions config;
     config.maxSearchDepth = maxSearchDepth;
-    config.maxRegions = maxRegions;
     config.analysisPrecision = analysisPrecision;
     config.maxRivalPrecision = maxRivalPrecision;
     config.maxRivalIterations = maxRivalIterations;
 
     // Run the interval search
     llvm::errs() << "  Searching with " << funcOp.getNumArguments()
-                 << " variables, max depth " << maxSearchDepth
-                 << ", max regions " << maxRegions << "\n";
+                 << " variables, max depth " << maxSearchDepth << "\n";
 
     FunctionIntervalResult result = runIntervalSearchOnFunction(funcOp, config);
 

@@ -257,13 +257,11 @@ def HerbieOptimizePass : Pass<"herbie-optimize", "::mlir::ModuleOp"> {
   ];
   let options = [
     // Interval search options
-    Option<"maxSearchDepth", "max-depth", "unsigned", "128",
+    Option<"maxSearchDepth", "max-depth", "unsigned", "12",
            "Maximum subdivision iterations for interval search">,
-    Option<"maxRegions", "max-regions", "unsigned", "131072",
-           "Stop interval search if region count exceeds this">,
     Option<"analysisPrecision", "analysis-precision", "unsigned", "128",
            "MPFR precision for interval bounds">,
-    Option<"maxRivalPrecision", "max-rival-precision", "unsigned", "2000",
+    Option<"maxRivalPrecision", "max-rival-precision", "unsigned", "10000",
            "Max precision for Rival analysis">,
     Option<"maxRivalIterations", "max-rival-iterations", "unsigned", "5",
            "Max Rival iterations per interval analysis">,
@@ -313,6 +311,27 @@ def RivalCompileableInterface : OpInterface<"RivalCompileableInterface"> {
       "Compile the operation to a Rival expression.",
       "llvm::ArrayRef<uint32_t>", "compile",
       (ins "::RivalExprArena *":$arena, "::llvm::ArrayRef<uint32_t>":$operands)
+    >
+  ];
+}
+
+def BatchEvaluateInterface : OpInterface<"BatchEvaluateInterface"> {
+  let description = [{
+    Interface for batch-evaluating an operation over arrays of double samples.
+    This bypasses the Attribute-based fold infrastructure for performance.
+  }];
+
+  let cppNamespace = "::herbie";
+
+  let methods = [
+    InterfaceMethod<
+      "Evaluate the operation on batched double arrays. "
+      "inputColumns has one const double* per operand, each of length numSamples. "
+      "outputColumn is a pre-allocated buffer of length numSamples.",
+      "void", "batchEvaluate",
+      (ins "::llvm::ArrayRef<const double *>":$inputColumns,
+           "double *":$outputColumn,
+           "size_t":$numSamples)
     >
   ];
 }

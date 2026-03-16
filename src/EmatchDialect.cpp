@@ -136,12 +136,15 @@ void convertEmatchOpsToApplyRewrites(ModuleOp module) {
 /// module. The patternsModule is consumed (removed from parent).
 /// Returns true on success.
 bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
-                   ModuleOp irModule, int maxIters, int maxNodes) {
+                   ModuleOp irModule, int maxIters, int maxNodes,
+                   RewriterBase::Listener *listener) {
   TAMAGOYAKI_SCOPED_TIMER("runSaturation");
   RewritePatternSet patternList(ctx);
 
   ClassOpUnionFind uf{};
   HashConsPatternRewriter hashconsRewriter(ctx);
+  if (listener)
+    hashconsRewriter.setListener(listener);
 
   irModule.walk([&](equivalence::GraphOp graph) {
     Region *region = &(graph.getBody());

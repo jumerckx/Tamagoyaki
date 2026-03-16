@@ -7,6 +7,9 @@
 #include "mlir/Support/LLVM.h"
 #include "rival.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/Format.h"
+#include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cassert>
 #include <cmath>
@@ -20,6 +23,8 @@
 #include <vector>
 
 using namespace herbie;
+
+#define DEBUG_TYPE "interval-search"
 
 // ============================================================================
 // Interval Implementation
@@ -328,7 +333,7 @@ void herbie::searchStep(RivalMachine *machine, SearchSpace &space,
         rival_hints_free(result.hints);
     } else if (!result.maybe_error && result.converged) {
       // Definitely valid region
-      region.hints.reset(result.hints);
+      region.hints = makeRivalHints(result.hints);
       space.trueRegions.push_back(std::move(region));
     } else {
       // Uncertain - try to subdivide
@@ -344,12 +349,12 @@ void herbie::searchStep(RivalMachine *machine, SearchSpace &space,
         hiRect[splitDimension].setLo(midpoints->hiMid);
 
         // Transfer hints to both (they'll be refined on next analysis)
-        // Note: we can't share hints, so we only give hints to one
-        newOther.emplace_back(std::move(loRect), result.hints);
-        newOther.emplace_back(std::move(hiRect), nullptr);
+        auto sharedHints = makeRivalHints(result.hints);
+        newOther.emplace_back(std::move(loRect), sharedHints);
+        newOther.emplace_back(std::move(hiRect), sharedHints);
       } else {
         // Can't split further - keep as uncertain
-        region.hints.reset(result.hints);
+        region.hints = makeRivalHints(result.hints);
         newOther.push_back(std::move(region));
       }
     }
@@ -389,7 +394,9 @@ herbie::computeStatistics(const SearchSpace &space,
   table.validFraction = validWeight / total;
   table.invalidFraction = invalidWeight / total;
   table.unknownFraction = unknownWeight / total;
-  table.preconditionFraction = 0; // Future: precondition support
+  double sum =
+      table.validFraction + table.invalidFraction + table.unknownFraction;
+  table.preconditionFraction = std::max(0.0, 1.0 - sum);
 
   return table;
 }
@@ -418,19 +425,56 @@ SearchResult herbie::findIntervals(RivalMachine *machine,
 
   unsigned numVars = floatBitWidths.size();
 
+  LLVM_DEBUG({
+    llvm::dbgs() << "interval-search: starting search with " << numVars
+                 << " variables, max depth " << options.maxSearchDepth << "\n";
+    llvm::dbgs() << llvm::format("%-6s %10s %10s %10s %10s | %8s %8s %8s\n",
+                                 "Iter", "Valid%", "Invalid%", "Unknown%",
+                                 "Precond%", "#true", "#false", "#other");
+    llvm::dbgs() << std::string(78, '-') << "\n";
+
+    // Log initial state (iter 0)
+    SamplingTable initStats = computeStatistics(space, floatBitWidths);
+    llvm::dbgs() << llvm::format(
+        "%-6u %9.1f%% %9.1f%% %9.1f%% %9.1f%% | %8zu %8zu %8zu\n", 0u,
+        initStats.validFraction * 100.0, initStats.invalidFraction * 100.0,
+        initStats.unknownFraction * 100.0,
+        initStats.preconditionFraction * 100.0, space.trueRegions.size(),
+        space.falseRegions.size(), space.otherRegions.size());
+  });
+
   // Main search loop
   for (unsigned n = 0; n < options.maxSearchDepth; ++n) {
     if (space.otherRegions.empty())
       break;
 
-    size_t totalRegions = space.trueRegions.size() + space.falseRegions.size() +
-                          space.otherRegions.size();
-    if (totalRegions >= options.maxRegions)
+    // Racket: (>= (length other) (expt 2 depth))
+    // For depth >= 64, 2^depth overflows size_t, so the condition is
+    // unreachable — matching Racket's behavior with fuel=128.
+    if (options.maxSearchDepth < 64 &&
+        space.otherRegions.size() >= (size_t(1) << options.maxSearchDepth))
       break;
 
     unsigned splitDim = n % numVars;
     searchStep(machine, space, splitDim, floatBitWidths);
+
+    LLVM_DEBUG({
+      SamplingTable stats = computeStatistics(space, floatBitWidths);
+      llvm::dbgs() << llvm::format(
+          "%-6u %9.1f%% %9.1f%% %9.1f%% %9.1f%% | %8zu %8zu %8zu\n", n + 1,
+          stats.validFraction * 100.0, stats.invalidFraction * 100.0,
+          stats.unknownFraction * 100.0, stats.preconditionFraction * 100.0,
+          space.trueRegions.size(), space.falseRegions.size(),
+          space.otherRegions.size());
+    });
   }
+
+  LLVM_DEBUG({
+    llvm::dbgs() << std::string(78, '-') << "\n";
+    llvm::dbgs() << "interval-search: finished — " << space.trueRegions.size()
+                 << " true, " << space.falseRegions.size() << " false, "
+                 << space.otherRegions.size() << " undetermined regions\n";
+  });
 
   // Build result: sampleable = true ∪ other
   SearchResult result;
@@ -454,7 +498,7 @@ SearchResult herbie::findIntervals(RivalMachine *machine,
 
 FunctionIntervalResult
 herbie::runIntervalSearchOnFunction(mlir::func::FuncOp funcOp,
-                                    const IntervalSearchConfig &config) {
+                                    const IntervalSearchOptions &config) {
   TAMAGOYAKI_SCOPED_TIMER("runIntervalSearchOnFunction");
   FunctionIntervalResult result;
   result.success = false;
@@ -531,20 +575,12 @@ herbie::runIntervalSearchOnFunction(mlir::func::FuncOp funcOp,
     return result;
   }
 
-  IntervalSearchOptions options;
-  options.maxSearchDepth = config.maxSearchDepth;
-  options.maxRegions = config.maxRegions;
-  options.analysisPrecision = config.analysisPrecision;
-  options.maxRivalPrecision = config.maxRivalPrecision;
-  options.maxRivalIterations = config.maxRivalIterations;
-  options.emitStatistics = false;
-
   std::vector<Hyperrect> initialRects;
   initialRects.push_back(
       createFullDomainRect(result.floatBitWidths, config.analysisPrecision));
 
   result.searchResult =
-      findIntervals(machine, initialRects, result.floatBitWidths, options);
+      findIntervals(machine, initialRects, result.floatBitWidths, config);
   result.success = true;
 
   rival_machine_free(machine);
@@ -630,31 +666,30 @@ SamplingResult herbie::sampleAndEvaluate(
     llvm::ArrayRef<const char *> varNames, const RivalDiscretization *disc,
     const SearchResult &searchResult, llvm::ArrayRef<unsigned> floatBitWidths,
     unsigned numSamples, unsigned evalMaxIterations, unsigned evalMaxPrecision,
-    unsigned analysisPrecision, uint64_t seed) {
+    unsigned analysisPrecision, uint64_t seed, unsigned maxSkippedPoints) {
   SamplingResult sr;
   size_t numRoots = roots.size();
+  size_t numVars = varNames.size();
 
   auto &regions = searchResult.sampleableRegions;
   if (regions.empty())
     return sr;
 
-  // Build one RivalMachine per root so that a failure in one expression
-  // (e.g. division by zero) does not discard the entire sample point.
-  std::vector<RivalMachine *> machines(numRoots, nullptr);
-  size_t numVars = varNames.size();
-
-  for (size_t r = 0; r < numRoots; ++r) {
-    uint32_t root = roots[r];
-    machines[r] = rival_machine_new(arena, &root, 1, varNames.data(), numVars,
-                                    disc, evalMaxPrecision, 1000);
-  }
+  // Single machine with all roots, matching the Racket approach where
+  // real-apply evaluates every expression in one call.
+  RivalMachine *machine =
+      rival_machine_new(arena, roots.data(), numRoots, varNames.data(), numVars,
+                        disc, evalMaxPrecision, 1000);
+  if (!machine)
+    return sr;
 
   auto cumWeights = buildCumulativeWeights(regions, floatBitWidths);
   std::mt19937_64 rng(seed);
 
-  sr.points.resize(numSamples);
-  sr.results.resize(numSamples, std::vector<double>(numRoots));
+  sr.points.reserve(numSamples);
+  sr.results.reserve(numSamples);
 
+  // Allocate MPFR temporaries for arguments
   auto *argMpfr = new mpfr_t[numVars];
   std::vector<const mpfr_t *> argPtrs(numVars);
   for (size_t i = 0; i < numVars; ++i) {
@@ -662,48 +697,75 @@ SamplingResult herbie::sampleAndEvaluate(
     argPtrs[i] = &argMpfr[i];
   }
 
-  mpfr_t outMpfr;
-  mpfr_init2(outMpfr, analysisPrecision);
-  mpfr_t *outPtr = &outMpfr;
+  // Allocate MPFR temporaries for outputs (one per root)
+  auto *outMpfr = new mpfr_t[numRoots];
+  std::vector<mpfr_t *> outPtrs(numRoots);
+  for (size_t r = 0; r < numRoots; ++r) {
+    mpfr_init2(outMpfr[r], analysisPrecision);
+    outPtrs[r] = &outMpfr[r];
+  }
 
-  for (unsigned s = 0; s < numSamples; ++s) {
+  unsigned sampled = 0;
+  unsigned skipped = 0;
+
+  while (sampled < numSamples) {
     auto [pt, regionIdx] =
         samplePoint(regions, cumWeights, floatBitWidths, rng);
 
     for (size_t d = 0; d < numVars; ++d)
       mpfr_set_d(argMpfr[d], pt[d], MPFR_RNDN);
 
-    sr.points[s] = std::move(pt);
+    // Pass hints from the region that was selected during search.
+    RivalError err = rival_apply(
+        machine, argPtrs.data(), numVars, outPtrs.data(), numRoots,
+        regions[regionIdx].hints.get(), evalMaxIterations, evalMaxPrecision);
 
-    for (size_t r = 0; r < numRoots; ++r) {
-      if (!machines[r]) {
-        sr.results[s][r] = std::numeric_limits<double>::quiet_NaN();
-        continue;
+    // Check validity: all outputs must be finite numbers.
+    // This mirrors Racket's logic where a point is only kept when
+    // real-apply returns status 'valid and no output is infinite.
+    bool valid = (err == RIVAL_ERROR_OK);
+    if (valid) {
+      for (size_t r = 0; r < numRoots; ++r) {
+        if (!mpfr_number_p(outMpfr[r])) {
+          valid = false;
+          break;
+        }
       }
+    }
 
-      RivalError err =
-          rival_apply(machines[r], argPtrs.data(), numVars, &outPtr, 1, nullptr,
-                      evalMaxIterations, evalMaxPrecision);
+    if (valid) {
+      std::vector<double> row(numRoots);
+      for (size_t r = 0; r < numRoots; ++r)
+        row[r] = mpfr_get_d(outMpfr[r], MPFR_RNDN);
 
-      if (err != RIVAL_ERROR_OK || !mpfr_number_p(outMpfr)) {
-        sr.results[s][r] = std::numeric_limits<double>::quiet_NaN();
-      } else {
-        sr.results[s][r] = mpfr_get_d(outMpfr, MPFR_RNDN);
+      sr.points.push_back(std::move(pt));
+      sr.results.push_back(std::move(row));
+      ++sampled;
+      skipped = 0; // reset consecutive skip counter
+    } else {
+      ++skipped;
+      if (skipped >= maxSkippedPoints) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "sampleAndEvaluate: exceeded " << maxSkippedPoints
+                   << " consecutive skipped points after " << sampled
+                   << " valid samples\n");
+        break;
       }
     }
   }
 
-  sr.sampled = numSamples;
+  sr.sampled = sampled;
 
-  mpfr_clear(outMpfr);
+  // Cleanup
+  for (size_t r = 0; r < numRoots; ++r)
+    mpfr_clear(outMpfr[r]);
+  delete[] outMpfr;
+
   for (size_t i = 0; i < numVars; ++i)
     mpfr_clear(argMpfr[i]);
   delete[] argMpfr;
 
-  for (size_t r = 0; r < numRoots; ++r) {
-    if (machines[r])
-      rival_machine_free(machines[r]);
-  }
+  rival_machine_free(machine);
 
   return sr;
 }

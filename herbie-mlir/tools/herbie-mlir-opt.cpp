@@ -10,6 +10,7 @@
 #include "EquivalenceDialect.h"
 #include "TamagoyakiTiming.h"
 
+#include "BatchEvaluateExternalModels.h"
 #include "HerbieMLIR.h"
 #include "RivalExternalModels.h"
 
@@ -36,6 +37,9 @@ int main(int argc, char **argv) {
 
   // Register Rival external models for RivalCompileableInterface
   herbie::registerRivalExternalModels(registry);
+
+  // Register BatchEvaluate external models for sample-based evaluation
+  herbie::registerBatchEvaluateExternalModels(registry);
 
   // Register herbie-mlir passes
   herbie::registerHerbieMLIRPasses();

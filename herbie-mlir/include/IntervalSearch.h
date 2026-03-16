@@ -132,7 +132,16 @@ struct RivalHintsDeleter {
   }
 };
 
-using RivalHintsPtr = std::unique_ptr<RivalHints, RivalHintsDeleter>;
+/// Shared hints pointer. Racket's functional semantics allow the same hint
+/// to be shared between both children of a split. We use shared_ptr to
+/// match this behavior: both sub-regions receive the hint returned by
+/// rival_analyze_with_hints.
+using RivalHintsPtr = std::shared_ptr<RivalHints>;
+
+/// Make a shared hints pointer with the correct deleter.
+inline RivalHintsPtr makeRivalHints(RivalHints *raw) {
+  return RivalHintsPtr(raw, RivalHintsDeleter{});
+}
 
 /// A region with its associated hints.
 struct RegionWithHints {
@@ -141,13 +150,13 @@ struct RegionWithHints {
 
   RegionWithHints() = default;
   RegionWithHints(Hyperrect r, RivalHints *h = nullptr)
-      : rect(std::move(r)), hints(h) {}
+      : rect(std::move(r)), hints(makeRivalHints(h)) {}
+  RegionWithHints(Hyperrect r, RivalHintsPtr h)
+      : rect(std::move(r)), hints(std::move(h)) {}
   RegionWithHints(RegionWithHints &&) = default;
   RegionWithHints &operator=(RegionWithHints &&) = default;
-
-  // No copy (unique_ptr)
-  RegionWithHints(const RegionWithHints &) = delete;
-  RegionWithHints &operator=(const RegionWithHints &) = delete;
+  RegionWithHints(const RegionWithHints &) = default;
+  RegionWithHints &operator=(const RegionWithHints &) = default;
 };
 
 /// The search space during subdivision.
@@ -165,7 +174,7 @@ struct SamplingTable {
   double validFraction;        // Fraction of space confirmed evaluable
   double invalidFraction;      // Fraction confirmed unevaluable
   double unknownFraction;      // Fraction still undetermined
-  double preconditionFraction; // Fraction excluded by precondition (future use)
+  double preconditionFraction; // Fraction excluded by precondition
 
   SamplingTable()
       : validFraction(0), invalidFraction(0), unknownFraction(0),
@@ -186,12 +195,14 @@ struct SearchResult {
 // ============================================================================
 
 struct IntervalSearchOptions {
-  unsigned maxSearchDepth = 128;     // Maximum subdivision iterations
-  unsigned maxRegions = 1 << 17;     // Stop if region count exceeds this
-  unsigned analysisPrecision = 128;  // MPFR precision for interval bounds
-  unsigned maxRivalPrecision = 2000; // Max precision for Rival analysis
-  unsigned maxRivalIterations = 5;   // Max Rival iterations per analysis
-  bool emitStatistics = true;        // Whether to emit statistics
+  /// Maximum subdivision iterations (fuel). Matches Racket's
+  /// find-intervals #:fuel parameter. The search also terminates if
+  /// the number of undetermined regions reaches 2^maxSearchDepth.
+  unsigned maxSearchDepth = 12;
+  unsigned analysisPrecision = 128;   // MPFR precision for interval bounds
+  unsigned maxRivalPrecision = 10000; // Max precision for Rival analysis
+  unsigned maxRivalIterations = 5;    // Max Rival iterations per analysis
+  bool emitStatistics = true;         // Whether to emit statistics
 };
 
 // ============================================================================
@@ -199,20 +210,11 @@ struct IntervalSearchOptions {
 // ============================================================================
 
 /// Perform a single search step: classify regions and subdivide uncertain ones.
-/// @param machine The compiled Rival machine for the expression.
-/// @param space The current search space (modified in place).
-/// @param splitDimension The dimension to split on this iteration.
-/// @param floatBitWidths The bit widths of each input variable.
 void searchStep(RivalMachine *machine, SearchSpace &space,
                 unsigned splitDimension,
                 llvm::ArrayRef<unsigned> floatBitWidths);
 
 /// Find valid sampling regions for a Rival machine.
-/// @param machine The compiled Rival machine for the expression.
-/// @param initialRects Starting hyperrectangles (usually full domain).
-/// @param floatBitWidths The bit widths of each input variable.
-/// @param options Search configuration.
-/// @return SearchResult containing sampleable regions and statistics.
 SearchResult findIntervals(RivalMachine *machine,
                            llvm::ArrayRef<Hyperrect> initialRects,
                            llvm::ArrayRef<unsigned> floatBitWidths,
@@ -226,7 +228,6 @@ SamplingTable computeStatistics(const SearchSpace &space,
 // Utility: Build arguments for Rival from a Hyperrect
 // ============================================================================
 
-/// Helper to build the mpfr_t pointer array that Rival expects.
 class RivalRectArgs {
 public:
   explicit RivalRectArgs(const Hyperrect &rect);
@@ -243,15 +244,6 @@ private:
 // Function-Level Interval Search
 // ============================================================================
 
-/// Configuration object for storing rival and search options
-struct IntervalSearchConfig {
-  unsigned maxSearchDepth = 128;
-  unsigned maxRegions = 131072;
-  unsigned analysisPrecision = 128;
-  unsigned maxRivalPrecision = 2000;
-  unsigned maxRivalIterations = 5;
-};
-
 /// Result of running interval search on a function.
 struct FunctionIntervalResult {
   SearchResult searchResult;
@@ -260,10 +252,9 @@ struct FunctionIntervalResult {
 };
 
 /// Run interval search on a function that implements RivalCompileableInterface.
-/// Returns the search result containing sampleable regions and statistics.
 FunctionIntervalResult
 runIntervalSearchOnFunction(mlir::func::FuncOp funcOp,
-                            const IntervalSearchConfig &config);
+                            const IntervalSearchOptions &config);
 
 // ============================================================================
 // Sampling
@@ -277,29 +268,22 @@ struct SamplingResult {
   unsigned skipped = 0;
 };
 
-/// Build cumulative weight array from sampleable regions.
 llvm::SmallVector<double>
 buildCumulativeWeights(llvm::ArrayRef<RegionWithHints> regions,
                        llvm::ArrayRef<unsigned> floatBitWidths);
 
-/// Sample a single random point from weighted sampleable regions.
-/// Returns the sampled point and the index of the chosen region.
 std::pair<std::vector<double>, size_t>
 samplePoint(llvm::ArrayRef<RegionWithHints> regions,
             llvm::ArrayRef<double> cumulativeWeights,
             llvm::ArrayRef<unsigned> floatBitWidths, std::mt19937_64 &rng);
 
-/// Sample numSamples points from the search result's sampleable regions,
-/// evaluate them with per-root Rival machines, and return the results.
-/// Each root expression gets its own RivalMachine so that a failure in one
-/// root (e.g. division by zero) does not discard the entire sample point.
-/// Failed roots receive NaN in the results.
 SamplingResult sampleAndEvaluate(
     const RivalExprArena *arena, llvm::ArrayRef<uint32_t> roots,
     llvm::ArrayRef<const char *> varNames, const RivalDiscretization *disc,
     const SearchResult &searchResult, llvm::ArrayRef<unsigned> floatBitWidths,
     unsigned numSamples, unsigned evalMaxIterations, unsigned evalMaxPrecision,
-    unsigned analysisPrecision, uint64_t seed = 42);
+    unsigned analysisPrecision, uint64_t seed = 42,
+    unsigned maxSkippedPoints = 100);
 
 } // namespace herbie
 

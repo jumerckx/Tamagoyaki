@@ -12,6 +12,7 @@ set(HERBIE_MLIR_SOURCES
   HerbieMLIRPasses.cpp
   HerbieMLIROpInterfaces.cpp
   RivalExternalModels.cpp
+  BatchEvaluateExternalModels.cpp
   IntervalSearch.cpp
   IntervalSearchPass.cpp
   LocalError.cpp
