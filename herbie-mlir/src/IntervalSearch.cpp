@@ -666,31 +666,30 @@ SamplingResult herbie::sampleAndEvaluate(
     llvm::ArrayRef<const char *> varNames, const RivalDiscretization *disc,
     const SearchResult &searchResult, llvm::ArrayRef<unsigned> floatBitWidths,
     unsigned numSamples, unsigned evalMaxIterations, unsigned evalMaxPrecision,
-    unsigned analysisPrecision, uint64_t seed) {
+    unsigned analysisPrecision, uint64_t seed, unsigned maxSkippedPoints) {
   SamplingResult sr;
   size_t numRoots = roots.size();
+  size_t numVars = varNames.size();
 
   auto &regions = searchResult.sampleableRegions;
   if (regions.empty())
     return sr;
 
-  // Build one RivalMachine per root so that a failure in one expression
-  // (e.g. division by zero) does not discard the entire sample point.
-  std::vector<RivalMachine *> machines(numRoots, nullptr);
-  size_t numVars = varNames.size();
-
-  for (size_t r = 0; r < numRoots; ++r) {
-    uint32_t root = roots[r];
-    machines[r] = rival_machine_new(arena, &root, 1, varNames.data(), numVars,
-                                    disc, evalMaxPrecision, 1000);
-  }
+  // Single machine with all roots, matching the Racket approach where
+  // real-apply evaluates every expression in one call.
+  RivalMachine *machine =
+      rival_machine_new(arena, roots.data(), numRoots, varNames.data(), numVars,
+                        disc, evalMaxPrecision, 1000);
+  if (!machine)
+    return sr;
 
   auto cumWeights = buildCumulativeWeights(regions, floatBitWidths);
   std::mt19937_64 rng(seed);
 
-  sr.points.resize(numSamples);
-  sr.results.resize(numSamples, std::vector<double>(numRoots));
+  sr.points.reserve(numSamples);
+  sr.results.reserve(numSamples);
 
+  // Allocate MPFR temporaries for arguments
   auto *argMpfr = new mpfr_t[numVars];
   std::vector<const mpfr_t *> argPtrs(numVars);
   for (size_t i = 0; i < numVars; ++i) {
@@ -698,48 +697,75 @@ SamplingResult herbie::sampleAndEvaluate(
     argPtrs[i] = &argMpfr[i];
   }
 
-  mpfr_t outMpfr;
-  mpfr_init2(outMpfr, analysisPrecision);
-  mpfr_t *outPtr = &outMpfr;
+  // Allocate MPFR temporaries for outputs (one per root)
+  auto *outMpfr = new mpfr_t[numRoots];
+  std::vector<mpfr_t *> outPtrs(numRoots);
+  for (size_t r = 0; r < numRoots; ++r) {
+    mpfr_init2(outMpfr[r], analysisPrecision);
+    outPtrs[r] = &outMpfr[r];
+  }
 
-  for (unsigned s = 0; s < numSamples; ++s) {
+  unsigned sampled = 0;
+  unsigned skipped = 0;
+
+  while (sampled < numSamples) {
     auto [pt, regionIdx] =
         samplePoint(regions, cumWeights, floatBitWidths, rng);
 
     for (size_t d = 0; d < numVars; ++d)
       mpfr_set_d(argMpfr[d], pt[d], MPFR_RNDN);
 
-    sr.points[s] = std::move(pt);
+    // Pass hints from the region that was selected during search.
+    RivalError err = rival_apply(
+        machine, argPtrs.data(), numVars, outPtrs.data(), numRoots,
+        regions[regionIdx].hints.get(), evalMaxIterations, evalMaxPrecision);
 
-    for (size_t r = 0; r < numRoots; ++r) {
-      if (!machines[r]) {
-        sr.results[s][r] = std::numeric_limits<double>::quiet_NaN();
-        continue;
+    // Check validity: all outputs must be finite numbers.
+    // This mirrors Racket's logic where a point is only kept when
+    // real-apply returns status 'valid and no output is infinite.
+    bool valid = (err == RIVAL_ERROR_OK);
+    if (valid) {
+      for (size_t r = 0; r < numRoots; ++r) {
+        if (!mpfr_number_p(outMpfr[r])) {
+          valid = false;
+          break;
+        }
       }
+    }
 
-      RivalError err =
-          rival_apply(machines[r], argPtrs.data(), numVars, &outPtr, 1, nullptr,
-                      evalMaxIterations, evalMaxPrecision);
+    if (valid) {
+      std::vector<double> row(numRoots);
+      for (size_t r = 0; r < numRoots; ++r)
+        row[r] = mpfr_get_d(outMpfr[r], MPFR_RNDN);
 
-      if (err != RIVAL_ERROR_OK || !mpfr_number_p(outMpfr)) {
-        sr.results[s][r] = std::numeric_limits<double>::quiet_NaN();
-      } else {
-        sr.results[s][r] = mpfr_get_d(outMpfr, MPFR_RNDN);
+      sr.points.push_back(std::move(pt));
+      sr.results.push_back(std::move(row));
+      ++sampled;
+      skipped = 0; // reset consecutive skip counter
+    } else {
+      ++skipped;
+      if (skipped >= maxSkippedPoints) {
+        LLVM_DEBUG(llvm::dbgs()
+                   << "sampleAndEvaluate: exceeded " << maxSkippedPoints
+                   << " consecutive skipped points after " << sampled
+                   << " valid samples\n");
+        break;
       }
     }
   }
 
-  sr.sampled = numSamples;
+  sr.sampled = sampled;
 
-  mpfr_clear(outMpfr);
+  // Cleanup
+  for (size_t r = 0; r < numRoots; ++r)
+    mpfr_clear(outMpfr[r]);
+  delete[] outMpfr;
+
   for (size_t i = 0; i < numVars; ++i)
     mpfr_clear(argMpfr[i]);
   delete[] argMpfr;
 
-  for (size_t r = 0; r < numRoots; ++r) {
-    if (machines[r])
-      rival_machine_free(machines[r]);
-  }
+  rival_machine_free(machine);
 
   return sr;
 }

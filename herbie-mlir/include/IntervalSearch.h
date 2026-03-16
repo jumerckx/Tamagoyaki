@@ -282,7 +282,8 @@ SamplingResult sampleAndEvaluate(
     llvm::ArrayRef<const char *> varNames, const RivalDiscretization *disc,
     const SearchResult &searchResult, llvm::ArrayRef<unsigned> floatBitWidths,
     unsigned numSamples, unsigned evalMaxIterations, unsigned evalMaxPrecision,
-    unsigned analysisPrecision, uint64_t seed = 42);
+    unsigned analysisPrecision, uint64_t seed = 42,
+    unsigned maxSkippedPoints = 100);
 
 } // namespace herbie
 
