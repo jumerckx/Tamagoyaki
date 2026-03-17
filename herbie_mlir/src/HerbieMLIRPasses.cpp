@@ -557,6 +557,12 @@ evaluateAllPatchesBatched(GraphOp graphOp, ArrayRef<Value> funcArgs,
         out.resize(numSamples);
         batchIface.batchEvaluate(operandPtrs, out.data(), numSamples);
       }
+      if (pid == 106) {
+        llvm::dbgs() << "Content\n";
+        for (auto v : out) {
+          llvm::dbgs() << "\t" << v << "\n";
+        }
+      }
     }
   }
 
@@ -1141,12 +1147,10 @@ public:
       // operation among their operands (i.e. classes with alternatives).
       DenseSet<Operation *> patchableClassSet;
       for (Operation *origOp : tracker.getOps()) {
-        for (Value result : origOp->getResults()) {
-          for (Operation *user : result.getUsers()) {
-            if (auto classOp = dyn_cast<ClassOp>(user)) {
-              if (classOp.getNumOperands() > 1)
-                patchableClassSet.insert(classOp.getOperation());
-            }
+        for (Operation *user : origOp->getUsers()) {
+          if (auto classOp = dyn_cast<ClassOp>(user)) {
+            if (classOp.getNumOperands() > 1)
+              patchableClassSet.insert(classOp.getOperation());
           }
         }
       }
