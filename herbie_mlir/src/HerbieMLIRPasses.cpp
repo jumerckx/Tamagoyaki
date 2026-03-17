@@ -137,6 +137,100 @@ struct ValueColumns {
   DenseMap<unsigned /*patchId*/, SmallVector<double>> overrides;
 };
 
+/// Recursively print a Value as a flat expression string, resolving ClassOps
+/// by picking the greedy-selected operand — unless `patch` is non-null and
+/// points at that ClassOp, in which case the patch operand is used instead.
+static std::string valueToExpr(Value val, PatchDesc *patch,
+                               DenseSet<Value> &onStack) {
+  Operation *defOp = val.getDefiningOp();
+  if (!defOp) {
+    auto blockArg = cast<BlockArgument>(val);
+    return "arg" + std::to_string(blockArg.getArgNumber());
+  }
+
+  if (onStack.contains(val))
+    return "<cycle>";
+
+  onStack.insert(val);
+
+  std::string result;
+
+  if (auto classOp = dyn_cast<ClassOp>(defOp)) {
+    unsigned idx;
+    if (patch && patch->classOp.getOperation() == classOp.getOperation())
+      idx = patch->operandIndex;
+    else {
+      auto mci = classOp.getMinCostIndex();
+      idx = mci ? *mci : 0;
+    }
+    result = valueToExpr(classOp->getOperand(idx), patch, onStack);
+  } else if (auto constOp = dyn_cast<arith::ConstantOp>(defOp)) {
+    if (auto floatAttr = dyn_cast<FloatAttr>(constOp.getValue())) {
+      llvm::raw_string_ostream os(result);
+      os << floatAttr.getValueAsDouble();
+    } else if (auto intAttr = dyn_cast<IntegerAttr>(constOp.getValue())) {
+      result = std::to_string(intAttr.getInt());
+    }
+  } else {
+    result = defOp->getName().getStringRef().str();
+    result += "(";
+    for (unsigned i = 0; i < defOp->getNumOperands(); ++i) {
+      if (i > 0)
+        result += ", ";
+      result += valueToExpr(defOp->getOperand(i), patch, onStack);
+    }
+    result += ")";
+  }
+
+  onStack.erase(val);
+  return result;
+}
+
+static bool opDumpContains(mlir::Operation *op, llvm::StringRef needle) {
+  std::string buf;
+  llvm::raw_string_ostream os(buf);
+  op->print(os);
+  return llvm::StringRef(buf).contains(needle);
+}
+
+/// Check whether selecting `operandIdx` for `patchedClass` creates a cycle.
+/// Mirrors the traversal of valueToExpr exactly: the patched ClassOp uses
+/// operandIdx; every other ClassOp uses its min_cost_index.
+static bool patchHasCycle(Value val, ClassOp patchedClass, unsigned patchIdx,
+                          DenseSet<Value> &onStack) {
+  Operation *defOp = val.getDefiningOp();
+  if (!defOp)
+    return false; // block argument — no cycle
+
+  if (onStack.contains(val))
+    return true; // found a cycle
+
+  onStack.insert(val);
+  bool cycle = false;
+
+  if (auto classOp = dyn_cast<ClassOp>(defOp)) {
+    unsigned idx;
+    if (classOp.getOperation() == patchedClass.getOperation()) {
+      idx = patchIdx; // the patched class — use the patch operand
+    } else {
+      auto mci = classOp.getMinCostIndex();
+      idx = mci ? *mci : 0; // every other class — greedy selection
+    }
+    cycle = patchHasCycle(classOp->getOperand(idx), patchedClass, patchIdx,
+                          onStack);
+  } else {
+    for (Value operand : defOp->getOperands()) {
+      if (patchHasCycle(operand, patchedClass, patchIdx, onStack)) {
+        cycle = true;
+        break;
+      }
+    }
+  }
+
+  onStack.erase(val);
+  return cycle;
+}
+
 /// Evaluate all patches simultaneously inside `graphOp`.
 ///
 /// A "patch" is a (ClassOp, operandIndex) pair representing one alternative
@@ -156,45 +250,99 @@ evaluateAllPatchesBatched(GraphOp graphOp, ArrayRef<Value> funcArgs,
   using namespace mlir;
   using namespace mlir::equivalence;
 
-  // ------------------------------------------------------------------
-  // 1. Traversal: post-order walk from yield, visiting all operands
-  //    of patchable ClassOps and only the greedy-selected operand of
-  //    non-patchable ClassOps.
-  // ------------------------------------------------------------------
   auto yieldOp = cast<YieldOp>(graphOp.getBody().front().getTerminator());
   if (yieldOp.getNumOperands() != 1)
     return false;
   Value outputVal = yieldOp.getOperand(0);
 
+  // ------------------------------------------------------------------
+  // 1. Build patch registry (no topological sort needed — just walk the
+  //    block to find patchable ClassOps).
+  // ------------------------------------------------------------------
+  SmallVector<PatchDesc> patchRegistry;
+  DenseMap<Operation *, unsigned> classToFirstPatch;
+
+  for (Operation &op : graphOp.getBody().front()) {
+    auto classOp = dyn_cast<ClassOp>(&op);
+    if (!classOp || !patchableClassSet.contains(&op))
+      continue;
+    classToFirstPatch[&op] = patchRegistry.size();
+    for (unsigned i = 0; i < classOp.getNumOperands(); ++i)
+      patchRegistry.push_back({classOp, i});
+  }
+
+  // ------------------------------------------------------------------
+  // 2. Filter cyclic patches.  A patch is cyclic when selecting its
+  //    operand in the patched ClassOp creates a dependency cycle
+  //    (i.e. valueToExpr would print <cycle>).
+  // ------------------------------------------------------------------
+  DenseMap<Operation *, DenseSet<unsigned>> validPatchOperands;
+
+  unsigned dst = 0;
+  for (unsigned src = 0; src < patchRegistry.size(); ++src) {
+    auto &patch = patchRegistry[src];
+    DenseSet<Value> onStack;
+    onStack.insert(patch.classOp->getResult(0));
+
+    if (patchHasCycle(patch.classOp->getOperand(patch.operandIndex),
+                      patch.classOp, patch.operandIndex, onStack)) {
+      LLVM_DEBUG(llvm::dbgs() << "Filtering cyclic patch " << src
+                              << " (class at " << patch.classOp.getLoc()
+                              << ", operand " << patch.operandIndex << ")\n");
+      continue;
+    }
+
+    validPatchOperands[patch.classOp.getOperation()].insert(patch.operandIndex);
+    if (dst != src)
+      patchRegistry[dst] = patchRegistry[src];
+    ++dst;
+  }
+  patchRegistry.resize(dst);
+
+  // Rebuild classToFirstPatch after filtering.
+  classToFirstPatch.clear();
+  for (unsigned i = 0; i < patchRegistry.size(); ++i) {
+    Operation *op = patchRegistry[i].classOp.getOperation();
+    if (!classToFirstPatch.count(op))
+      classToFirstPatch[op] = i;
+  }
+
+  unsigned P = patchRegistry.size();
+  if (P == 0)
+    return true;
+
+  // ------------------------------------------------------------------
+  // 3. Topological sort — cycle-free after filtering.  Visits the
+  //    greedy baseline edge plus every validated patch operand.
+  // ------------------------------------------------------------------
   SmallVector<Operation *> sortedOps;
   DenseSet<Operation *> visited;
-  DenseSet<Operation *> onStack; // for cycle detection
 
   std::function<bool(Value)> visit = [&](Value val) -> bool {
     Operation *defOp = val.getDefiningOp();
     if (!defOp)
-      return true; // block argument
-
-    if (onStack.contains(defOp))
-      return true; // cycle — skip, will produce NaN
+      return true;
 
     if (!visited.insert(defOp).second)
-      return true; // already scheduled
-
-    onStack.insert(defOp);
+      return true;
 
     if (auto classOp = dyn_cast<ClassOp>(defOp)) {
+      auto mci = classOp.getMinCostIndex();
+      if (!mci)
+        return false;
+      if (!visit(classOp->getOperand(*mci)))
+        return false;
+
       if (patchableClassSet.contains(defOp)) {
-        // Patchable: visit ALL operands.
-        for (Value operand : classOp->getOperands())
-          visit(operand);
-      } else {
-        // Non-patchable: only the greedy-selected operand.
-        auto mci = classOp.getMinCostIndex();
-        if (!mci)
-          return false;
-        if (!visit(classOp->getOperand(*mci)))
-          return false;
+        auto it = validPatchOperands.find(defOp);
+        if (it != validPatchOperands.end()) {
+          for (unsigned idx : it->second) {
+            if (idx == *mci)
+              continue;
+            if (!visit(classOp->getOperand(idx)))
+              return false;
+          }
+        }
       }
     } else {
       for (Value operand : defOp->getOperands())
@@ -202,7 +350,6 @@ evaluateAllPatchesBatched(GraphOp graphOp, ArrayRef<Value> funcArgs,
           return false;
     }
 
-    onStack.erase(defOp);
     sortedOps.push_back(defOp);
     return true;
   };
@@ -210,24 +357,25 @@ evaluateAllPatchesBatched(GraphOp graphOp, ArrayRef<Value> funcArgs,
   if (!visit(outputVal))
     return false;
 
-  // ------------------------------------------------------------------
-  // 2. Build patch registry.
-  // ------------------------------------------------------------------
-  SmallVector<PatchDesc> patchRegistry;
-  DenseMap<Operation *, unsigned> classToFirstPatch;
-
-  for (Operation *op : sortedOps) {
-    auto classOp = dyn_cast<ClassOp>(op);
-    if (!classOp || !patchableClassSet.contains(op))
-      continue;
-    classToFirstPatch[op] = patchRegistry.size();
-    for (unsigned i = 0; i < classOp.getNumOperands(); ++i)
-      patchRegistry.push_back({classOp, i});
+  llvm::dbgs() << "sortedOps\n";
+  for (auto op : sortedOps) {
+    llvm::dbgs() << "\t";
+    op->dump();
   }
 
-  unsigned P = patchRegistry.size();
-  if (P == 0)
-    return true; // nothing to patch
+  LLVM_DEBUG({
+    DenseSet<Value> onStack;
+    llvm::dbgs() << "Baseline expression: "
+                 << valueToExpr(outputVal, nullptr, onStack) << "\n";
+    for (unsigned p = 0; p < P; ++p) {
+      DenseSet<Value> onStack;
+      llvm::dbgs() << "Patch " << p << " (class at "
+                   << patchRegistry[p].classOp.getLoc() << ", operand "
+                   << patchRegistry[p].operandIndex << "): "
+                   << valueToExpr(outputVal, &patchRegistry[p], onStack)
+                   << "\n";
+    }
+  });
 
   // ------------------------------------------------------------------
   // 3. Seed function-argument ValueColumns (baseline only, no overrides).
@@ -248,6 +396,19 @@ evaluateAllPatchesBatched(GraphOp graphOp, ArrayRef<Value> funcArgs,
   // 4. Batched execution.
   // ------------------------------------------------------------------
   for (Operation *op : sortedOps) {
+    bool opOfInterest =
+        opDumpContains(op, "%cst_3 =") || opDumpContains(op, "%2474 =") ||
+        opDumpContains(op, "%72 =") || opDumpContains(op, "%3853 =") ||
+        opDumpContains(op, "%3820 =") || opDumpContains(op, "%3186 =") ||
+        opDumpContains(op, "%3765 =") || opDumpContains(op, "%3754 =") ||
+        opDumpContains(op, "%4093 =") || opDumpContains(op, "%4094 =") ||
+        opDumpContains(op, "%4095 =");
+    if (opOfInterest) {
+      llvm::dbgs() << "operation: ";
+      op->dump();
+      nullptr;
+    }
+
     if (isa<YieldOp>(op))
       continue;
 
@@ -262,9 +423,21 @@ evaluateAllPatchesBatched(GraphOp graphOp, ArrayRef<Value> funcArgs,
 
       // Baseline: forward greedy-selected operand's baseline.
       auto selIt = valueMap.find(selected);
-      if (selIt != valueMap.end())
+      if (selIt != valueMap.end()) {
+        if (opOfInterest) {
+          llvm::dbgs() << "contents:\n";
+          for (auto el : selIt->second.baseline) {
+            llvm::dbgs() << "\t" << el << "\n";
+          }
+        }
         resultVC.baseline = selIt->second.baseline;
-      else
+        if (opOfInterest) {
+          llvm::dbgs() << "contents++:\n";
+          for (auto el : resultVC.baseline) {
+            llvm::dbgs() << "\t" << el << "\n";
+          }
+        }
+      } else
         resultVC.baseline = nanColumn();
 
       if (patchableClassSet.contains(op)) {
@@ -277,9 +450,15 @@ evaluateAllPatchesBatched(GraphOp graphOp, ArrayRef<Value> funcArgs,
           unsigned patchId = firstPatch + i;
           Value operand = classOp->getOperand(i);
           auto opIt = valueMap.find(operand);
-          if (opIt != valueMap.end())
+          if (opIt != valueMap.end()) {
+            if (opOfInterest) {
+              llvm::dbgs() << "contents:\n";
+              for (auto el : opIt->second.baseline) {
+                llvm::dbgs() << "\t" << el << "\n";
+              }
+            }
             resultVC.overrides[patchId] = opIt->second.baseline;
-          else
+          } else
             resultVC.overrides[patchId] = nanColumn();
         }
 
@@ -332,6 +511,12 @@ evaluateAllPatchesBatched(GraphOp graphOp, ArrayRef<Value> funcArgs,
         auto &out = valueMap[op->getResult(0)].baseline;
         out.resize(numSamples);
         batchIface.batchEvaluate(operandPtrs, out.data(), numSamples);
+        if (opOfInterest) {
+          llvm::dbgs() << "contents:\n";
+          for (auto el : out) {
+            llvm::dbgs() << "\t" << el << "\n";
+          }
+        }
       }
     }
 
@@ -849,10 +1034,10 @@ public:
         varNamePtrs.push_back(name.c_str());
 
       RivalDiscretization *disc = rival_disc_f64(analysisPrecision);
+      int numSamples = 8;
       groundTruth = sampleAndEvaluate(
           gtArena, gtRoots, varNamePtrs, disc, intervalResult.searchResult,
-          intervalResult.floatBitWidths,
-          /*numSamples=*/256,
+          intervalResult.floatBitWidths, numSamples,
           /*evalMaxIterations=*/100,
           /*evalMaxPrecision=*/2000, analysisPrecision);
       rival_disc_free(disc);
@@ -863,8 +1048,9 @@ public:
                << "ground-truth evaluation produced no valid samples";
 
       LLVM_DEBUG(llvm::dbgs()
-                 << "Ground truth: " << groundTruth.sampled
-                 << " / 256 points (skipped " << groundTruth.skipped << ")\n");
+                 << "Ground truth: " << groundTruth.sampled << " / "
+                 << numSamples << " " << "points (skipped "
+                 << groundTruth.skipped << ")\n");
     }
 
     // ---------------------------------------------------------------

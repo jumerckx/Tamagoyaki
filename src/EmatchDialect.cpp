@@ -253,8 +253,7 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
       TAMAGOYAKI_SCOPED_TIMER("match");
       irModule.walk([&](Operation *op) {
         auto dialect = op->getDialect();
-        if (dialect != nullptr &&
-            isa<equivalence::EquivalenceDialect>(op->getDialect()))
+        if (dialect != nullptr && isa<equivalence::EquivalenceDialect>(dialect))
           return;
 
         SmallVector<mlir::detail::PDLByteCode::MatchResult, 4> opMatches;
