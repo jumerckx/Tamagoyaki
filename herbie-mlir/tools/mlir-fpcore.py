@@ -22,6 +22,7 @@ MLIR_TO_FPCORE_BINARY = {
 
 MLIR_TO_FPCORE_UNARY = {
     arith.NegfOp: "-",
+    math.AbsFOp: "fabs",
     math.SqrtOp: "sqrt",
     math.ExpOp: "exp",
     math.ExpM1Op: "expm1",
