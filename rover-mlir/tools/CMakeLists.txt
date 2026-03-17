@@ -12,6 +12,7 @@ set(ROVER_MLIR_OPT_LIBS
   Comb
   DatapathDialect
   HWDialect
+  RoverDialect
   MLIREquivalence
   MLIREmatch
 )
@@ -19,6 +20,7 @@ set(ROVER_MLIR_OPT_LIBS
 # Combine all generated headers this executable depends on
 set(ROVER_MLIR_OPT_GENERATED_HEADERS
   ${COMB_GENERATED_HEADERS}
+  ${ROVER_GENERATED_HEADERS}
   ${EQUIVALENCE_GENERATED_HEADERS}
   ${EMATCH_GENERATED_HEADERS}
   ${DATAPATH_GENERATED_HEADERS}
@@ -43,6 +45,7 @@ add_dependencies(rover-mlir-opt
   MLIREquivalenceIncGen
   MLIREmatchIncGen
   copy_comb_generated_td_to_src_include
+  copy_rover_generated_td_to_src_include
   copy_datapath_generated_td_to_src_include
   copy_equivalence_generated_td_to_src_include
   copy_ematch_generated_td_to_src_include

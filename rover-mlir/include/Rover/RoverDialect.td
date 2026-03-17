@@ -1,0 +1,68 @@
+//===----------------------------------------------------------------------===//
+//
+// This file defines the Rover passes.
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef ROVER_DIALECT
+#define ROVER_DIALECT
+
+include "mlir/Pass/PassBase.td"
+
+//===----------------------------------------------------------------------===//
+// Rover Passes
+//===----------------------------------------------------------------------===//
+
+def RoverSaturatePass : Pass<"rover-saturate", "::mlir::ModuleOp"> {
+  let summary = "Saturate a Rover e-graph on a function.";
+  let description = [{
+    This pass runs the first half of Rover optimization pipeline on a function:
+
+    If a "patterns" module exists in the parent module, it
+    will be used for equality saturation.
+  }];
+  let dependentDialects = [
+    "::mlir::func::FuncDialect",
+    "::mlir::arith::ArithDialect",
+    "::mlir::equivalence::EquivalenceDialect",
+    "::mlir::ematch::EmatchDialect",
+    "::mlir::pdl_interp::PDLInterpDialect",
+    "::datapath::DatapathDialect",
+    // "::hw::HWDialect",
+    "::comb::CombDialect"
+  ];
+  let options = [
+    Option<"maxIters", "max-iters", "int", "3",
+           "Maximum number of iterations before equality saturation times out.">,
+    Option<"maxNodes", "max-nodes", "int", "0",
+           "Maximum number of nodes in the e-graph (0 = unlimited).">,
+    Option<"patternsFile", "patterns-file", "std::string", /*default=*/"\"\"",
+           "Path to an MLIR file containing the patterns module. "
+           "When set, the input module is treated as the IR module directly.">
+  ];
+}
+
+def RoverExtractPass : Pass<"rover-extract", "::mlir::ModuleOp"> {
+  let summary = "Extract from a Rover e-graph.";
+  let description = [{
+    This pass runs the second half of Rover optimization pipeline on a function:
+
+    If a "patterns" module exists in the parent module, it
+    will be used for equality saturation.
+  }];
+  let dependentDialects = [
+    "::mlir::func::FuncDialect",
+    "::mlir::arith::ArithDialect",
+    "::mlir::equivalence::EquivalenceDialect",
+    "::mlir::pdl_interp::PDLInterpDialect",
+    "::datapath::DatapathDialect",
+    // "::hw::HWDialect",
+    "::comb::CombDialect"
+  ];
+    let options = [
+    Option<"extractDelay", "delay", "bool", "false",
+           "Extract based on delay else use area.">,
+  ];
+}
+
+#endif // ROVER_DIALECT

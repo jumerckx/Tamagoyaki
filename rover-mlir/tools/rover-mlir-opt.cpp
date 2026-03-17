@@ -17,20 +17,20 @@
 #include "Comb/Comb.h"
 #include "Datapath/Datapath.h"
 #include "HW/HW.h"
+#include "Rover/Rover.h"
 
 using namespace mlir::equivalence;
 using namespace mlir::ematch;
 
-namespace comb {
+namespace rover {
 #define GEN_PASS_REGISTRATION
-#include "CombPasses.h.inc"
-} // namespace comb
+#include "RoverPasses.h.inc"
+} // namespace rover
 
 namespace cl = llvm::cl;
 
 using namespace mlir;
 using namespace mlir::equivalence;
-using namespace comb;
 
 //===----------------------------------------------------------------------===//
 // Command-line options declaration
@@ -50,8 +50,8 @@ int main(int argc, char **argv) {
 
   MLIRContext context(registry);
 
-  // Register herbie-mlir passes
-  comb::registerCombPasses();
+  // Register rover passes
+  rover::registerRoverPasses();
 
   return mlir::asMainReturnCode(
       mlir::MlirOptMain(argc, argv, "MLIR optimizer for Rover", registry));
