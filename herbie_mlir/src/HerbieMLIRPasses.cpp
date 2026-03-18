@@ -186,13 +186,6 @@ static std::string valueToExpr(Value val, PatchDesc *patch,
   return result;
 }
 
-static bool opDumpContains(mlir::Operation *op, llvm::StringRef needle) {
-  std::string buf;
-  llvm::raw_string_ostream os(buf);
-  op->print(os);
-  return llvm::StringRef(buf).contains(needle);
-}
-
 /// Check whether selecting `operandIdx` for `patchedClass` creates a cycle.
 /// Mirrors the traversal of valueToExpr exactly: the patched ClassOp uses
 /// operandIdx; every other ClassOp uses its min_cost_index.
@@ -260,10 +253,6 @@ evaluateAllPatchesBatched(GraphOp graphOp, ArrayRef<Value> funcArgs,
   //
   // patchRegistry[patchId] gives the PatchDesc (classOp + operandIndex).
   // classPatchIds[op]      gives the list of patchIds for that ClassOp.
-  //
-  // These two structures are the single source of truth for the
-  // patchId ↔ (ClassOp, operand) relationship.  No arithmetic
-  // derivation (like "firstPatch + i") is ever used.
   // ------------------------------------------------------------------
   SmallVector<PatchDesc> patchRegistry;
   DenseMap<Operation *, SmallVector<unsigned>> classPatchIds;
@@ -286,8 +275,7 @@ evaluateAllPatchesBatched(GraphOp graphOp, ArrayRef<Value> funcArgs,
     SmallVector<PatchDesc> filtered;
     DenseMap<Operation *, SmallVector<unsigned>> filteredClassPatchIds;
 
-    for (unsigned src = 0; src < patchRegistry.size(); ++src) {
-      auto &patch = patchRegistry[src];
+    for (auto &patch : patchRegistry) {
       DenseSet<Value> onStack;
       onStack.insert(patch.classOp->getResult(0));
 
