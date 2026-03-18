@@ -46,3 +46,9 @@ add_mlir_library(herbieMLIR
 )
 
 target_include_directories(herbieMLIR PUBLIC ${HERBIE_MLIR_INCLUDE_DIR})
+
+# Ensure GMP/MPFR headers are available before compiling.
+# ExternalProject dependencies don't propagate through INTERFACE/IMPORTED
+# targets to object libraries created by add_mlir_library, so we need an
+# explicit dependency.
+add_dependencies(obj.herbieMLIR gmp_external mpfr_external)

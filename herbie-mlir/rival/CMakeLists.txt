@@ -34,6 +34,7 @@ ExternalProject_Add(gmp_external
         --enable-static
         --disable-shared
         --with-pic
+        MAKEINFO=true
     BUILD_COMMAND make -j${CMAKE_BUILD_PARALLEL_LEVEL}
     INSTALL_COMMAND make install
     BUILD_BYPRODUCTS ${DEPS_INSTALL_DIR}/lib/libgmp.a
