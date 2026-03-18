@@ -101,3 +101,11 @@ jobs:
       - name: Build and test herbie-mlir
         run: |
           uv run cmake --build build --target check-herbie-mlir
+
+      - name: Upload ExternalProject logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: externalproject-logs-${{ matrix.os }}
+          path: |
+            build/herbie-mlir/rival/deps-build/**/src/*-stamp/*.log
