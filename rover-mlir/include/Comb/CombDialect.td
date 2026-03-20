@@ -41,7 +41,7 @@ class CombOp<string mnemonic, list<Trait> traits = []> :
 // Base class for variadic operators.
 class VariadicOp<string mnemonic, list<Trait> traits = []> :
       CombOp<mnemonic, traits # [Pure]> {
-  let arguments = (ins Variadic<AnyInteger>:$inputs);
+  let arguments = (ins Variadic<AnyInteger>:$inputs, UnitAttr:$twoState);
   let results = (outs AnyInteger:$result);
 }
 
@@ -53,7 +53,8 @@ class UTVariadicOp<string mnemonic, list<Trait> traits = []> :
   // let hasFolder = true;
   // let hasVerifier = 1;
 
-  let assemblyFormat = "$inputs attr-dict `:` qualified(type($result))";
+  // let assemblyFormat = "$inputs attr-dict `:` qualified(type($result))";
+  let assemblyFormat = "(`bin` $twoState^)? $inputs attr-dict `:` qualified(type($result))";
 
   // let builders = [
   //   OpBuilder<(ins "Value":$lhs, "Value":$rhs, CArg<"bool", "false">:$twoState), [{
@@ -89,7 +90,11 @@ class UTBinOp<string mnemonic, list<Trait> traits = []> :
 def AddOp : UTVariadicOp<"add", [Commutative, Pure]>;
 def MulOp : UTVariadicOp<"mul", [Commutative, Pure]>;
 def ShlOp : UTBinOp<"shl",[Pure]>;
+def ShruOp : UTBinOp<"shru",[Pure]>;
 def SubOp : UTBinOp<"sub",[Pure]>;
+def AndOp : UTVariadicOp<"and", [Commutative]>;
+def OrOp  : UTVariadicOp<"or",  [Commutative]>;
+def XorOp : UTVariadicOp<"xor", [Commutative]>;
 
 def ConcatOp : CombOp<"concat", 
   [InferTypeOpInterface, Pure]> {
@@ -123,6 +128,48 @@ def ConcatOp : CombOp<"concat",
                                           mlir::RegionRange regions,
                                           mlir::SmallVectorImpl<mlir::Type> &results);
   }];
+}
+
+// Select one of two values based on a condition.
+def MuxOp : CombOp<"mux", 
+  [Pure,   AllTypesMatch<["trueValue", "falseValue", "result"]>]> {
+  let summary = "Return one or the other operand depending on a selector bit";
+  let description = [{
+    ```
+      %0 = mux %pred, %tvalue, %fvalue : i4
+    ```
+  }];
+
+  let arguments = (ins I1:$cond, AnyType:$trueValue,
+                       AnyType:$falseValue, UnitAttr:$twoState);
+  let results = (outs AnyType:$result);
+
+  let assemblyFormat =
+    "(`bin` $twoState^)? $cond `,` $trueValue `,` $falseValue  attr-dict `:` qualified(type($result))";
+}
+
+// Extract a range of bits from the specified input.
+def ExtractOp : CombOp<"extract", 
+  [Pure]> {
+  let summary = "Extract a range of bits into a smaller value, lowBit "
+                "specifies the lowest bit included.";
+
+  let arguments = (ins AnyInteger:$input, I32Attr:$lowBit);
+  let results = (outs AnyInteger:$result);
+
+  let assemblyFormat =
+    "$input `from` $lowBit attr-dict `:` functional-type($input, $result)";
+
+  // let hasFolder = true;
+  // let hasVerifier = 1;
+  // let hasCanonicalizeMethod = true;
+
+  // let builders = [
+  //   OpBuilder<(ins "Value":$lhs, "int32_t":$lowBit, "int32_t":$bitWidth), [{
+  //     auto resultType = $_builder.getIntegerType(bitWidth);
+  //     return build($_builder, $_state, resultType, lhs, lowBit);
+  //   }]>
+  // ];
 }
 
 //===----------------------------------------------------------------------===//
