@@ -22,6 +22,11 @@ def main():
         required=True,
         help="Path to output PDF file",
     )
+    parser.add_argument(
+        "--compact",
+        action="store_true",
+        help="Remove benchmarks with small differences instead of graying them out",
+    )
 
     args = parser.parse_args()
 
@@ -70,6 +75,12 @@ def main():
     # Concatenate: other benchmarks first, then NMSE benchmarks
     df = pd.concat([df_other, df_nmse], ignore_index=True)
 
+    # Optionally remove benchmarks with small differences
+    if args.compact:
+        df_other = df_other[~df_other["small_diff"]].reset_index(drop=True)
+        df_nmse = df_nmse[~df_nmse["small_diff"]].reset_index(drop=True)
+        df = pd.concat([df_other, df_nmse], ignore_index=True)
+
     # Shorten common words in names
     df["name"] = df["name"].str.replace(
         "Probabilities in a clustering algorithm", "Clustering", regex=False
@@ -101,7 +112,7 @@ def main():
     plt.rcParams["font.size"] = 7
     plt.rcParams["axes.linewidth"] = 0.8
 
-    fig, ax = plt.subplots(figsize=(5.5, 2.5))
+    fig, ax = plt.subplots(figsize=(5.5, 1.7))
 
     # Set up bar positions with slightly reduced width for spacing
     x = np.arange(len(names))
@@ -151,7 +162,7 @@ def main():
     legend_elements = [
         Patch(facecolor=color_original, alpha=1.0, label="Original"),
         Patch(facecolor=color_herbie, alpha=0.8, label="Herbie"),
-        Patch(facecolor=color_target, alpha=0.8, label="Herbie-MLIR (ours)"),
+        Patch(facecolor=color_target, alpha=0.8, label="Tamagoyaki"),
     ]
 
     # Add data labels on top of bars with smaller font
@@ -230,18 +241,18 @@ def main():
     y_range = ylim[1] - ylim[0]
     ax.text(
         -0.5,
-        ylim[1] + y_range * 0.04,
+        ylim[1] + y_range * 0.06,
         "Accuracy (%)",
-        fontsize=8,
+        fontsize=6,
         ha="left",
         va="bottom",
     )
 
     ax.set_xticks(x)
-    ax.set_xticklabels(names, rotation=35, ha="right", fontsize=6)
+    ax.set_xticklabels(names, rotation=35, ha="right", fontsize=5)
 
     # Smaller tick labels
-    ax.tick_params(axis="y", labelsize=6)
+    ax.tick_params(axis="both", labelsize=5, pad=2)
 
     # Fade x-labels for small difference benchmarks
     for i, label in enumerate(ax.get_xticklabels()):
@@ -250,13 +261,13 @@ def main():
 
     # Legend positioning with smaller font
     legend_x = 0.83
-    legend_y = 1.1
+    legend_y = 1.2
     ax.legend(
         handles=legend_elements,
         loc="upper left",
         bbox_to_anchor=(legend_x, legend_y),
         frameon=False,
-        fontsize=6,
+        fontsize=5,
     )
 
     # Grid removed
@@ -275,7 +286,7 @@ def main():
         y_range = ylim[1] - ylim[0]
 
         # Draw a bracket below the x-labels
-        bracket_y = ylim[0] - y_range * 0.4
+        bracket_y = ylim[0] - y_range * 0.5
         bracket_height = y_range * 0.03
 
         # Draw horizontal line
