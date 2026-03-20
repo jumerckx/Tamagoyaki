@@ -13,6 +13,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/DialectRegistry.h"
+#include "mlir/IR/Operation.h"
 #include "mlir/IR/OwningOpRef.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
@@ -48,24 +49,25 @@ static unsigned ceilLog2(unsigned v) {
 }
 
 // Helper to get the narrow width if value is zero-extended
-std::optional<unsigned> getZeroExtendedWidth(Value val) {
+unsigned getZeroExtendedWidth(Value val) {
+  auto width = val.getType().getIntOrFloatBitWidth();
   auto concat = val.getDefiningOp<comb::ConcatOp>();
   if (!concat)
-    return std::nullopt;
+    return width;
 
   auto inputs = concat.getInputs();
   if (inputs.size() != 2)
-    return std::nullopt;
+    return width;
 
   // Check first input is constant zero
   auto prefix = inputs[0].getDefiningOp<hw::ConstantOp>();
   if (!prefix || !prefix.getValue().isZero())
-    return std::nullopt;
+    return width;
 
   // Return width of the base (non-extended) value
   auto baseType = llvm::dyn_cast<IntegerType>(inputs[1].getType());
   if (!baseType)
-    return std::nullopt;
+    return width;
 
   return baseType.getWidth();
 }
@@ -74,14 +76,8 @@ unsigned getBinaryOpCost(Value lhs, Value rhs) {
   auto lhsWidth = getZeroExtendedWidth(lhs);
   auto rhsWidth = getZeroExtendedWidth(rhs);
 
-  if (!lhsWidth)
-    lhsWidth = lhs.getType().getIntOrFloatBitWidth();
-
-  if (!rhsWidth)
-    rhsWidth = rhs.getType().getIntOrFloatBitWidth();
-
   // Cost is the maximum narrow width
-  return (*lhsWidth) * (*rhsWidth);
+  return lhsWidth * rhsWidth;
 }
 
 static LogicalResult rewriterBuildPartialProduct(PatternRewriter &rewriter,
@@ -102,6 +98,21 @@ static LogicalResult rewriterBuildPartialProduct(PatternRewriter &rewriter,
 
   // Hand the comb.add back to PDL so it can wire up the replacement.
   results.push_back(ppOp.getOperation());
+  return success();
+}
+
+static LogicalResult rewriterBuildZero(PatternRewriter &rewriter,
+                                       PDLResultList &results,
+                                       ArrayRef<PDLValue> args) {
+  auto operation = args[0].cast<Operation *>();
+
+  // Operands of comb.mul
+  auto type = operation->getResult(0).getType();
+  auto zero = hw::ConstantOp::create(rewriter, operation->getLoc(), type,
+                                     rewriter.getIntegerAttr(type, 0));
+
+  // Hand the comb.add back to PDL so it can wire up the replacement.
+  results.push_back(zero.getOperation());
   return success();
 }
 
@@ -175,6 +186,7 @@ public:
     pdlPattern.registerRewriteFunction("BuildPartialProduct",
                                        rewriterBuildPartialProduct);
     pdlPattern.registerRewriteFunction("BuildCompress", rewriterBuildCompress);
+    pdlPattern.registerRewriteFunction("BuildZero", rewriterBuildZero);
     bool saturationSuccess = mlir::ematch::runSaturation(
         irModule->getContext(), std::move(pdlPattern), irModule, maxIters);
 
@@ -194,8 +206,17 @@ public:
     ModuleOp irModule = module.lookupSymbol<ModuleOp>(
         StringAttr::get(module->getContext(), "ir"));
 
-    if (!irModule)
+    // Check if the top-level module is named "ir"
+    if (!irModule && module.getName() == "ir") {
+      irModule = module;
+    }
+
+    if (!irModule) {
+      llvm::errs() << "=== IR Module Not Detected ===\n";
+      module.print(llvm::errs());
+      llvm::errs() << "\n";
       return;
+    }
 
     // select greedily:
     irModule.walk(
@@ -212,27 +233,33 @@ public:
             llvm::TypeSwitch<Operation *, std::pair<unsigned, unsigned>>(op)
                 .Case<comb::AddOp>([](comb::AddOp addOp) {
                   // Adder cost = width
-                  auto addArea =
+                  if (addOp.getNumOperands() == 2 &&
+                      addOp.getOperand(0) == addOp.getOperand(1)) {
+                    return std::pair{0, 0};
+                  }
+                  int addArea =
                       addOp.getResult().getType().getIntOrFloatBitWidth();
-                  auto addDelay = ceilLog2(addArea);
-                  (void)addDelay;
-                  // return std::pair{addArea, addDelay};
-                  return std::pair{10000, 1000};
+                  auto lhsWidth = getZeroExtendedWidth(addOp.getOperand(0));
+                  auto rhsWidth = getZeroExtendedWidth(addOp.getOperand(1));
+                  int addDelay = ceilLog2(std::max(
+                      lhsWidth, rhsWidth)); // assume a tree of 2-input adders
+                  return std::pair{addArea, addDelay};
+                  // return std::pair{10000, addDelay};
                 })
                 .Case<comb::MulOp>([](comb::MulOp mulOp) {
                   // Multiplier cost = width(lhs) * width(rhs)
-                  return std::pair{10000, 10000};
+                  auto lhsWidth = getZeroExtendedWidth(mulOp.getOperand(0));
+                  auto rhsWidth = getZeroExtendedWidth(mulOp.getOperand(1));
+
+                  auto maxWidth = std::max(lhsWidth, rhsWidth);
+
+                  return std::pair{10000, maxWidth};
                 })
                 .Case<comb::ShlOp>([](comb::ShlOp shlOp) {
                   auto shlArea =
                       getBinaryOpCost(shlOp.getLhs(), shlOp.getRhs());
                   auto shiftBy = getZeroExtendedWidth(shlOp.getRhs());
-                  if (shiftBy)
-                    return std::pair{shlArea, *shiftBy};
-
-                  return std::pair{
-                      shlArea,
-                      shlOp.getRhs().getType().getIntOrFloatBitWidth()};
+                  return std::pair{shlArea, shiftBy};
                 })
                 .Case<datapath::PartialProductOp>(
                     [](datapath::PartialProductOp ppOp) {
@@ -256,31 +283,35 @@ public:
 
                       return std::pair{compressCost / numRes, ceilLog2(numOps)};
                     })
+                .Case<comb::ExtractOp>(
+                    [](comb::ExtractOp extractOp) { return std::pair{0, 0}; })
+                .Case<comb::ConcatOp>(
+                    [](comb::ConcatOp concatOp) { return std::pair{0, 0}; })
                 .Default([](auto) { return std::pair{0, 1}; });
 
-        if (extractDelay)
-          op->setAttr("equivalence.cost",
-                      CostAttr::get(op->getContext(), delay));
-        else
-          op->setAttr("equivalence.cost",
-                      CostAttr::get(op->getContext(), area));
+        op->setAttr("equivalence.delay",
+                    CostAttr::get(op->getContext(), delay));
+        op->setAttr("equivalence.area", CostAttr::get(op->getContext(), area));
       });
 
-      if (extractDelay)
-        selectGreedy(graphOp, /*defaultCost=*/-1, "equivalence.cost",
+      if (extractDelay) {
+        selectGreedy(graphOp, /*defaultCost=*/-1, "equivalence.delay",
                      costReductionMax);
-      else
-        selectGreedy(graphOp, /*defaultCost=*/-1, "equivalence.cost");
-      llvm::errs() << "=== IR After Costing ===\n";
-      irModule.print(llvm::errs());
-      llvm::errs() << "\n";
+        extractFromGraph(graphOp, true);
+        llvm::errs() << "=== IR After Costing ===\n";
+        irModule.print(llvm::errs());
+        llvm::errs() << "\n";
+      }
 
+      selectGreedy(graphOp, /*defaultCost=*/-1, "equivalence.area");
       extractFromGraph(graphOp);
+
       graphOp.walk([&](Operation *op) {
         if (isa<ClassOp>(op) || isa<GraphOp>(op) || isa<YieldOp>(op))
           return;
 
-        op->removeAttr("equivalence.cost");
+        op->removeAttr("equivalence.area");
+        op->removeAttr("equivalence.delay");
         if (op->getUses().empty())
           op->erase();
       });

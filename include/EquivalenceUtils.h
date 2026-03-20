@@ -59,7 +59,7 @@ void clearSelection(GraphOp graphOp,
 /// selected operand, erases non-selected operand ops, and removes the cost
 /// attribute. ClassOps with no uses are erased entirely. ClassOps without
 /// min_cost_index are left untouched.
-void extractFromGraph(GraphOp graphOp);
+void extractFromGraph(GraphOp graphOp, bool partialExtraction = false);
 
 /// Inline a GraphOp by splicing its body into the parent block, replacing
 /// graph results with yielded values, and erasing the GraphOp.
