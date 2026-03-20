@@ -27,16 +27,8 @@ tamagoyaki = { workspace = true }
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[tool.hatch.build.targets.wheel.force-include]
-"herbie-mlir/__init__.py" = "herbie_mlir/__init__.py"
-"herbie-mlir/tools/__init__.py" = "herbie_mlir/tools/__init__.py"
-"herbie-mlir/tools/fpcore-mlir.py" = "herbie_mlir/tools/fpcore_mlir.py"
-"herbie-mlir/tools/herbie-pdl.py" = "herbie_mlir/tools/herbie_pdl.py"
-"herbie-mlir/tools/mlir-fpcore.py" = "herbie_mlir/tools/mlir_fpcore.py"
-"herbie-mlir/tools/insert-fpcore-alternative.py" = "herbie_mlir/tools/insert_fpcore_alternative.py"
-"herbie-mlir/tools/extract-accuracies.py" = "herbie_mlir/tools/extract_accuracies.py"
-"herbie-mlir/tools/plot-accuracies.py" = "herbie_mlir/tools/plot_accuracies.py"
-"herbie-mlir/tools/plot-timing.py" = "herbie_mlir/tools/plot_timing.py"
+[tool.hatch.build.targets.wheel]
+packages = ["herbie_mlir"]
 
 [project.scripts]
 fpcore-mlir = "herbie_mlir.tools.fpcore_mlir:entry"

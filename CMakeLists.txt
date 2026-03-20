@@ -43,10 +43,10 @@ include_directories(include)
 add_subdirectory(src)
 add_subdirectory(test)
 
-# herbie-mlir subproject (optional, can be disabled)
-option(BUILD_HERBIE_MLIR "Build herbie-mlir subproject" ON)
+# herbie_mlir subproject (optional, can be disabled)
+option(BUILD_HERBIE_MLIR "Build herbie_mlir subproject" ON)
 if(BUILD_HERBIE_MLIR)
-  add_subdirectory(herbie-mlir)
+  add_subdirectory(herbie_mlir)
 endif()
 
 # rover-mlir subproject (optional, can be disabled)

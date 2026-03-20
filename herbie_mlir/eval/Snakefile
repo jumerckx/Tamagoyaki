@@ -2,7 +2,7 @@ import os
 import glob
 
 herbie_mlir_opt_path = "../../build/bin/herbie-mlir-opt"
-herbie_racket_prefix = "../../build/herbie-mlir/racket-pkgs"
+herbie_racket_prefix = "../../build/herbie_mlir/racket-pkgs"
 
 # Get all benchmark names from fpcore files
 benchmark_names = [
@@ -23,6 +23,7 @@ PLOTS_DIR = f"{OUT_DIR}/plots"
 rule all:
     input:
         f"{PLOTS_DIR}/accuracy_comparison.pdf",
+        f"{PLOTS_DIR}/accuracy_comparison_compact.pdf",
         f"{PLOTS_DIR}/timing_comparison.pdf",
 
 # ============ Rules Processing Pipeline ============
@@ -108,7 +109,7 @@ rule extract_evaluation_csv:
     output:
         f"{OUT_DIR}/evaluation.csv"
     shell:
-        "uv run python ../tools/extract-accuracies.py {input.report}/results.json {BENCHMARKS_DIR} > {output}"
+        "uv run extract-accuracies {input.report}/results.json {BENCHMARKS_DIR} > {output}"
 
 # ============ Plotting Pipeline ============
 
@@ -119,6 +120,14 @@ rule generate_accuracy_plot:
         f"{PLOTS_DIR}/accuracy_comparison.pdf"
     shell:
         "uv run plot-accuracies {input} -o {output}"
+
+rule generate_accuracy_plot_compact:
+    input:
+        f"{OUT_DIR}/evaluation.csv"
+    output:
+        f"{PLOTS_DIR}/accuracy_comparison_compact.pdf"
+    shell:
+        "uv run plot-accuracies {input} -o {output} --hide-unchanged"
 
 rule generate_timing_plot:
     input:
