@@ -72,6 +72,9 @@ def main():
     df_other = reorder_by_difference(df_other)
     df_nmse = reorder_by_difference(df_nmse)
 
+    # Count total benchmarks before compacting (for width calculation)
+    total_before_compact = len(df_other) + len(df_nmse)
+
     # Concatenate: other benchmarks first, then NMSE benchmarks
     df = pd.concat([df_other, df_nmse], ignore_index=True)
 
@@ -112,7 +115,22 @@ def main():
     plt.rcParams["font.size"] = 7
     plt.rcParams["axes.linewidth"] = 0.8
 
-    fig, ax = plt.subplots(figsize=(5.5, 1.7))
+    # Scale figure width so bars have consistent physical size.
+    # Normal mode: 3 bars × 0.25 = 0.75 data-units per benchmark
+    # Compact mode: 2 bars × 0.30 = 0.60 data-units per benchmark
+    full_width = 5.5  # width when all benchmarks are present (normal mode)
+    footprint_normal = 3 * 0.25
+    footprint_compact = 2 * 0.38
+    if args.compact:
+        fig_width = (
+            full_width
+            * (len(names) / max(total_before_compact, 1))
+            * (footprint_compact / footprint_normal)
+        )
+    else:
+        fig_width = full_width
+    fig_width = max(fig_width, 1.5)  # enforce a minimum so the plot isn't tiny
+    fig, ax = plt.subplots(figsize=(fig_width, 1.7))
 
     # Define bar colors
     color_original = "#cacaca"
@@ -125,7 +143,7 @@ def main():
 
     if args.compact:
         # Compact mode: 2 bars + dotted baseline line
-        width = 0.3
+        width = 0.38
         x = np.arange(len(names))
 
         bars2_list = []
@@ -197,7 +215,6 @@ def main():
 
             # Baseline accuracy label: black text, sideways, just below dotted line on the Herbie bar
             x_pos_bl = bars2_list[i].get_x() + bars2_list[i].get_width() / 2.0
-            print(baseline_y, label_offset)
             ax.text(
                 x_pos_bl,
                 baseline_y - 3,
@@ -232,13 +249,15 @@ def main():
         ax.set_xlim(-0.5, len(names) - 0.5)
         ax.margins(x=0)
 
-        # Legend for compact mode
+        # Legend for compact mode (column-major: entries fill down then right)
+        spacer = Patch(facecolor="none", edgecolor="none", label="")
         legend_elements = [
-            Patch(facecolor=color_herbie, alpha=0.8, label="Herbie"),
-            Patch(facecolor=color_target, alpha=0.8, label="Tamagoyaki"),
             plt.Line2D(
                 [], [], color="black", linestyle=":", linewidth=0.8, label="Original"
             ),
+            spacer,
+            Patch(facecolor=color_herbie, alpha=0.8, label="Herbie"),
+            Patch(facecolor=color_target, alpha=0.8, label="Tamagoyaki"),
         ]
 
     else:
@@ -345,9 +364,11 @@ def main():
                 alpha=label_alpha,
             )
 
-        # Legend for normal mode
+        # Legend for normal mode (column-major: entries fill down then right)
+        spacer = Patch(facecolor="none", edgecolor="none", label="")
         legend_elements = [
             Patch(facecolor=color_original, alpha=1.0, label="Original"),
+            spacer,
             Patch(facecolor=color_herbie, alpha=0.8, label="Herbie"),
             Patch(facecolor=color_target, alpha=0.8, label="Tamagoyaki"),
         ]
@@ -380,14 +401,13 @@ def main():
             label.set_alpha(0.3)
 
     # Legend positioning with smaller font
-    legend_x = 0.83
-    legend_y = 1.2
     ax.legend(
         handles=legend_elements,
-        loc="upper left",
-        bbox_to_anchor=(legend_x, legend_y),
+        loc="upper right",
+        bbox_to_anchor=(1.02, 1.23),
         frameon=False,
         fontsize=5,
+        ncol=2,
     )
 
     # Grid removed
