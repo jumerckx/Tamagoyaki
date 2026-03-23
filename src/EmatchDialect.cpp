@@ -301,10 +301,6 @@ struct EmatchSaturatePass
   using impl::EmatchSaturatePassBase<
       EmatchSaturatePass>::EmatchSaturatePassBase;
 
-  void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<mlir::pdl_interp::PDLInterpDialect>();
-  }
-
   void runOnOperation() final {
     ModuleOp module = getOperation();
 
@@ -348,10 +344,6 @@ struct EmatchSaturateBenchmarkPass
           EmatchSaturateBenchmarkPass> {
   using impl::EmatchSaturateBenchmarkPassBase<
       EmatchSaturateBenchmarkPass>::EmatchSaturateBenchmarkPassBase;
-
-  void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<mlir::pdl_interp::PDLInterpDialect>();
-  }
 
   void runOnOperation() final {
     ModuleOp module = getOperation();
@@ -404,10 +396,6 @@ struct ApplyPDLInterpPass
   using impl::ApplyPDLInterpPassBase<
       ApplyPDLInterpPass>::ApplyPDLInterpPassBase;
 
-  void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<mlir::pdl_interp::PDLInterpDialect>();
-  }
-
   void runOnOperation() final {
     ModuleOp module = getOperation();
 
@@ -436,10 +424,6 @@ struct ConvertEmatchToPDLInterpPass
           ConvertEmatchToPDLInterpPass> {
   using impl::ConvertEmatchToPDLInterpPassBase<
       ConvertEmatchToPDLInterpPass>::ConvertEmatchToPDLInterpPassBase;
-
-  void getDependentDialects(DialectRegistry &registry) const override {
-    registry.insert<mlir::pdl_interp::PDLInterpDialect>();
-  }
 
   void runOnOperation() final {
     ModuleOp module = getOperation();
