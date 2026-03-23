@@ -19,6 +19,7 @@ FPCORE_MERGED_DIR = f"{OUT_DIR}/fpcore_merged"
 HERBIE_EVAL_DIR = f"{OUT_DIR}/herbie_eval"
 BENCHMARKS_DIR = f"{OUT_DIR}/benchmarks"
 PLOTS_DIR = f"{OUT_DIR}/plots"
+SATURATION_TIMING_DIR = f"{OUT_DIR}/saturation_timing"
 
 rule all:
     input:
@@ -41,6 +42,14 @@ rule convert_pdl_to_pdl_interp:
     shell:
         "uv run xdsl-opt -p 'convert-pdl-to-pdl-interp{{optimize_for_eqsat=true}}' {input} -o {output}"
 
+rule convert_pdl_to_pdl_interp_individual:
+    input:
+        f"{RULES_DIR}/rules_pdl.mlir"
+    output:
+        f"{RULES_DIR}/rules_pdl_interp_individual.mlir"
+    shell:
+        "uv run xdsl-opt -p 'convert-pdl-to-pdl-interp{{optimize_for_eqsat=true convert-individually=true}}' {input} -o {output}"
+
 # ============ Benchmark Processing Pipeline ============
 
 rule fpcore_to_mlir:
@@ -61,6 +70,26 @@ rule optimize:
         f"{BENCHMARKS_DIR}/{{benchmark}}.tsv"
     shell:
         '{herbie_mlir_opt_path} -herbie-optimize="max-saturation-iters=20 max-nodes=4000 patterns-file={input.pdl_interp}" --remove-dead-values {input.mlir} > {output}'
+
+# ============ Saturation Timing Pipeline ============
+
+rule saturation_timing_joint:
+    input:
+        mlir = f"{MLIR_DIR}/{{benchmark}}.mlir",
+        pdl_interp = f"{RULES_DIR}/rules_pdl_interp.mlir"
+    output:
+        f"{SATURATION_TIMING_DIR}/{{benchmark}}_joint.json"
+    shell:
+        'mkdir -p {SATURATION_TIMING_DIR} && {herbie_mlir_opt_path} -equivalence-insert-graph -ematch-saturate="patterns-file={input.pdl_interp} max-iters=20 max-nodes=4000" {input.mlir} -tamagoyaki-timing -tamagoyaki-timing-output=json 2> {output} > /dev/null'
+
+rule saturation_timing_individual:
+    input:
+        mlir = f"{MLIR_DIR}/{{benchmark}}.mlir",
+        pdl_interp = f"{RULES_DIR}/rules_pdl_interp_individual.mlir"
+    output:
+        f"{SATURATION_TIMING_DIR}/{{benchmark}}_individual.json"
+    shell:
+        'mkdir -p {SATURATION_TIMING_DIR} && {herbie_mlir_opt_path} -equivalence-insert-graph -ematch-saturate="patterns-file={input.pdl_interp} max-iters=20 max-nodes=4000" {input.mlir} -tamagoyaki-timing -tamagoyaki-timing-output=json 2> {output} > /dev/null'
 
 rule optimized_mlir_to_fpcore:
     input:
@@ -104,11 +133,13 @@ rule run_herbie_report:
 rule extract_evaluation_csv:
     input:
         report = f"{HERBIE_EVAL_DIR}/herbie_report",
-        benchmarks = expand(f"{BENCHMARKS_DIR}/{{benchmark}}.tsv", benchmark=benchmark_names)
+        benchmarks = expand(f"{BENCHMARKS_DIR}/{{benchmark}}.tsv", benchmark=benchmark_names),
+        timing_joint = expand(f"{SATURATION_TIMING_DIR}/{{benchmark}}_joint.json", benchmark=benchmark_names),
+        timing_individual = expand(f"{SATURATION_TIMING_DIR}/{{benchmark}}_individual.json", benchmark=benchmark_names),
     output:
         f"{OUT_DIR}/evaluation.csv"
     shell:
-        "uv run extract-accuracies {input.report}/results.json {BENCHMARKS_DIR} > {output}"
+        "uv run extract-accuracies {input.report}/results.json {BENCHMARKS_DIR} {SATURATION_TIMING_DIR} > {output}"
 
 # ============ Plotting Pipeline ============
 

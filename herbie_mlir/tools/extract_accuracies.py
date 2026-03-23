@@ -165,12 +165,48 @@ def extract_herbie_timings(timeline_path: Path) -> tuple[str, str]:
     return str(herbie_wo_sampling), str(herbie_sampling)
 
 
-def extract_accuracies(json_file: str, benchmarks_dir: str) -> None:
+def extract_saturation_time(timing_path: Path) -> str:
+    """Extract the runSaturation wall-clock duration from a tamagoyaki timing JSON file.
+
+    Args:
+        timing_path: Path to the timing JSON file.
+
+    Returns:
+        The runSaturation duration as a string.
+
+    Raises:
+        FileNotFoundError: If the timing file does not exist.
+        ValueError: If the timing data is invalid or runSaturation entry is missing.
+    """
+    if not timing_path.exists():
+        raise FileNotFoundError(f"Timing file not found: {timing_path}")
+
+    with open(timing_path) as f:
+        timing_data: Any = json.load(f)
+
+    if not isinstance(timing_data, list):
+        raise ValueError(
+            f"Expected timing data to be a list, got {type(timing_data).__name__}"
+        )
+
+    for entry in timing_data:
+        if isinstance(entry, dict) and entry.get("name") == "runSaturation":
+            wall: Any = entry.get("wall")
+            if isinstance(wall, dict) and "duration" in wall:
+                return str(wall["duration"])
+
+    raise ValueError(f"No 'runSaturation' entry found in {timing_path}")
+
+
+def extract_accuracies(
+    json_file: str, benchmarks_dir: str, saturation_timing_dir: str
+) -> None:
     """Extract accuracy metrics from a Herbie results JSON file and output as CSV.
 
     Args:
         json_file: Path to the JSON results file.
         benchmarks_dir: Directory containing Snakemake benchmark TSV files.
+        saturation_timing_dir: Directory containing saturation timing JSON files.
 
     Raises:
         KeyError: If required fields are missing from the JSON.
@@ -191,6 +227,8 @@ def extract_accuracies(json_file: str, benchmarks_dir: str) -> None:
             "optimize_time",
             "herbie_wo_sampling",
             "herbie_sampling",
+            "saturation_time_joint",
+            "saturation_time_individual",
         ],
     )
     writer.writeheader()
@@ -224,6 +262,18 @@ def extract_accuracies(json_file: str, benchmarks_dir: str) -> None:
         except (ValueError, FileNotFoundError) as e:
             raise ValueError(f"Test {i} ({name}): {e}")
 
+        # Extract saturation timing data
+        try:
+            timing_dir: Path = Path(saturation_timing_dir)
+            saturation_time_joint: str = extract_saturation_time(
+                timing_dir / f"{filename}_joint.json"
+            )
+            saturation_time_individual: str = extract_saturation_time(
+                timing_dir / f"{filename}_individual.json"
+            )
+        except (ValueError, FileNotFoundError) as e:
+            raise ValueError(f"Test {i} ({name}): {e}")
+
         writer.writerow(
             {
                 "name": name,
@@ -234,21 +284,24 @@ def extract_accuracies(json_file: str, benchmarks_dir: str) -> None:
                 "optimize_time": optimize_time,
                 "herbie_wo_sampling": herbie_wo_sampling,
                 "herbie_sampling": herbie_sampling,
+                "saturation_time_joint": saturation_time_joint,
+                "saturation_time_individual": saturation_time_individual,
             }
         )
 
 
 def main() -> None:
     """Main entry point."""
-    if len(sys.argv) != 3:
+    if len(sys.argv) != 4:
         print(
-            "Usage: python extract_accuracies.py <json_file> <benchmarks_dir>",
+            "Usage: python extract_accuracies.py <json_file> <benchmarks_dir> <saturation_timing_dir>",
             file=sys.stderr,
         )
         sys.exit(1)
 
     json_file = sys.argv[1]
     benchmarks_dir = sys.argv[2]
+    saturation_timing_dir = sys.argv[3]
 
     if not Path(json_file).exists():
         print(f"Error: File not found: {json_file}", file=sys.stderr)
@@ -258,7 +311,13 @@ def main() -> None:
         print(f"Error: Directory not found: {benchmarks_dir}", file=sys.stderr)
         sys.exit(1)
 
-    extract_accuracies(json_file, benchmarks_dir)
+    if not Path(saturation_timing_dir).is_dir():
+        print(
+            f"Error: Directory not found: {saturation_timing_dir}", file=sys.stderr
+        )
+        sys.exit(1)
+
+    extract_accuracies(json_file, benchmarks_dir, saturation_timing_dir)
 
 
 def entry() -> None:
