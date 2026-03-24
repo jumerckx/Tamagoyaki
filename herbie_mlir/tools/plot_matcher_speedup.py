@@ -9,15 +9,11 @@ from matplotlib.patches import Patch
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Compare eqsat timing between two evaluation CSVs"
+        description="Plot eqsat saturation timing speedup (individual vs combined matching)"
     )
     parser.add_argument(
-        "csv_path1",
-        help="Path to first CSV file (individual matching)",
-    )
-    parser.add_argument(
-        "csv_path2",
-        help="Path to second CSV file (combined matching)",
+        "csv_path",
+        help="Path to evaluation CSV file",
     )
     parser.add_argument(
         "-o",
@@ -28,29 +24,19 @@ def main():
 
     args = parser.parse_args()
 
-    # Read both CSV files
-    df1 = pd.read_csv(args.csv_path1)
-    df2 = pd.read_csv(args.csv_path2)
+    df = pd.read_csv(args.csv_path)
 
-    # Convert eqsat from seconds to milliseconds
-    df1["eqsat_s"] = df1["eqsat_saturation"]
-    df2["eqsat_s"] = df2["eqsat_saturation"]
-
-    # Merge on benchmark name to ensure alignment
-    merged = pd.merge(
-        df1[["name", "eqsat_s"]],
-        df2[["name", "eqsat_s"]],
-        on="name",
-        suffixes=("_individual", "_combined"),
-    )
+    # Extract timing columns (already in seconds)
+    df["eqsat_s_individual"] = df["saturation_time_individual"]
+    df["eqsat_s_combined"] = df["saturation_time_joint"]
 
     # Calculate speedup ratio (individual / combined)
-    merged["speedup"] = merged["eqsat_s_individual"] / merged["eqsat_s_combined"]
+    df["speedup"] = df["eqsat_s_individual"] / df["eqsat_s_combined"]
 
     # Separate NMSE and non-NMSE benchmarks
-    nmse_mask = merged["name"].str.startswith("NMSE")
-    df_nmse = merged[nmse_mask].copy()
-    df_other = merged[~nmse_mask].copy()
+    nmse_mask = df["name"].str.startswith("NMSE")
+    df_nmse = df[nmse_mask].copy()
+    df_other = df[~nmse_mask].copy()
 
     # Remove 'NMSE ' prefix from NMSE benchmarks
     df_nmse["name"] = df_nmse["name"].str.replace("NMSE ", "", regex=False)
@@ -134,7 +120,7 @@ def main():
 
     # Add speedup labels on top of second bar
     label_fontsize = 3
-    label_offset = 0.5
+    label_offset = 0.1
     x_offset_60deg = 0.08
 
     for i, (bar1, bar2) in enumerate(zip(bars1_list, bars2_list)):
@@ -142,15 +128,13 @@ def main():
         height2 = bar2.get_height()
         speedup = speedups.iloc[i]
 
-        # Rotate 90 if combined bar is taller, else 60
+        # Rotate 90 if combined bar is taller, else 0
         rotation = 90 if height2 > height1 * 1.03 else 0
         label_x = bar1.get_x() + bar1.get_width() / 2.0
         label_y = height1 + label_offset
 
         if rotation == 60:
             label_x += x_offset_60deg
-        else:
-            label_y += 0.5
 
         # Format speedup as "XXXx" with appropriate precision
         if speedup >= 10:
