@@ -1,5 +1,6 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/IR/Dialect.h"
 #include "mlir/InitAllDialects.h"
 #include "mlir/InitAllPasses.h"
@@ -34,6 +35,16 @@ int main(int argc, char **argv) {
       .insert<herbie::HerbieMLIRDialect, mlir::equivalence::EquivalenceDialect,
               mlir::ematch::EmatchDialect>();
   registerAllDialects(registry);
+
+  // Ensure the herbie, math and arith dialects are loaded whenever the
+  // ematch dialect is loaded. This is needed because ematch-saturate
+  // executes PDL bytecode that may create herbie ops from these dialects.
+  registry.addExtension(
+      +[](mlir::MLIRContext *ctx, mlir::ematch::EmatchDialect *) {
+        ctx->getOrLoadDialect<herbie::HerbieMLIRDialect>();
+        ctx->getOrLoadDialect<mlir::math::MathDialect>();
+        ctx->getOrLoadDialect<mlir::arith::ArithDialect>();
+      });
 
   // Register Rival external models for RivalCompileableInterface
   herbie::registerRivalExternalModels(registry);
