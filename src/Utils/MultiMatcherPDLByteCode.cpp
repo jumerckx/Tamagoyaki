@@ -9,6 +9,7 @@
 #include "mlir/IR/OwningOpRef.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Support/LLVM.h"
+#include "vendor/mlir/Bytecode.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/Debug.h"
@@ -25,45 +26,6 @@ using namespace mlir::detail;
 //===----------------------------------------------------------------------===//
 // Helpers
 //===----------------------------------------------------------------------===//
-
-/// Create a standalone module containing a single matcher func (renamed to the
-/// standard matcher name) and a clone of the shared rewriter module.  Also
-/// builds a remapped configMap for the cloned RecordMatchOps.
-static OwningOpRef<ModuleOp> createSingleMatcherModule(
-    pdl_interp::FuncOp matcherFunc, ModuleOp rewriterModule,
-    const DenseMap<Operation *, PDLPatternConfigSet *> &origConfigMap,
-    DenseMap<Operation *, PDLPatternConfigSet *> &newConfigMap) {
-  MLIRContext *ctx = matcherFunc.getContext();
-  OwningOpRef<ModuleOp> newModule = ModuleOp::create(matcherFunc.getLoc());
-  OpBuilder builder(ctx);
-  builder.setInsertionPointToEnd(newModule->getBody());
-
-  // Clone the matcher and give it the canonical name that PDLByteCode expects.
-  auto *clonedOp = builder.clone(*matcherFunc.getOperation());
-  auto clonedMatcher = cast<pdl_interp::FuncOp>(clonedOp);
-  clonedMatcher.setName(pdl_interp::PDLInterpDialect::getMatcherFunctionName());
-
-  // Clone the entire rewriter module (unreferenced rewriters are harmless).
-  builder.clone(*rewriterModule.getOperation());
-
-  // Remap config entries by walking RecordMatchOps in the same order in both
-  // the original and the clone.
-  SmallVector<pdl_interp::RecordMatchOp> origOps, clonedOps;
-  matcherFunc.walk(
-      [&](pdl_interp::RecordMatchOp op) { origOps.push_back(op); });
-  clonedMatcher.walk(
-      [&](pdl_interp::RecordMatchOp op) { clonedOps.push_back(op); });
-  assert(origOps.size() == clonedOps.size() &&
-         "cloned matcher has different number of RecordMatchOps");
-
-  for (auto [orig, cloned] : llvm::zip(origOps, clonedOps)) {
-    auto it = origConfigMap.find(orig.getOperation());
-    if (it != origConfigMap.end())
-      newConfigMap[cloned.getOperation()] = it->second;
-  }
-
-  return newModule;
-}
 
 /// Deep-copy a StringMap<std::function<...>>.
 template <typename FnT>
@@ -90,8 +52,8 @@ void MultiMatcherMutableState::cleanupAfterMatchAndRewrite() {
 MultiMatcherPDLByteCode::MultiMatcherPDLByteCode(
     ModuleOp module, SmallVector<std::unique_ptr<PDLPatternConfigSet>> configs,
     const DenseMap<Operation *, PDLPatternConfigSet *> &configMap,
-    llvm::StringMap<PDLConstraintFunction> constraintFns,
-    llvm::StringMap<PDLRewriteFunction> rewriteFns)
+    const llvm::StringMap<PDLConstraintFunction> &constraintFns,
+    const llvm::StringMap<PDLRewriteFunction> &rewriteFns)
     : ownedConfigs(std::move(configs)) {
 
   // Locate the shared rewriter module.
@@ -110,12 +72,29 @@ MultiMatcherPDLByteCode::MultiMatcherPDLByteCode(
   LLVM_DEBUG(llvm::dbgs() << "MultiMatcherPDLByteCode: building "
                           << matcherFuncs.size() << " matcher(s)\n");
 
+  // Build a single temporary module with the rewriter module cloned once.
+  // Each matcher func will be temporarily moved in and out of this module
+  // to construct its PDLByteCode, avoiding N clones of the rewriter module.
+  MLIRContext *ctx = module.getContext();
+  OwningOpRef<ModuleOp> tempModule = ModuleOp::create(module.getLoc());
+  {
+    OpBuilder builder(ctx);
+    builder.setInsertionPointToEnd(tempModule->getBody());
+    builder.clone(*rewriterModule.getOperation());
+  }
+
+  StringRef canonicalName =
+      pdl_interp::PDLInterpDialect::getMatcherFunctionName();
+
   // Build one PDLByteCode per matcher.
   for (auto [idx, matcherFunc] : llvm::enumerate(matcherFuncs)) {
-    // --- clone the module for this matcher ---
-    DenseMap<Operation *, PDLPatternConfigSet *> localConfigMap;
-    OwningOpRef<ModuleOp> localModule = createSingleMatcherModule(
-        matcherFunc, rewriterModule, configMap, localConfigMap);
+    // Save the original name so we can restore it after.
+    StringRef origName = matcherFunc.getName();
+
+    // Rename to the canonical name and move into the temp module.
+    matcherFunc.setName(canonicalName);
+    matcherFunc.getOperation()->moveBefore(tempModule->getBody(),
+                                           tempModule->getBody()->begin());
 
     // --- copy the external function tables (PDLByteCode moves from them) ---
     auto localConstraints = copyFnMap(constraintFns);
@@ -125,8 +104,13 @@ MultiMatcherPDLByteCode::MultiMatcherPDLByteCode(
     SmallVector<std::unique_ptr<PDLPatternConfigSet>> noConfigs;
 
     auto bytecode = std::make_unique<PDLByteCode>(
-        *localModule, std::move(noConfigs), localConfigMap,
+        *tempModule, std::move(noConfigs), configMap,
         std::move(localConstraints), std::move(localRewrites));
+
+    // Move the matcher back to the original module and restore its name.
+    matcherFunc.getOperation()->moveBefore(module.getBody(),
+                                           module.getBody()->end());
+    matcherFunc.setName(origName);
 
     // --- populate the dispatch index ---
     for (const PDLByteCodePattern &pat : bytecode->getPatterns()) {
@@ -138,7 +122,6 @@ MultiMatcherPDLByteCode::MultiMatcherPDLByteCode(
 
     MatcherEntry entry;
     entry.bytecode = std::move(bytecode);
-    entry.clonedModule = std::move(localModule);
     matchers.push_back(std::move(entry));
   }
 

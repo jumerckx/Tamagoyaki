@@ -62,8 +62,8 @@ public:
       ModuleOp module,
       SmallVector<std::unique_ptr<PDLPatternConfigSet>> configs,
       const DenseMap<Operation *, PDLPatternConfigSet *> &configMap,
-      llvm::StringMap<PDLConstraintFunction> constraintFns,
-      llvm::StringMap<PDLRewriteFunction> rewriteFns);
+      const llvm::StringMap<PDLConstraintFunction> &constraintFns,
+      const llvm::StringMap<PDLRewriteFunction> &rewriteFns);
 
   /// Initialise the mutable state so that it can be used with this instance.
   void initializeMutableState(MultiMatcherMutableState &state) const;
@@ -96,9 +96,6 @@ private:
   struct MatcherEntry {
     /// The bytecode for this single matcher.
     std::unique_ptr<PDLByteCode> bytecode;
-    /// Keeps the cloned module alive (context-interned data is safe without
-    /// it, but this is a low-cost safety net).
-    OwningOpRef<ModuleOp> clonedModule;
   };
   SmallVector<MatcherEntry> matchers;
 
