@@ -25,6 +25,7 @@ rule all:
     input:
         f"{PLOTS_DIR}/accuracy_comparison.pdf",
         f"{PLOTS_DIR}/timing_comparison.pdf",
+        f"{PLOTS_DIR}/matcher_speedup.pdf",
 
 # ============ Rules Processing Pipeline ============
 
@@ -150,6 +151,14 @@ rule generate_accuracy_plot:
         f"{PLOTS_DIR}/accuracy_comparison.pdf"
     shell:
         "uv run plot-accuracies {input} -o {output}"
+
+rule generate_matcher_speedup_plot:
+    input:
+        f"{OUT_DIR}/evaluation.csv"
+    output:
+        f"{PLOTS_DIR}/matcher_speedup.pdf"
+    shell:
+        "uv run plot-matcher-speedup {input} -o {output}"
 
 rule generate_timing_plot:
     input:
