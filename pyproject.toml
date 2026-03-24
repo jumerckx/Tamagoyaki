@@ -38,6 +38,7 @@ insert-fpcore-alternative = "herbie_mlir.tools.insert_fpcore_alternative:entry"
 extract-accuracies = "herbie_mlir.tools.extract_accuracies:entry"
 plot-accuracies = "herbie_mlir.tools.plot_accuracies:entry"
 plot-timing = "herbie_mlir.tools.plot_timing:entry"
+plot-matcher-speedup = "herbie_mlir.tools.plot_matcher_speedup:entry"
 
 
 [dependency-groups]
