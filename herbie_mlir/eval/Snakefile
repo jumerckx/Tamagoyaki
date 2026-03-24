@@ -24,6 +24,7 @@ SATURATION_TIMING_DIR = f"{OUT_DIR}/saturation_timing"
 rule all:
     input:
         f"{PLOTS_DIR}/accuracy_comparison.pdf",
+        f"{PLOTS_DIR}/accuracy_comparison_compact.pdf",
         f"{PLOTS_DIR}/timing_comparison.pdf",
         f"{PLOTS_DIR}/matcher_speedup.pdf",
 
@@ -151,6 +152,14 @@ rule generate_accuracy_plot:
         f"{PLOTS_DIR}/accuracy_comparison.pdf"
     shell:
         "uv run plot-accuracies {input} -o {output}"
+
+rule generate_accuracy_plot_compact:
+    input:
+        f"{OUT_DIR}/evaluation.csv"
+    output:
+        f"{PLOTS_DIR}/accuracy_comparison_compact.pdf"
+    shell:
+        "uv run plot-accuracies {input} -o {output} --hide-unchanged"
 
 rule generate_matcher_speedup_plot:
     input:
