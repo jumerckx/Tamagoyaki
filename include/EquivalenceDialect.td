@@ -136,13 +136,13 @@ def Equivalence_ClassOp : Equivalence_Op<"class", [
 
     let arguments = (ins 
         Variadic<AnyType>:$inputs,
-        OptionalAttr<I64Attr>:$min_cost_index
+        OptionalAttr<ArrayAttr>:$min_cost_indices
     );
 
     let results = (outs AnyType:$result);
 
     let assemblyFormat = [{
-        $inputs (` ` `(` `min_cost_index` `=` $min_cost_index^ `)` )? attr-dict `:` type($result)
+        $inputs (` ` `(` `min_cost_indices` `=` $min_cost_indices^ `)` )? attr-dict `:` type($result)
     }];
 
     // Verify the following:

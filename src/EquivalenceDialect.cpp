@@ -502,16 +502,15 @@ void extractFromGraph(GraphOp graphOp, bool partialExtraction) {
       continue;
     }
 
-    auto minCostIndicesAttr =
-        classOp->getAttrOfType<ArrayAttr>("min_cost_indices");
-    if (!minCostIndicesAttr || minCostIndicesAttr.empty())
+    auto minCostIndicesAttr = classOp.getMinCostIndices();
+    if (!minCostIndicesAttr || minCostIndicesAttr->empty())
       continue;
 
     if (partialExtraction) {
 
       // Convert to integer indices
       SmallVector<int> minIndices;
-      for (Attribute attr : minCostIndicesAttr)
+      for (Attribute attr : *minCostIndicesAttr)
         minIndices.push_back(cast<IntegerAttr>(attr).getInt());
 
       // Erase unselected operands
@@ -530,7 +529,7 @@ void extractFromGraph(GraphOp graphOp, bool partialExtraction) {
     }
     // Full extraction: replace classOp with first minimum-cost index
     int64_t minIndex =
-        cast<IntegerAttr>(minCostIndicesAttr[0]).getValue().getSExtValue();
+        cast<IntegerAttr>((*minCostIndicesAttr)[0]).getValue().getSExtValue();
     Value selected = classOp.getInputs()[minIndex];
 
     classOp.getResult().replaceAllUsesWith(selected);

@@ -79,11 +79,8 @@ unsigned getBinaryOpCost(Value lhs, Value rhs) {
   return lhsWidth * rhsWidth;
 }
 
-static LogicalResult rewriterBuildPartialProduct(PatternRewriter &rewriter,
-                                                 PDLResultList &results,
-                                                 ArrayRef<PDLValue> args) {
-  auto *mulOp = args[0].cast<Operation *>();
-
+static Operation *rewriterBuildPartialProduct(PatternRewriter &rewriter,
+                                              Operation *mulOp) {
   // Operands of comb.mul
   Value lhs = mulOp->getOperand(0);
   Value rhs = mulOp->getOperand(1);
@@ -95,34 +92,22 @@ static LogicalResult rewriterBuildPartialProduct(PatternRewriter &rewriter,
   auto ppOp = datapath::PartialProductOp::create(
       rewriter, mulOp->getLoc(), ppResultTypes, ValueRange{lhs, rhs});
 
-  // Hand the comb.add back to PDL so it can wire up the replacement.
-  results.push_back(ppOp.getOperation());
-  return success();
+  return ppOp.getOperation();
 }
 
-static LogicalResult rewriterBuildZero(PatternRewriter &rewriter,
-                                       PDLResultList &results,
-                                       ArrayRef<PDLValue> args) {
-  auto operation = args[0].cast<Operation *>();
-
-  // Operands of comb.mul
+static Operation *rewriterBuildZero(PatternRewriter &rewriter,
+                                    Operation *operation) {
+  // Result type of the original op
   auto type = operation->getResult(0).getType();
+
   auto zero = hw::ConstantOp::create(rewriter, operation->getLoc(), type,
                                      rewriter.getIntegerAttr(type, 0));
 
-  // Hand the comb.add back to PDL so it can wire up the replacement.
-  results.push_back(zero.getOperation());
-  return success();
+  return zero.getOperation();
 }
 
-static LogicalResult rewriterBuildCompress(PatternRewriter &rewriter,
-                                           PDLResultList &results,
-                                           ArrayRef<PDLValue> args) {
-  auto compressOperands = args[0].cast<ValueRange>();
-
-  if (compressOperands.size() < 3)
-    return failure();
-
+static Operation *rewriterBuildCompress(PatternRewriter &rewriter,
+                                        ValueRange compressOperands) {
   IntegerType elemTy = cast<IntegerType>(compressOperands[0].getType());
 
   SmallVector<Type> compressResultTypes(2, elemTy);
@@ -131,11 +116,8 @@ static LogicalResult rewriterBuildCompress(PatternRewriter &rewriter,
       datapath::CompressOp::create(rewriter, compressOperands[0].getLoc(),
                                    compressResultTypes, compressOperands);
 
-  // Hand the comb.add back to PDL so it can wire up the replacement.
-  results.push_back(compressOp.getOperation());
-  return success();
+  return compressOp.getOperation();
 }
-
 class RoverSaturatePass
     : public impl::RoverSaturatePassBase<RoverSaturatePass> {
 public:
@@ -201,28 +183,13 @@ public:
   using impl::RoverExtractPassBase<RoverExtractPass>::RoverExtractPassBase;
 
   void runOnOperation() final {
-    mlir::ModuleOp module = getOperation();
-
-    ModuleOp irModule = module.lookupSymbol<ModuleOp>(
-        StringAttr::get(module->getContext(), "ir"));
-
-    // Check if the top-level module is named "ir"
-    if (!irModule && module.getName() == "ir") {
-      irModule = module;
-    }
-
-    if (!irModule) {
-      llvm::errs() << "=== IR Module Not Detected ===\n";
-      module.print(llvm::errs());
-      llvm::errs() << "\n";
-      return;
-    }
+    ModuleOp module = getOperation();
 
     // select greedily:
-    irModule.walk(
+    module.walk(
         [&](GraphOp graphOp) { selectGreedy(graphOp, 1, "equivalence.cost"); });
 
-    irModule.walk([&](GraphOp graphOp) {
+    module.walk([&](GraphOp graphOp) {
       // clearSelection(graphOp, "rover.cost");
 
       graphOp.walk([&](Operation *op) {
@@ -299,7 +266,7 @@ public:
                      costReductionMax);
         extractFromGraph(graphOp, true);
         llvm::errs() << "=== IR After Costing ===\n";
-        irModule.print(llvm::errs());
+        module.print(llvm::errs());
         llvm::errs() << "\n";
       }
 

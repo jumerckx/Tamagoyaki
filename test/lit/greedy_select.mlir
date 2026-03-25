@@ -7,7 +7,7 @@
 // CHECK-NEXT: %{{.*}} = arith.constant 1 : i32
 // CHECK-NEXT: %{{.*}} = arith.shli %{{.*}}, %{{.*}} {equivalence.cost = #equivalence.cost<2>} : i32
 // CHECK-NEXT: %{{.*}} = arith.muli %{{.*}}, %{{.*}} {other.cost = #equivalence.cost<3>} : i32
-// CHECK-NEXT: %{{.*}} = equivalence.class %{{.*}}, %{{.*}} {min_cost_indices = [1]} : i32
+// CHECK-NEXT: %{{.*}} = equivalence.class %{{.*}}, %{{.*}} (min_cost_indices = [1]) : i32
 // CHECK-NEXT: equivalence.yield %{{.*}} : i32
 
 // OTHER-COST:      func.func @main(%{{.*}}: i32) -> i32 {
@@ -16,7 +16,7 @@
 // OTHER-COST-NEXT:   %{{.*}} = arith.constant 1 : i32
 // OTHER-COST-NEXT:   %{{.*}} = arith.shli %{{.*}}, %{{.*}} {equivalence.cost = #equivalence.cost<2>} : i32
 // OTHER-COST-NEXT:   %{{.*}} = arith.muli %{{.*}}, %{{.*}} {other.cost = #equivalence.cost<3>}  : i32
-// OTHER-COST-NEXT:   %{{.*}} = equivalence.class %{{.*}}, %{{.*}} {min_cost_indices = [0]} : i32
+// OTHER-COST-NEXT:   %{{.*}} = equivalence.class %{{.*}}, %{{.*}} (min_cost_indices = [0]) : i32
 // OTHER-COST-NEXT:   equivalence.yield %{{.*}} : i32
 
 func.func @main(%arg0: i32) -> i32 {

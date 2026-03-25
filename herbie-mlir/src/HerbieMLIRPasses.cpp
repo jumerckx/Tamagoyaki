@@ -190,10 +190,11 @@ evaluateAllPatchesBatched(GraphOp graphOp, ArrayRef<Value> funcArgs,
           visit(operand);
       } else {
         // Non-patchable: only the greedy-selected operand.
-        auto mci = classOp.getMinCostIndex();
-        if (!mci)
+        auto mci = classOp.getMinCostIndices();
+        if (!mci || mci->empty())
           return false;
-        if (!visit(classOp->getOperand(*mci)))
+        auto index = (*mci)[0].cast<IntegerAttr>().getInt();
+        if (!visit(classOp->getOperand(index)))
           return false;
       }
     } else {
@@ -253,10 +254,11 @@ evaluateAllPatchesBatched(GraphOp graphOp, ArrayRef<Value> funcArgs,
 
     // ---- Case A & B: ClassOp ----
     if (auto classOp = dyn_cast<ClassOp>(op)) {
-      auto mci = classOp.getMinCostIndex();
-      if (!mci)
+      auto mci = classOp.getMinCostIndices();
+      if (!mci || mci->empty())
         return false;
-      Value selected = classOp->getOperand(*mci);
+      auto index = (*mci)[0].cast<IntegerAttr>().getInt();
+      Value selected = classOp->getOperand(index);
 
       auto &resultVC = valueMap[classOp.getResult()];
 
