@@ -181,7 +181,7 @@ def main():
                 [baseline_y, baseline_y],
                 color="black",
                 linestyle=":",
-                linewidth=0.8,
+                linewidth=0.5,
                 alpha=label_alpha,
             )
 
@@ -192,59 +192,125 @@ def main():
 
             height2 = optimized.iloc[i]
             height3 = target.iloc[i]
+            low_baseline = baseline_y < 20
 
-            # Herbie bar label (blue, same style as normal mode)
-            rotation2 = 90 if height3 > height2 * 1.01 else 60
-            x_pos2 = bars2_list[i].get_x() + bars2_list[i].get_width() / 2.0
-            y_pos2 = height2 + label_offset
-            if rotation2 == 60:
-                x_pos2 += x_offset_60deg
+            if low_baseline:
+                # Low original accuracy: place baseline label on top of both bars, horizontally
+                top_of_bars = max(height2, height3)
+                baseline_lift = 1.0
+                extra_lift = 6.0
+
+                # Baseline label: horizontal, centered over both bars
+                ax.text(
+                    x[i],
+                    top_of_bars + baseline_lift + label_offset,
+                    f"{baseline_y:.1f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=label_fontsize,
+                    rotation=0,
+                    color="black",
+                    alpha=label_alpha,
+                )
+
+                # Herbie bar label (shifted up)
+                rotation2 = 90 if height3 > height2 * 1.01 else 60
+                x_pos2 = bars2_list[i].get_x() + bars2_list[i].get_width() / 2.0
+                y_pos2 = height2 + label_offset + extra_lift
+                if rotation2 == 60:
+                    x_pos2 += x_offset_60deg
+                else:
+                    y_pos2 += 0.5
+                ax.text(
+                    x_pos2,
+                    y_pos2,
+                    f"{height2:.1f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=label_fontsize,
+                    rotation=rotation2,
+                    color=color_herbie,
+                    alpha=label_alpha,
+                )
+
+                # Target bar label (shifted up)
+                x_pos3 = (
+                    bars3_list[i].get_x()
+                    + bars3_list[i].get_width() / 2.0
+                    + x_offset_60deg
+                    + x_offset_outer
+                )
+                ax.text(
+                    x_pos3,
+                    height3 + label_offset + extra_lift,
+                    f"{height3:.1f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=label_fontsize,
+                    rotation=60,
+                    color=color_target,
+                    alpha=label_alpha,
+                )
             else:
-                y_pos2 += 0.5
-            ax.text(
-                x_pos2,
-                y_pos2,
-                f"{height2:.1f}",
-                ha="center",
-                va="bottom",
-                fontsize=label_fontsize,
-                rotation=rotation2,
-                color=color_herbie,
-                alpha=label_alpha,
-            )
+                # Herbie bar label (blue, same style as normal mode)
+                rotation2 = 90 if height3 > height2 * 1.01 else 60
+                x_pos2 = bars2_list[i].get_x() + bars2_list[i].get_width() / 2.0
+                y_pos2 = height2 + label_offset
+                if rotation2 == 60:
+                    x_pos2 += x_offset_60deg
+                else:
+                    y_pos2 += 0.5
+                # Ensure label doesn't fall below the dotted baseline
+                if y_pos2 < baseline_y + label_offset:
+                    y_pos2 = baseline_y + label_offset
+                ax.text(
+                    x_pos2,
+                    y_pos2,
+                    f"{height2:.1f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=label_fontsize,
+                    rotation=rotation2,
+                    color=color_herbie,
+                    alpha=label_alpha,
+                )
 
-            # Baseline accuracy label: black text, sideways, just below dotted line on the Herbie bar
-            x_pos_bl = bars2_list[i].get_x() + bars2_list[i].get_width() / 2.0
-            ax.text(
-                x_pos_bl,
-                baseline_y - 3,
-                f"{baseline_y:.1f}",
-                ha="center",
-                va="top",
-                fontsize=label_fontsize,
-                rotation=90,
-                color="black",
-                alpha=label_alpha,
-            )
+                # Baseline accuracy label: black text, sideways, just below dotted line on the Herbie bar
+                x_pos_bl = bars2_list[i].get_x() + bars2_list[i].get_width() / 2.0
+                ax.text(
+                    x_pos_bl,
+                    baseline_y - 3,
+                    f"{baseline_y:.1f}",
+                    ha="center",
+                    va="top",
+                    fontsize=label_fontsize,
+                    rotation=90,
+                    color="black",
+                    alpha=label_alpha,
+                )
 
-            # Target bar label (60 degrees, on the right)
-            x_pos3 = (
-                bars3_list[i].get_x()
-                + bars3_list[i].get_width() / 2.0
-                + x_offset_60deg
-                + x_offset_outer
-            )
-            ax.text(
-                x_pos3,
-                height3 + label_offset,
-                f"{height3:.1f}",
-                ha="center",
-                va="bottom",
-                fontsize=label_fontsize,
-                rotation=60,
-                color=color_target,
-                alpha=label_alpha,
-            )
+                # Target bar label (60 degrees, on the right)
+                x_pos3 = (
+                    bars3_list[i].get_x()
+                    + bars3_list[i].get_width() / 2.0
+                    + x_offset_60deg
+                    + x_offset_outer
+                )
+                y_pos3 = height3 + label_offset
+                # Ensure label doesn't fall below the dotted baseline
+                if y_pos3 < baseline_y + label_offset:
+                    y_pos3 = baseline_y + label_offset
+                ax.text(
+                    x_pos3,
+                    y_pos3,
+                    f"{height3:.1f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=label_fontsize,
+                    rotation=60,
+                    color=color_target,
+                    alpha=label_alpha,
+                )
 
         ax.set_xlim(-0.5, len(names) - 0.5)
         ax.margins(x=0)
@@ -253,7 +319,7 @@ def main():
         spacer = Patch(facecolor="none", edgecolor="none", label="")
         legend_elements = [
             plt.Line2D(
-                [], [], color="black", linestyle=":", linewidth=0.8, label="Original"
+                [], [], color="black", linestyle=":", linewidth=0.5, label="Original"
             ),
             spacer,
             Patch(facecolor=color_herbie, alpha=0.8, label="Herbie"),
@@ -382,7 +448,7 @@ def main():
     y_range = ylim[1] - ylim[0]
     ax.text(
         -0.5,
-        ylim[1] + y_range * 0.06,
+        ylim[1] + y_range * 0.09,
         "Accuracy (%)",
         fontsize=6,
         ha="left",
