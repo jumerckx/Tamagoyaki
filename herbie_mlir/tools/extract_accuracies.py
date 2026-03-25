@@ -165,14 +165,14 @@ def extract_herbie_timings(timeline_path: Path) -> tuple[str, str]:
     return str(herbie_wo_sampling), str(herbie_sampling)
 
 
-def extract_saturation_time(timing_path: Path) -> str:
-    """Extract the runSaturation wall-clock duration from a tamagoyaki timing JSON file.
+def extract_saturation_time(timing_path: Path) -> tuple[str, str]:
+    """Extract the runSaturation wall-clock duration and total match time from a tamagoyaki timing JSON file.
 
     Args:
         timing_path: Path to the timing JSON file.
 
     Returns:
-        The runSaturation duration as a string.
+        A tuple of (saturation_duration, match_duration) as strings.
 
     Raises:
         FileNotFoundError: If the timing file does not exist.
@@ -192,8 +192,23 @@ def extract_saturation_time(timing_path: Path) -> str:
     for entry in timing_data:
         if isinstance(entry, dict) and entry.get("name") == "runSaturation":
             wall: Any = entry.get("wall")
-            if isinstance(wall, dict) and "duration" in wall:
-                return str(wall["duration"])
+            if not isinstance(wall, dict) or "duration" not in wall:
+                continue
+            saturation_duration = str(wall["duration"])
+
+            # Sum up match durations across all iterations
+            match_total: float = 0.0
+            passes: Any = entry.get("passes", [])
+            for iteration in passes:
+                if not isinstance(iteration, dict):
+                    continue
+                for sub_pass in iteration.get("passes", []):
+                    if isinstance(sub_pass, dict) and sub_pass.get("name") == "match":
+                        sub_wall: Any = sub_pass.get("wall")
+                        if isinstance(sub_wall, dict) and "duration" in sub_wall:
+                            match_total += float(sub_wall["duration"])
+
+            return saturation_duration, str(match_total)
 
     raise ValueError(f"No 'runSaturation' entry found in {timing_path}")
 
@@ -228,7 +243,9 @@ def extract_accuracies(
             "herbie_wo_sampling",
             "herbie_sampling",
             "saturation_time_joint",
+            "match_time_joint",
             "saturation_time_individual",
+            "match_time_individual",
         ],
     )
     writer.writeheader()
@@ -265,10 +282,10 @@ def extract_accuracies(
         # Extract saturation timing data
         try:
             timing_dir: Path = Path(saturation_timing_dir)
-            saturation_time_joint: str = extract_saturation_time(
+            saturation_time_joint, match_time_joint = extract_saturation_time(
                 timing_dir / f"{filename}_joint.json"
             )
-            saturation_time_individual: str = extract_saturation_time(
+            saturation_time_individual, match_time_individual = extract_saturation_time(
                 timing_dir / f"{filename}_individual.json"
             )
         except (ValueError, FileNotFoundError) as e:
@@ -285,7 +302,9 @@ def extract_accuracies(
                 "herbie_wo_sampling": herbie_wo_sampling,
                 "herbie_sampling": herbie_sampling,
                 "saturation_time_joint": saturation_time_joint,
+                "match_time_joint": match_time_joint,
                 "saturation_time_individual": saturation_time_individual,
+                "match_time_individual": match_time_individual,
             }
         )
 

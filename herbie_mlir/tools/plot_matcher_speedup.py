@@ -26,12 +26,12 @@ def main():
 
     df = pd.read_csv(args.csv_path)
 
-    # Extract timing columns (already in seconds)
-    df["eqsat_s_individual"] = df["saturation_time_individual"]
-    df["eqsat_s_combined"] = df["saturation_time_joint"]
+    # Extract match timing columns (already in seconds)
+    df["match_s_individual"] = df["match_time_individual"]
+    df["match_s_combined"] = df["match_time_joint"]
 
-    # Calculate speedup ratio (individual / combined)
-    df["speedup"] = df["eqsat_s_individual"] / df["eqsat_s_combined"]
+    # Calculate speedup ratio (individual / combined) based on match times
+    df["speedup"] = df["match_s_individual"] / df["match_s_combined"]
 
     # Separate NMSE and non-NMSE benchmarks
     nmse_mask = df["name"].str.startswith("NMSE")
@@ -62,8 +62,8 @@ def main():
 
     # Extract the relevant columns
     names = merged["name"]
-    individual_times = merged["eqsat_s_individual"]
-    combined_times = merged["eqsat_s_combined"]
+    individual_times = merged["match_s_individual"]
+    combined_times = merged["match_s_combined"]
     speedups = merged["speedup"]
     nmse_start = len(df_other)  # Index where NMSE group starts
     nmse_end = len(merged) - 1  # Index where NMSE group ends
@@ -85,56 +85,34 @@ def main():
     color_combined = "#33a02c"
 
     # Create bars
-    bars1_list = []
-    bars2_list = []
+    bars1 = ax.bar(x - width / 2, individual_times, width, color=color_individual)
+    bars2 = ax.bar(x + width / 2, combined_times, width, color=color_combined)
 
-    for i in range(len(names)):
-        bar1 = ax.bar(
-            x[i] - width / 2,
-            individual_times.iloc[i],
-            width,
-            color=color_individual,
-            alpha=1.0,
-        )
-        bar2 = ax.bar(
-            x[i] + width / 2,
-            combined_times.iloc[i],
-            width,
-            color=color_combined,
-            alpha=0.8,
-        )
-
-        bars1_list.append(bar1[0])
-        bars2_list.append(bar2[0])
-
-    # Set linear scale starting at 0
+    # Set symlog scale (linear near zero, log for large values)
+    ax.set_yscale("symlog", linthresh=0.01)
     ax.set_ylim(bottom=0)
     ax.set_xlim(-0.5, len(names) - 0.5)
     ax.margins(x=0)
 
     # Create custom legend
     legend_elements = [
-        Patch(facecolor=color_individual, alpha=1.0, label="Individual Matching"),
-        Patch(facecolor=color_combined, alpha=0.8, label="Combined Matching"),
+        Patch(facecolor=color_individual, label="Individual Matching"),
+        Patch(facecolor=color_combined, label="Combined Matching"),
     ]
 
-    # Add speedup labels on top of second bar
+    # Add speedup labels on top of individual bar
     label_fontsize = 3
     label_offset = 0.1
-    x_offset_60deg = 0.08
 
-    for i, (bar1, bar2) in enumerate(zip(bars1_list, bars2_list)):
-        height1 = bar1.get_height()
-        height2 = bar2.get_height()
+    for i, (bar1, bar2) in enumerate(zip(bars1, bars2)):
+        height1 = individual_times.iloc[i]
+        height2 = combined_times.iloc[i]
         speedup = speedups.iloc[i]
 
         # Rotate 90 if combined bar is taller, else 0
         rotation = 90 if height2 > height1 * 1.03 else 0
         label_x = bar1.get_x() + bar1.get_width() / 2.0
         label_y = height1 + label_offset
-
-        if rotation == 60:
-            label_x += x_offset_60deg
 
         # Format speedup as "XXXx" with appropriate precision
         if speedup >= 10:
@@ -179,7 +157,7 @@ def main():
     ax.tick_params(axis="y", labelsize=6)
 
     # Legend positioning
-    legend_x = 0.72
+    legend_x = 0.45
     legend_y = 1.1
     ax.legend(
         handles=legend_elements,
@@ -187,6 +165,7 @@ def main():
         bbox_to_anchor=(legend_x, legend_y),
         frameon=False,
         fontsize=6,
+        ncol=1,
     )
 
     # Grid removed (consistent with accuracy plot)
