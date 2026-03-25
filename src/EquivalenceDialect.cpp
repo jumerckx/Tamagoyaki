@@ -508,43 +508,24 @@ void extractFromGraph(GraphOp graphOp, bool partialExtraction) {
       continue;
 
     if (partialExtraction) {
-      // Partial extraction: replace classOp with a new classOp containing only
-      // minIndices
-      SmallVector<Value> selectedInputs;
-      for (Attribute attr : minCostIndicesAttr) {
-        int64_t idx = cast<IntegerAttr>(attr).getInt();
-        selectedInputs.push_back(classOp.getInputs()[idx]);
+
+      // Convert to integer indices
+      SmallVector<int> minIndices;
+      for (Attribute attr : minCostIndicesAttr)
+        minIndices.push_back(cast<IntegerAttr>(attr).getInt());
+
+      // Erase unselected operands
+      int numOperands = classOp.getNumOperands();
+      SmallVector<int> toEraseIndices;
+      for (auto idx = 0; idx < numOperands; ++idx) {
+        if (!llvm::is_contained(minIndices, idx))
+          toEraseIndices.push_back(idx);
       }
 
-      // Create new ClassOp with only selected inputs
-      OpBuilder builder(classOp);
-      auto newClassOp = ClassOp::create(
-          builder, classOp.getLoc(), TypeRange{classOp.getResult().getType()},
-          ValueRange{selectedInputs});
-
-      // Replace old classOp with new one
-      classOp.getResult().replaceAllUsesWith(newClassOp.getResult());
-
-      // Erase old classOp and operations not in minIndices
-      SmallVector<Operation *> toErase;
-      toErase.push_back(classOp);
-      for (auto [i, operand] : llvm::enumerate(classOp.getInputs())) {
-        int64_t idx = static_cast<int64_t>(i);
-        bool inMinIndices = false;
-        for (Attribute attr : minCostIndicesAttr) {
-          if (cast<IntegerAttr>(attr).getInt() == idx) {
-            inMinIndices = true;
-            break;
-          }
-        }
-        if (!inMinIndices) {
-          if (Operation *defOp = operand.getDefiningOp())
-            toErase.push_back(defOp);
-        }
-      }
-      for (Operation *op : toErase)
-        op->erase();
-
+      // Erase operands in reverse order to avoid invalidating indices
+      llvm::sort(toEraseIndices, [](int a, int b) { return a > b; });
+      for (int idx : toEraseIndices)
+        classOp->eraseOperand(idx);
       continue;
     }
     // Full extraction: replace classOp with first minimum-cost index
