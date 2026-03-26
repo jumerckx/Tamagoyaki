@@ -166,7 +166,10 @@ def EmatchSaturatePass : Pass<"ematch-saturate", "::mlir::ModuleOp"> {
         This pass applies pattern rewriting to operations in the ematch dialect.
         It serves as an example of implementing a transformation pass.
     }];
-    let dependentDialects = ["::mlir::ematch::EmatchDialect"];
+    let dependentDialects = [
+        "::mlir::ematch::EmatchDialect",
+        "::mlir::pdl_interp::PDLInterpDialect",
+    ];
     let options = [
         Option<"maxIters", "max-iters", "int", "4",
                "Maximum number of iterations before equality saturation times out.">,
@@ -184,7 +187,10 @@ def EmatchSaturateBenchmarkPass : Pass<"ematch-saturate-benchmark", "::mlir::Mod
         This pass runs the ematch-saturate pass N times, cloning the IR module
         each time to ensure fresh input. Useful for profiling and benchmarking.
     }];
-    let dependentDialects = ["::mlir::ematch::EmatchDialect"];
+    let dependentDialects = [
+        "::mlir::ematch::EmatchDialect",
+        "::mlir::pdl_interp::PDLInterpDialect",
+    ];
     let options = [
         Option<"numRuns", "num-runs", "int", "10",
                "Number of times to run equality saturation.">,
@@ -201,7 +207,7 @@ def ApplyPDLInterpPass : Pass<"ematch-apply-pdl-interp", "::mlir::ModuleOp"> {
         A debugging pass that applies pdl_interp patterns to the IR module using
         MLIR's greedy pattern rewrite driver, similar to TestPDLByteCode in MLIR.
     }];
-    let dependentDialects = ["::mlir::ematch::EmatchDialect"];
+    let dependentDialects = ["::mlir::pdl_interp::PDLInterpDialect"];
 }
 
 def ConvertEmatchToPDLInterpPass : Pass<"convert-ematch-to-pdl-interp", "::mlir::ModuleOp"> {
@@ -211,7 +217,7 @@ def ConvertEmatchToPDLInterpPass : Pass<"convert-ematch-to-pdl-interp", "::mlir:
         pdl_interp.apply_rewrite operations.
         Note that this transformation also happens in ematch-saturate by default.
     }];
-    let dependentDialects = ["::mlir::ematch::EmatchDialect"];
+    let dependentDialects = ["::mlir::pdl_interp::PDLInterpDialect"];
 }
 
 #endif // EMATCH_DIALECT

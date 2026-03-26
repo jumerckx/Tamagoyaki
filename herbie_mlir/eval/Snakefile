@@ -2,7 +2,7 @@ import os
 import glob
 
 herbie_mlir_opt_path = "../../build/bin/herbie-mlir-opt"
-herbie_racket_prefix = "../../build/herbie-mlir/racket-pkgs"
+herbie_racket_prefix = "../../build/herbie_mlir/racket-pkgs"
 
 # Get all benchmark names from fpcore files
 benchmark_names = [
@@ -108,7 +108,7 @@ rule extract_evaluation_csv:
     output:
         f"{OUT_DIR}/evaluation.csv"
     shell:
-        "uv run python ../tools/extract-accuracies.py {input.report}/results.json {BENCHMARKS_DIR} > {output}"
+        "uv run extract-accuracies {input.report}/results.json {BENCHMARKS_DIR} > {output}"
 
 # ============ Plotting Pipeline ============
 

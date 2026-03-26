@@ -15,6 +15,16 @@ struct TimingCLOptions {
       "tamagoyaki-timing",
       llvm::cl::desc("Enable tamagoyaki timing instrumentation"),
       llvm::cl::init(false)};
+
+  llvm::cl::opt<DefaultTimingManager::OutputFormat> outputFormat{
+      "tamagoyaki-timing-output",
+      llvm::cl::desc("Output format for tamagoyaki timing data"),
+      llvm::cl::values(clEnumValN(DefaultTimingManager::OutputFormat::Text,
+                                  "text", "display the results in text format"),
+                       clEnumValN(DefaultTimingManager::OutputFormat::Json,
+                                  "json",
+                                  "display the results in JSON format")),
+      llvm::cl::init(DefaultTimingManager::OutputFormat::Text)};
 };
 
 llvm::ManagedStatic<TimingCLOptions> clOptions;
@@ -38,6 +48,8 @@ void ensureInitialized() {
     return;
   globalTM = new DefaultTimingManager();
   globalTM->setEnabled(true);
+  globalTM->setOutput(
+      createOutputStrategy(clOptions->outputFormat, llvm::errs()));
   globalRootScope = globalTM->getRootScope();
 }
 

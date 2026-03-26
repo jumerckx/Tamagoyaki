@@ -108,4 +108,4 @@ jobs:
         with:
           name: externalproject-logs-${{ matrix.os }}
           path: |
-            build/herbie-mlir/rival/deps-build/**/src/*-stamp/*.log
+            build/herbie_mlir/rival/deps-build/**/src/*-stamp/*.log

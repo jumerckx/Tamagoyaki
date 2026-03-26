@@ -56,6 +56,7 @@ add_mlir_dialect_library(MLIREmatch
   Utils/MutableScopedHashTable.cpp
   Utils/ClassOpUnionFind.cpp
   Utils/HashConsPatternRewriter.cpp
+  Utils/MultiMatcherPDLByteCode.cpp
   PARTIAL_SOURCES_INTENDED
 
   ADDITIONAL_HEADER_DIRS
