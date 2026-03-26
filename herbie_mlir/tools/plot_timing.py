@@ -84,7 +84,7 @@ def main():
     plt.rcParams["font.size"] = 7
     plt.rcParams["axes.linewidth"] = 0.8
 
-    fig, ax = plt.subplots(figsize=(5.5, 2.5))
+    fig, ax = plt.subplots(figsize=(5.5, 2.0))
 
     # Set up bar positions
     x = np.arange(len(names))
@@ -125,7 +125,7 @@ def main():
     # Create custom legend (Herbie first, then eqsat)
     legend_elements = [
         Patch(facecolor=color_herbie, alpha=0.8, label="Herbie"),
-        Patch(facecolor=color_eqsat, alpha=0.8, label="Herbie-MLIR (ours)"),
+        Patch(facecolor=color_eqsat, alpha=0.8, label="Tamagoyaki"),
     ]
 
     # Add speedup labels on top of bars
@@ -184,14 +184,13 @@ def main():
     ax.tick_params(axis="y", labelsize=6)
 
     # Legend positioning
-    legend_x = 0.83
-    legend_y = 1.3
     ax.legend(
         handles=legend_elements,
-        loc="upper left",
-        bbox_to_anchor=(legend_x, legend_y),
+        loc="upper right",
+        bbox_to_anchor=(1.0, 1.2),
         frameon=False,
         fontsize=6,
+        ncol=2,
     )
 
     # Grid for log scale
@@ -200,7 +199,9 @@ def main():
 
     # Add some padding
     plt.tight_layout()
-    plt.subplots_adjust(bottom=0.35, top=0.85)  # Add space at top for legend
+    plt.subplots_adjust(
+        bottom=0.45, top=0.88
+    )  # Add space at bottom for bracket and top for legend
 
     # Add bracket for NMSE group if there are NMSE benchmarks
     if nmse_start < len(names):
@@ -214,7 +215,7 @@ def main():
         log_range = log_ylim[1] - log_ylim[0]
 
         # Draw a bracket below the x-labels (in log space)
-        bracket_y_log = log_ylim[0] - log_range * 0.4
+        bracket_y_log = log_ylim[0] - log_range * 0.57
         bracket_height_log = log_range * 0.03
 
         # Convert back to linear scale
