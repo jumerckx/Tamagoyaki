@@ -53,6 +53,18 @@ public:
   void classUnion(mlir::PatternRewriter &rewriter, mlir::ValueRange a,
                   mlir::ValueRange b);
 
+  /// Queue a union of two individual values for later processing
+  void queueClassUnion(mlir::Value a, mlir::Value b);
+
+  /// Queue unions of an operation's results with corresponding values
+  void queueClassUnion(mlir::Operation *op, mlir::ValueRange vals);
+
+  /// Queue pairwise unions of two value ranges
+  void queueClassUnion(mlir::ValueRange a, mlir::ValueRange b);
+
+  /// Process all pending queued class unions
+  void processPendingClassUnions(mlir::PatternRewriter &rewriter);
+
   /// Check if two values are in the same equivalence class
   bool isEquivalent(equivalence::ClassOp a, equivalence::ClassOp b);
 
@@ -77,6 +89,7 @@ private:
   llvm::EquivalenceClasses<equivalence::ClassOp> unionFind;
 
   SmallVector<equivalence::ClassOp> pendingErase;
+  SmallVector<std::pair<mlir::Value, mlir::Value>> pendingClassUnions;
 };
 
 } // namespace mlir::ematch

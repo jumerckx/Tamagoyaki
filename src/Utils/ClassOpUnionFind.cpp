@@ -149,6 +149,29 @@ void ClassOpUnionFind::classUnion(PatternRewriter &rewriter, ValueRange a,
     classUnion(rewriter, va, vb);
 }
 
+void ClassOpUnionFind::queueClassUnion(Value a, Value b) {
+  pendingClassUnions.emplace_back(a, b);
+}
+
+void ClassOpUnionFind::queueClassUnion(Operation *op, ValueRange vals) {
+  assert(op->getNumResults() == vals.size() &&
+         "Operation result count must match value range size");
+  for (auto [result, val] : llvm::zip(op->getResults(), vals))
+    queueClassUnion(result, val);
+}
+
+void ClassOpUnionFind::queueClassUnion(ValueRange a, ValueRange b) {
+  assert(a.size() == b.size() && "Value ranges must have equal size");
+  for (auto [va, vb] : llvm::zip(a, b))
+    queueClassUnion(va, vb);
+}
+
+void ClassOpUnionFind::processPendingClassUnions(PatternRewriter &rewriter) {
+  for (auto [a, b] : pendingClassUnions)
+    classUnion(rewriter, a, b);
+  pendingClassUnions.clear();
+}
+
 bool ClassOpUnionFind::isEquivalent(equivalence::ClassOp a,
                                     equivalence::ClassOp b) {
   return unionFind.isEquivalent(a, b);
