@@ -348,7 +348,6 @@ void selectGreedy(GraphOp graphOp, int64_t defaultCost,
     for (ClassOp classOp : classOps) {
       int64_t minCost = std::numeric_limits<int64_t>::max();
       int minIndex = -1;
-      SmallVector<int> minIndices;
 
       for (size_t i = 0; i < classOp.getInputs().size(); ++i) {
         Value operand = classOp.getInputs()[i];
@@ -364,12 +363,6 @@ void selectGreedy(GraphOp graphOp, int64_t defaultCost,
         if (cost < minCost) {
           minCost = cost;
           minIndex = i;
-          minIndices.clear();
-          minIndices.push_back(i);
-        }
-
-        if (cost == minCost && !llvm::is_contained(minIndices, i)) {
-          minIndices.push_back(i);
         }
       }
 
@@ -380,17 +373,13 @@ void selectGreedy(GraphOp graphOp, int64_t defaultCost,
           changed = true;
         }
 
-        // Store all minIndices as an array attribute
-        OpBuilder builder(classOp);
-        SmallVector<Attribute> indicesAttrs;
-        for (int idx : minIndices) {
-          indicesAttrs.push_back(builder.getI64IntegerAttr(idx));
-        }
-        auto newIndicesAttr = builder.getArrayAttr(indicesAttrs);
-        auto currentIndicesAttr =
-            classOp->getAttrOfType<ArrayAttr>("min_cost_indices");
-        if (!currentIndicesAttr || currentIndicesAttr != newIndicesAttr) {
-          classOp->setAttr("min_cost_indices", newIndicesAttr);
+        int64_t currentMinIndex = -1;
+        if (auto attr = classOp->getAttrOfType<IntegerAttr>("min_cost_index"))
+          currentMinIndex = attr.getValue().getSExtValue();
+        if (currentMinIndex != minIndex) {
+          OpBuilder builder(classOp);
+          classOp->setAttr("min_cost_index",
+                           builder.getI64IntegerAttr(minIndex));
         }
       }
     }
@@ -476,7 +465,7 @@ void clearSelection(GraphOp graphOp, llvm::StringRef costAttributeName) {
   });
 }
 
-void extractFromGraph(GraphOp graphOp, bool partialExtraction) {
+void extractFromGraph(GraphOp graphOp) {
   TAMAGOYAKI_SCOPED_TIMER("extractFromGraph");
   Block &block = graphOp.getBody().front();
 
@@ -502,34 +491,12 @@ void extractFromGraph(GraphOp graphOp, bool partialExtraction) {
       continue;
     }
 
-    auto minCostIndicesAttr = classOp.getMinCostIndices();
-    if (!minCostIndicesAttr || minCostIndicesAttr->empty())
+    auto minCostIndexAttr =
+        classOp->getAttrOfType<IntegerAttr>("min_cost_index");
+    if (!minCostIndexAttr)
       continue;
 
-    if (partialExtraction) {
-
-      // Convert to integer indices
-      SmallVector<int> minIndices;
-      for (Attribute attr : *minCostIndicesAttr)
-        minIndices.push_back(cast<IntegerAttr>(attr).getInt());
-
-      // Erase unselected operands
-      int numOperands = classOp.getNumOperands();
-      SmallVector<int> toEraseIndices;
-      for (auto idx = 0; idx < numOperands; ++idx) {
-        if (!llvm::is_contained(minIndices, idx))
-          toEraseIndices.push_back(idx);
-      }
-
-      // Erase operands in reverse order to avoid invalidating indices
-      llvm::sort(toEraseIndices, [](int a, int b) { return a > b; });
-      for (int idx : toEraseIndices)
-        classOp->eraseOperand(idx);
-      continue;
-    }
-    // Full extraction: replace classOp with first minimum-cost index
-    int64_t minIndex =
-        cast<IntegerAttr>((*minCostIndicesAttr)[0]).getValue().getSExtValue();
+    int64_t minIndex = minCostIndexAttr.getValue().getSExtValue();
     Value selected = classOp.getInputs()[minIndex];
 
     classOp.getResult().replaceAllUsesWith(selected);
@@ -595,20 +562,12 @@ SmallVector<Operation *> computeSelectedTopoSort(GraphOp graphOp) {
           anyResultNeeded = true;
           break;
         }
-        if (auto minCostIndicesAttr =
-                classOp->getAttrOfType<ArrayAttr>("min_cost_indices")) {
-          // Check if result is used by any of the minimum-cost indices
-          bool foundInMinIndices = false;
-          for (Attribute attr : minCostIndicesAttr) {
-            int64_t minIdx = cast<IntegerAttr>(attr).getInt();
-            if (minIdx >= 0 &&
-                static_cast<size_t>(minIdx) < classOp.getInputs().size() &&
-                classOp.getInputs()[minIdx] == result) {
-              foundInMinIndices = true;
-              break;
-            }
-          }
-          if (foundInMinIndices) {
+        if (auto minCostAttr =
+                classOp->getAttrOfType<IntegerAttr>("min_cost_index")) {
+          int64_t minIdx = minCostAttr.getInt();
+          if (minIdx >= 0 &&
+              static_cast<size_t>(minIdx) < classOp.getInputs().size() &&
+              classOp.getInputs()[minIdx] == result) {
             anyResultNeeded = true;
             break;
           }
