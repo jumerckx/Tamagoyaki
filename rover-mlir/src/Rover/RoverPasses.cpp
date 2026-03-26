@@ -180,6 +180,21 @@ public:
   }
 };
 
+/// Compute the cost of a single operand given precomputed opCosts.
+/// Block arguments (no defining op) are free (cost 0).
+/// Returns -1 if the defining op is not in the cost map.
+static int64_t
+lookupOperandCost(Value operand,
+                  const DenseMap<Operation *, int64_t> &opCosts) {
+  Operation *defOp = operand.getDefiningOp();
+  if (!defOp)
+    return 0;
+  auto it = opCosts.find(defOp);
+  if (it == opCosts.end())
+    return -1;
+  return it->second;
+}
+
 /// Prune each ClassOp in the graph to only keep operands that achieve the
 /// minimum total cost under the given cost attribute and reduction function.
 /// This is a rover-specific e-graph pruning step: it removes non-optimal
@@ -187,97 +202,20 @@ public:
 static void pruneGraphByCost(GraphOp graphOp, int64_t defaultCost,
                              llvm::StringRef costAttributeName,
                              const CostReductionFn &reductionFn) {
-  // First, compute total costs for all ops (same fixed-point as selectGreedy).
+  DenseMap<Operation *, int64_t> opCosts =
+      computeGraphCosts(graphOp, defaultCost, costAttributeName, reductionFn);
+
+  // Prune: for each ClassOp, keep only operands with minimum cost.
   SmallVector<ClassOp> classOps;
-  SmallVector<Operation *> otherTrackedOps;
+  graphOp.walk([&](ClassOp classOp) { classOps.push_back(classOp); });
 
-  graphOp.walk([&](Operation *op) {
-    if (isa<GraphOp>(op) || isa<YieldOp>(op))
-      return;
-    if (auto classOp = dyn_cast<ClassOp>(op)) {
-      classOps.push_back(classOp);
-      return;
-    }
-    bool consumedByClass = llvm::all_of(
-        op->getUsers(), [](Operation *user) { return isa<ClassOp>(user); });
-    if (!consumedByClass)
-      otherTrackedOps.push_back(op);
-  });
-
-  DenseMap<Operation *, int64_t> opCosts;
-  bool changed = true;
-  int iteration = 0;
-
-  auto getBaseCost = [&](Operation *op) -> int64_t {
-    if (auto attr = op->getAttrOfType<CostAttr>(costAttributeName))
-      return attr.getValue();
-    return defaultCost;
-  };
-
-  auto computeCost = [&](Operation *op) -> int64_t {
-    int64_t baseCost = getBaseCost(op);
-    if (baseCost == -1)
-      return -1;
-    SmallVector<int64_t> childCosts;
-    for (Value dep : op->getOperands()) {
-      Operation *defOp = dep.getDefiningOp();
-      if (!defOp)
-        continue;
-      auto it = opCosts.find(defOp);
-      if (it == opCosts.end() || it->second == -1)
-        return -1;
-      childCosts.push_back(it->second);
-    }
-    return reductionFn(baseCost, childCosts);
-  };
-
-  while (changed && iteration < 100) {
-    changed = false;
-    iteration++;
-
-    for (ClassOp classOp : classOps) {
-      int64_t minCost = std::numeric_limits<int64_t>::max();
-      for (Value operand : classOp.getInputs()) {
-        Operation *candidate = operand.getDefiningOp();
-        int64_t cost = 0;
-        if (candidate)
-          cost = computeCost(candidate);
-        if (cost == -1)
-          continue;
-        minCost = std::min(minCost, cost);
-      }
-      if (minCost < std::numeric_limits<int64_t>::max()) {
-        auto it = opCosts.find(classOp);
-        if (it == opCosts.end() || minCost < it->second) {
-          opCosts[classOp] = minCost;
-          changed = true;
-        }
-      }
-    }
-
-    for (Operation *op : otherTrackedOps) {
-      int64_t totalCost = computeCost(op);
-      if (totalCost >= 0) {
-        auto it = opCosts.find(op);
-        if (it == opCosts.end() || totalCost < it->second) {
-          opCosts[op] = totalCost;
-          changed = true;
-        }
-      }
-    }
-  }
-
-  // Now prune: for each ClassOp, keep only operands with minimum cost.
   for (ClassOp classOp : classOps) {
     if (classOp.getNumOperands() <= 1)
       continue;
 
     int64_t minCost = std::numeric_limits<int64_t>::max();
     for (Value operand : classOp.getInputs()) {
-      Operation *candidate = operand.getDefiningOp();
-      int64_t cost = 0;
-      if (candidate)
-        cost = computeCost(candidate);
+      int64_t cost = lookupOperandCost(operand, opCosts);
       if (cost >= 0)
         minCost = std::min(minCost, cost);
     }
@@ -287,10 +225,7 @@ static void pruneGraphByCost(GraphOp graphOp, int64_t defaultCost,
 
     SmallVector<unsigned> toErase;
     for (auto [i, operand] : llvm::enumerate(classOp.getInputs())) {
-      Operation *candidate = operand.getDefiningOp();
-      int64_t cost = 0;
-      if (candidate)
-        cost = computeCost(candidate);
+      int64_t cost = lookupOperandCost(operand, opCosts);
       if (cost == -1 || cost > minCost)
         toErase.push_back(i);
     }

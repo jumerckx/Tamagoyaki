@@ -42,6 +42,15 @@ inline int64_t costReductionMax(int64_t baseCost,
   return result + maxChild;
 }
 
+/// Compute total costs for all operations in a GraphOp using bottom-up
+/// fixed-point iteration. Returns the cost map. For each ClassOp, the cost
+/// is the minimum among its operands. For other ops, the cost is computed
+/// via the reductionFn applied to base cost and child costs.
+DenseMap<Operation *, int64_t>
+computeGraphCosts(GraphOp graphOp, int64_t defaultCost,
+                  llvm::StringRef costAttributeName = "equivalence.cost",
+                  const CostReductionFn &reductionFn = costReductionSum);
+
 /// Run greedy cost-based selection on a single GraphOp.
 /// Assigns min_cost_index attributes to ClassOps based on minimum-cost
 /// operands.

@@ -304,16 +304,11 @@ static int64_t computeNodeCost(Operation *op, int64_t defaultCost,
   return reductionFn(baseCost, childCosts);
 }
 
-void selectGreedy(GraphOp graphOp, int64_t defaultCost,
+DenseMap<Operation *, int64_t>
+computeGraphCosts(GraphOp graphOp, int64_t defaultCost,
                   llvm::StringRef costAttributeName,
                   const CostReductionFn &reductionFn) {
-  // Collect ClassOps and other tracked ops into separate arrays.
-  // ClassOps: e-class cost = cost of best candidate.
-  // Other tracked ops: non-class ops that are NOT consumed exclusively by
-  // ClassOps (their results are used by other non-class ops, YieldOp, etc.).
-  // Candidate ops (consumed by a ClassOp) do not require their total cost to be
-  // tracked.
-  TAMAGOYAKI_SCOPED_TIMER("selectGreedy");
+  TAMAGOYAKI_SCOPED_TIMER("computeGraphCosts");
 
   SmallVector<ClassOp> classOps;
   SmallVector<Operation *> otherTrackedOps;
@@ -347,39 +342,29 @@ void selectGreedy(GraphOp graphOp, int64_t defaultCost,
     // ---- Process ClassOps: pick the minimum-cost candidate ----
     for (ClassOp classOp : classOps) {
       int64_t minCost = std::numeric_limits<int64_t>::max();
-      int minIndex = -1;
 
-      for (size_t i = 0; i < classOp.getInputs().size(); ++i) {
-        Value operand = classOp.getInputs()[i];
+      for (Value operand : classOp.getInputs()) {
         Operation *candidate = operand.getDefiningOp();
         // Block arguments have no defining op and are free (cost 0).
         int64_t cost = 0;
-        if (candidate)
+        if (candidate) {
           cost = computeNodeCost(candidate, defaultCost, opCosts, reductionFn,
                                  costAttributeName);
+          // Store candidate cost so callers can look it up.
+          if (cost >= 0)
+            opCosts.try_emplace(candidate, cost);
+        }
         if (cost == -1)
           continue;
 
-        if (cost < minCost) {
-          minCost = cost;
-          minIndex = i;
-        }
+        minCost = std::min(minCost, cost);
       }
 
-      if (minIndex >= 0) {
+      if (minCost < std::numeric_limits<int64_t>::max()) {
         auto it = opCosts.find(classOp);
         if (it == opCosts.end() || minCost < it->second) {
           opCosts[classOp] = minCost;
           changed = true;
-        }
-
-        int64_t currentMinIndex = -1;
-        if (auto attr = classOp->getAttrOfType<IntegerAttr>("min_cost_index"))
-          currentMinIndex = attr.getValue().getSExtValue();
-        if (currentMinIndex != minIndex) {
-          OpBuilder builder(classOp);
-          classOp->setAttr("min_cost_index",
-                           builder.getI64IntegerAttr(minIndex));
         }
       }
     }
@@ -397,6 +382,52 @@ void selectGreedy(GraphOp graphOp, int64_t defaultCost,
       }
     }
   }
+
+  return opCosts;
+}
+
+void selectGreedy(GraphOp graphOp, int64_t defaultCost,
+                  llvm::StringRef costAttributeName,
+                  const CostReductionFn &reductionFn) {
+  TAMAGOYAKI_SCOPED_TIMER("selectGreedy");
+
+  DenseMap<Operation *, int64_t> opCosts =
+      computeGraphCosts(graphOp, defaultCost, costAttributeName, reductionFn);
+
+  // Set min_cost_index on each ClassOp based on the computed costs.
+  graphOp.walk([&](ClassOp classOp) {
+    int64_t minCost = std::numeric_limits<int64_t>::max();
+    int minIndex = -1;
+
+    for (size_t i = 0; i < classOp.getInputs().size(); ++i) {
+      Value operand = classOp.getInputs()[i];
+      Operation *candidate = operand.getDefiningOp();
+      int64_t cost = 0;
+      if (candidate) {
+        auto it = opCosts.find(candidate);
+        if (it == opCosts.end())
+          continue;
+        cost = it->second;
+        if (cost == -1)
+          continue;
+      }
+
+      if (cost < minCost) {
+        minCost = cost;
+        minIndex = i;
+      }
+    }
+
+    if (minIndex >= 0) {
+      int64_t currentMinIndex = -1;
+      if (auto attr = classOp->getAttrOfType<IntegerAttr>("min_cost_index"))
+        currentMinIndex = attr.getValue().getSExtValue();
+      if (currentMinIndex != minIndex) {
+        OpBuilder builder(classOp);
+        classOp->setAttr("min_cost_index", builder.getI64IntegerAttr(minIndex));
+      }
+    }
+  });
 }
 
 LogicalResult insertGraphInFunction(func::FuncOp funcOp,
