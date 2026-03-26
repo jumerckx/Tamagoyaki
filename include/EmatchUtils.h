@@ -17,7 +17,8 @@ void convertEmatchOpsToApplyRewrites(ModuleOp module);
 /// pattern module. Returns true on success.
 bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
                    ModuleOp irModule, int maxIters, int maxNodes,
-                   RewriterBase::Listener *listener = nullptr);
+                   RewriterBase::Listener *listener = nullptr,
+                   bool eagerRewrite = true);
 
 } // namespace mlir::ematch
 

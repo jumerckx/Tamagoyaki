@@ -138,7 +138,7 @@ void convertEmatchOpsToApplyRewrites(ModuleOp module) {
 /// Returns true on success.
 bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
                    ModuleOp irModule, int maxIters, int maxNodes,
-                   RewriterBase::Listener *listener) {
+                   RewriterBase::Listener *listener, bool eagerRewrite) {
   TAMAGOYAKI_SCOPED_TIMER("runSaturation");
 
   ClassOpUnionFind uf{};
@@ -164,23 +164,37 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
                                      getClassRepresentative);
   pdlPattern.registerRewriteFunction("get_class_result", getClassResult);
   pdlPattern.registerRewriteFunction("get_class_results", getClassResults);
-  pdlPattern.registerRewriteFunction("union", [&uf](PatternRewriter &rewriter,
-                                                    PDLResultList &results,
-                                                    ArrayRef<PDLValue> args) {
+  pdlPattern.registerRewriteFunction("union", [&uf, eagerRewrite](
+                                                  PatternRewriter &rewriter,
+                                                  PDLResultList &results,
+                                                  ArrayRef<PDLValue> args) {
     assert(args.size() == 2 && "union expects 2 arguments");
 
     PDLValue arg0 = args[0];
     PDLValue arg1 = args[1];
 
-    if (arg0.isa<Value>() && arg1.isa<Value>()) {
-      uf.classUnion(rewriter, arg0.cast<Value>(), arg1.cast<Value>());
-    } else if (arg0.isa<Operation *>() && arg1.isa<ValueRange>()) {
-      uf.classUnion(rewriter, arg0.cast<Operation *>(),
-                    arg1.cast<ValueRange>());
-    } else if (arg0.isa<ValueRange>() && arg1.isa<ValueRange>()) {
-      uf.classUnion(rewriter, arg0.cast<ValueRange>(), arg1.cast<ValueRange>());
+    if (eagerRewrite) {
+      if (arg0.isa<Value>() && arg1.isa<Value>()) {
+        uf.queueClassUnion(arg0.cast<Value>(), arg1.cast<Value>());
+      } else if (arg0.isa<Operation *>() && arg1.isa<ValueRange>()) {
+        uf.queueClassUnion(arg0.cast<Operation *>(), arg1.cast<ValueRange>());
+      } else if (arg0.isa<ValueRange>() && arg1.isa<ValueRange>()) {
+        uf.queueClassUnion(arg0.cast<ValueRange>(), arg1.cast<ValueRange>());
+      } else {
+        llvm_unreachable("union: unsupported argument types");
+      }
     } else {
-      llvm_unreachable("union: unsupported argument types");
+      if (arg0.isa<Value>() && arg1.isa<Value>()) {
+        uf.classUnion(rewriter, arg0.cast<Value>(), arg1.cast<Value>());
+      } else if (arg0.isa<Operation *>() && arg1.isa<ValueRange>()) {
+        uf.classUnion(rewriter, arg0.cast<Operation *>(),
+                      arg1.cast<ValueRange>());
+      } else if (arg0.isa<ValueRange>() && arg1.isa<ValueRange>()) {
+        uf.classUnion(rewriter, arg0.cast<ValueRange>(),
+                      arg1.cast<ValueRange>());
+      } else {
+        llvm_unreachable("union: unsupported argument types");
+      }
     }
     return success();
   });
@@ -249,37 +263,78 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
 
     bytecode.initializeMutableState(bytecodeState);
 
-    {
-      TAMAGOYAKI_SCOPED_TIMER("match");
+    if (eagerRewrite) {
+      // Collect operations upfront so newly inserted ops during rewriting
+      // are not visited in the same iteration.
+      SmallVector<Operation *> opsToProcess;
       irModule.walk([&](Operation *op) {
         auto dialect = op->getDialect();
         if (dialect != nullptr && isa<equivalence::EquivalenceDialect>(dialect))
           return;
-
-        SmallVector<mlir::detail::MultiMatcherPDLByteCode::MatchResult>
-            opMatches;
-        bytecode.match(op, hashconsRewriter, opMatches, bytecodeState);
-
-        for (auto &match : opMatches)
-          allMatches.push_back({op, std::move(match)});
+        opsToProcess.push_back(op);
       });
-    }
-    {
-      TAMAGOYAKI_SCOPED_TIMER("rewrite");
-      for (const auto &pm : allMatches) {
-        hashconsRewriter.setInsertionPoint(pm.op);
-        (void)bytecode.rewrite(hashconsRewriter, pm.matchResult, bytecodeState);
-        if (maxNodes > 0 &&
-            hashconsRewriter.getNodeCount() > (uint64_t)maxNodes) {
-          LLVM_DEBUG(llvm::dbgs() << "Node limit exceeded: "
-                                  << hashconsRewriter.getNodeCount() << " > "
-                                  << maxNodes << "\n");
-          maxNodesExceeded = true;
-          break;
+
+      {
+        TAMAGOYAKI_SCOPED_TIMER("match+rewrite (eager)");
+        for (Operation *op : opsToProcess) {
+          SmallVector<mlir::detail::MultiMatcherPDLByteCode::MatchResult>
+              opMatches;
+          bytecode.match(op, hashconsRewriter, opMatches, bytecodeState);
+
+          for (const auto &match : opMatches) {
+            hashconsRewriter.setInsertionPoint(op);
+            (void)bytecode.rewrite(hashconsRewriter, match, bytecodeState);
+            if (maxNodes > 0 &&
+                hashconsRewriter.getNodeCount() > (uint64_t)maxNodes) {
+              LLVM_DEBUG(llvm::dbgs() << "Node limit exceeded: "
+                                      << hashconsRewriter.getNodeCount()
+                                      << " > " << maxNodes << "\n");
+              maxNodesExceeded = true;
+              break;
+            }
+          }
+          if (maxNodesExceeded)
+            break;
         }
+        bytecodeState.cleanupAfterMatchAndRewrite();
       }
-      allMatches.clear();
-      bytecodeState.cleanupAfterMatchAndRewrite();
+
+      uf.processPendingClassUnions(hashconsRewriter);
+    } else {
+      {
+        TAMAGOYAKI_SCOPED_TIMER("match");
+        irModule.walk([&](Operation *op) {
+          auto dialect = op->getDialect();
+          if (dialect != nullptr &&
+              isa<equivalence::EquivalenceDialect>(dialect))
+            return;
+
+          SmallVector<mlir::detail::MultiMatcherPDLByteCode::MatchResult>
+              opMatches;
+          bytecode.match(op, hashconsRewriter, opMatches, bytecodeState);
+
+          for (auto &match : opMatches)
+            allMatches.push_back({op, std::move(match)});
+        });
+      }
+      {
+        TAMAGOYAKI_SCOPED_TIMER("rewrite");
+        for (const auto &pm : allMatches) {
+          hashconsRewriter.setInsertionPoint(pm.op);
+          (void)bytecode.rewrite(hashconsRewriter, pm.matchResult,
+                                 bytecodeState);
+          if (maxNodes > 0 &&
+              hashconsRewriter.getNodeCount() > (uint64_t)maxNodes) {
+            LLVM_DEBUG(llvm::dbgs() << "Node limit exceeded: "
+                                    << hashconsRewriter.getNodeCount() << " > "
+                                    << maxNodes << "\n");
+            maxNodesExceeded = true;
+            break;
+          }
+        }
+        allMatches.clear();
+        bytecodeState.cleanupAfterMatchAndRewrite();
+      }
     }
 
     bool didRebuild = uf.rebuild(hashconsRewriter);
