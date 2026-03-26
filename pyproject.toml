@@ -22,6 +22,7 @@ members = [
 
 [tool.uv.sources]
 tamagoyaki = { workspace = true }
+xdsl = { git ="https://github.com/xdslproject/xdsl" , branch="main"}
 
 [build-system]
 requires = ["hatchling"]
