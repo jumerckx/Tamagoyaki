@@ -160,8 +160,9 @@ static std::string valueToExpr(Value val, PatchDesc *patch,
     if (patch && patch->classOp.getOperation() == classOp.getOperation())
       idx = patch->operandIndex;
     else {
-      auto mci = classOp.getMinCostIndex();
-      idx = mci ? *mci : 0;
+      auto mci = classOp.getMinCostIndices();
+      idx = (mci && !mci->empty()) ? mlir::cast<IntegerAttr>((*mci)[0]).getInt()
+                                   : 0;
     }
     result = valueToExpr(classOp->getOperand(idx), patch, onStack);
   } else if (auto constOp = dyn_cast<arith::ConstantOp>(defOp)) {
@@ -206,8 +207,9 @@ static bool patchHasCycle(Value val, ClassOp patchedClass, unsigned patchIdx,
     if (classOp.getOperation() == patchedClass.getOperation()) {
       idx = patchIdx; // the patched class — use the patch operand
     } else {
-      auto mci = classOp.getMinCostIndex();
-      idx = mci ? *mci : 0; // every other class — greedy selection
+      auto mci = classOp.getMinCostIndices();
+      idx = (mci && !mci->empty()) ? mlir::cast<IntegerAttr>((*mci)[0]).getInt()
+                                   : 0; // every other class — greedy selection
     }
     cycle = patchHasCycle(classOp->getOperand(idx), patchedClass, patchIdx,
                           onStack);
@@ -317,10 +319,10 @@ evaluateAllPatchesBatched(GraphOp graphOp, ArrayRef<Value> funcArgs,
       return true;
 
     if (auto classOp = dyn_cast<ClassOp>(defOp)) {
-      auto mci = classOp.getMinCostIndex();
+      auto mci = classOp.getMinCostIndices();
       if (!mci || mci->empty())
         return false;
-      auto index = (*mci)[0].cast<IntegerAttr>().getInt();
+      auto index = mlir::cast<IntegerAttr>((*mci)[0]).getInt();
       if (!visit(classOp->getOperand(index)))
         return false;
 
@@ -388,7 +390,7 @@ evaluateAllPatchesBatched(GraphOp graphOp, ArrayRef<Value> funcArgs,
       auto mci = classOp.getMinCostIndices();
       if (!mci || mci->empty())
         return false;
-      auto index = (*mci)[0].cast<IntegerAttr>().getInt();
+      auto index = mlir::cast<IntegerAttr>((*mci)[0]).getInt();
       Value selected = classOp->getOperand(index);
 
       auto &resultVC = valueMap[classOp.getResult()];
@@ -558,7 +560,11 @@ evaluateAllPatchesBatched(GraphOp graphOp, ArrayRef<Value> funcArgs,
   // Apply the single globally-best patch (if it improves on baseline).
   if (globalBestClassOp) {
     auto classOp = cast<ClassOp>(globalBestClassOp);
-    classOp.setMinCostIndex(globalBestOperandIdx);
+    auto ctx = classOp->getContext();
+    auto idx =
+        IntegerAttr::get(IntegerType::get(ctx, 64), globalBestOperandIdx);
+    classOp.setMinCostIndicesAttr(
+        ArrayAttr::get(ctx, {static_cast<Attribute>(idx)}));
     LLVM_DEBUG(llvm::dbgs()
                << "--> globally selected: Class " << classOp.getLoc()
                << " operand " << globalBestOperandIdx
