@@ -98,8 +98,8 @@ void ClassOpUnionFind::classUnion(PatternRewriter &rewriter, Value a, Value b) {
     return;
   }
 
-  equivalence::ClassOp classA = getClassOp(rewriter, a);
-  equivalence::ClassOp classB = getClassOp(rewriter, b);
+  equivalence::ClassOp classA = findLeader(getClassOp(rewriter, a));
+  equivalence::ClassOp classB = findLeader(getClassOp(rewriter, b));
 
   if (isEquivalent(classA, classB))
     return;
@@ -167,8 +167,15 @@ void ClassOpUnionFind::queueClassUnion(ValueRange a, ValueRange b) {
 }
 
 void ClassOpUnionFind::processPendingClassUnions(PatternRewriter &rewriter) {
-  for (auto [a, b] : pendingClassUnions)
+  for (auto [a, b] : pendingClassUnions) {
+    LLVM_DEBUG({
+      llvm::dbgs() << "Unioning:\n\t";
+      a.dump();
+      llvm::dbgs() << "\t";
+      b.dump();
+    });
     classUnion(rewriter, a, b);
+  }
   pendingClassUnions.clear();
 }
 
@@ -215,6 +222,13 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
 
   // Now that the worklist is fully drained, erase all dead eclasses that
   // were deferred during classUnion.
+  LLVM_DEBUG({
+    llvm::dbgs() << "Pending erases:\n";
+    for (equivalence::ClassOp dead : pendingErase) {
+      llvm::dbgs() << "\t";
+      dead.dump();
+    }
+  });
   for (equivalence::ClassOp dead : pendingErase) {
     erase(dead);            // remove from union-find
     rewriter.eraseOp(dead); // free Operation
