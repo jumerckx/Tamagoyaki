@@ -98,15 +98,13 @@ void ClassOpUnionFind::classUnion(PatternRewriter &rewriter, Value a, Value b) {
     return;
   }
 
-  equivalence::ClassOp classA = findLeader(getClassOp(rewriter, a));
-  equivalence::ClassOp classB = findLeader(getClassOp(rewriter, b));
+  equivalence::ClassOp classA = getClassOp(rewriter, a);
+  equivalence::ClassOp classB = getClassOp(rewriter, b);
 
-  if (isEquivalent(classA, classB))
+  if (classA == classB)
     return;
 
-  // TODO: unionSets always treats the first argument as leader
-  // this might lead to an unbalanced union-find?
-  equivalence::ClassOp leader = *unionFind.unionSets(classA, classB);
+  equivalence::ClassOp leader = classA;
   equivalence::ClassOp other = classB;
 
   rewriter.replaceAllUsesWith(other.getResult(), leader.getResult());
@@ -131,7 +129,9 @@ void ClassOpUnionFind::classUnion(PatternRewriter &rewriter, Value a, Value b) {
   other->setOperands(ValueRange{});
   pendingErase.push_back(other);
 
-  worklist.push_back(leader);
+  assert(leader->getNumOperands() > 0 &&
+         "Leader ClassOp must have at least one operand");
+  worklist.push_back(leader->getOperand(0));
 }
 
 void ClassOpUnionFind::classUnion(PatternRewriter &rewriter, Operation *op,
@@ -179,21 +179,14 @@ void ClassOpUnionFind::processPendingClassUnions(PatternRewriter &rewriter) {
   pendingClassUnions.clear();
 }
 
-bool ClassOpUnionFind::isEquivalent(equivalence::ClassOp a,
-                                    equivalence::ClassOp b) {
-  return unionFind.isEquivalent(a, b);
-}
-
-void ClassOpUnionFind::erase(equivalence::ClassOp op) { unionFind.erase(op); }
-
-equivalence::ClassOp ClassOpUnionFind::findLeader(equivalence::ClassOp c) {
-  auto it = unionFind.findLeader(c);
-  if (it == unionFind.member_end()) {
-    return c;
-  } else {
-    assert(unionFind.contains(c));
-    return *it;
+/// Given a representative value (an operand of some ClassOp), find the
+/// ClassOp that currently contains it by scanning its users.
+static equivalence::ClassOp findContainingClassOp(Value representative) {
+  for (Operation *user : representative.getUsers()) {
+    if (auto classOp = dyn_cast<equivalence::ClassOp>(user))
+      return classOp;
   }
+  llvm_unreachable("Representative value must be an operand of a ClassOp");
 }
 
 bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
@@ -201,16 +194,23 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
   LLVM_DEBUG({
     llvm::dbgs() << "Starting rebuild. Worklist contains " << worklist.size()
                  << " classes\n";
+    llvm::dbgs() << "Worklist: ";
+    for (auto rep : worklist) {
+      llvm::dbgs() << "\t";
+      rep.dump();
+    }
   });
 
   if (worklist.empty())
     return false;
 
   while (!worklist.empty()) {
-    // Create an ordered set of unique leaders from the worklist
+    // Create an ordered set of unique leaders from the worklist.
+    // Each worklist entry is a representative value; find its containing
+    // ClassOp to get the current leader.
     llvm::SetVector<equivalence::ClassOp> todo;
-    for (equivalence::ClassOp c : worklist) {
-      todo.insert(findLeader(c));
+    for (Value representative : worklist) {
+      todo.insert(findContainingClassOp(representative));
     }
     worklist.clear();
 
@@ -230,8 +230,7 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
     }
   });
   for (equivalence::ClassOp dead : pendingErase) {
-    erase(dead);            // remove from union-find
-    rewriter.eraseOp(dead); // free Operation
+    rewriter.eraseOp(dead);
   }
   pendingErase.clear();
 
@@ -243,7 +242,6 @@ void ClassOpUnionFind::repair(HashConsPatternRewriter &rewriter,
   if (classOp->getBlock() == nullptr) {
     return;
   }
-  classOp = findLeader(classOp);
 
   llvm::DenseMap<Operation *, Operation *, SimpleOperationInfo> uniqueParents;
   // Collect pairs of duplicate operations to merge AFTER the loop

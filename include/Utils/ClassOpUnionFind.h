@@ -16,7 +16,6 @@
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Support/LLVM.h"
-#include "llvm/ADT/EquivalenceClasses.h"
 
 namespace mlir::ematch {
 
@@ -65,12 +64,6 @@ public:
   /// Process all pending queued class unions
   void processPendingClassUnions(mlir::PatternRewriter &rewriter);
 
-  /// Check if two values are in the same equivalence class
-  bool isEquivalent(equivalence::ClassOp a, equivalence::ClassOp b);
-
-  /// Erase a ClassOp from the union-find
-  void erase(equivalence::ClassOp op);
-
   /// Repair the parents of each ClassOp in the worklist.
   /// This also clears the worklist.
   /// Returns false when the worklist was empty, otherwise true.
@@ -80,14 +73,11 @@ public:
   /// a merged ClassOp.
   void repair(HashConsPatternRewriter &rewriter, equivalence::ClassOp classOp);
 
-  equivalence::ClassOp findLeader(equivalence::ClassOp c);
-
-  /// List of ClassOps whose parents potentially need to be repaired.
-  SmallVector<equivalence::ClassOp> worklist;
+  /// Worklist of representative values (first operand of merged ClassOps)
+  /// whose parent ClassOps potentially need to be repaired.
+  SmallVector<mlir::Value> worklist;
 
 private:
-  llvm::EquivalenceClasses<equivalence::ClassOp> unionFind;
-
   SmallVector<equivalence::ClassOp> pendingErase;
   SmallVector<std::pair<mlir::Value, mlir::Value>> pendingClassUnions;
 };
