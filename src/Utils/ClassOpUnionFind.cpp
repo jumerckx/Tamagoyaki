@@ -130,7 +130,8 @@ void ClassOpUnionFind::classUnion(PatternRewriter &rewriter, Value a, Value b) {
   // Lazy union: just point `other` at `leader` via the leader operand.
   other.getLeaderMutable().assign(leader.getResult());
 
-  worklist.push_back(leader);
+  // We push `other` such that at the start of `rebuild`,
+  worklist.push_back(other);
 }
 
 void ClassOpUnionFind::classUnion(PatternRewriter &rewriter, Operation *op,
@@ -289,6 +290,9 @@ void ClassOpUnionFind::repair(HashConsPatternRewriter &rewriter,
 
   SmallPtrSet<Operation *, 8> scheduledForMerge;
   for (Operation *op1 : classOp.getResult().getUsers()) {
+    // Skip ClassOps that use this result as their leader pointer.
+    if (isa<equivalence::ClassOp>(op1))
+      continue;
     Operation *op2 = uniqueParents.lookup(op1);
 
     if (op2) {
@@ -319,11 +323,11 @@ void ClassOpUnionFind::repair(HashConsPatternRewriter &rewriter,
       if (eclass1 == eclass2) {
         SmallPtrSet<Value, 8> seen;
         SmallVector<Value> uniqueOperands;
-        for (Value operand : eclass1->getOperands()) {
+        for (Value operand : eclass1.getInputs()) {
           if (seen.insert(operand).second)
             uniqueOperands.push_back(operand);
         }
-        eclass1->setOperands(uniqueOperands);
+        eclass1.getInputsMutable().assign(uniqueOperands);
       } else {
         classUnion(rewriter, eclass1.getResult(), eclass2.getResult());
       }

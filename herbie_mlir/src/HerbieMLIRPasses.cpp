@@ -271,7 +271,7 @@ evaluateAllPatchesBatched(GraphOp graphOp, ArrayRef<Value> funcArgs,
     auto classOp = dyn_cast<ClassOp>(&op);
     if (!classOp || !patchableClassSet.contains(&op))
       continue;
-    for (unsigned i = 0; i < classOp.getNumOperands(); ++i) {
+    for (unsigned i = 0; i < classOp.getInputs().size(); ++i) {
       unsigned patchId = patchRegistry.size();
       patchRegistry.push_back({classOp, i});
       classPatchIds[&op].push_back(patchId);
@@ -1177,7 +1177,7 @@ public:
       for (Operation *origOp : tracker.getOps()) {
         for (Operation *user : origOp->getUsers()) {
           if (auto classOp = dyn_cast<ClassOp>(user)) {
-            if (classOp.getNumOperands() > 1)
+            if (classOp.getInputs().size() > 1)
               patchableClassSet.insert(classOp.getOperation());
           }
         }

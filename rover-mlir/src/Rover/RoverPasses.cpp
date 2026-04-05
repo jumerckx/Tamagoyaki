@@ -210,7 +210,7 @@ static void pruneGraphByCost(GraphOp graphOp, int64_t defaultCost,
   graphOp.walk([&](ClassOp classOp) { classOps.push_back(classOp); });
 
   for (ClassOp classOp : classOps) {
-    if (classOp.getNumOperands() <= 1)
+    if (classOp.getInputs().size() <= 1)
       continue;
 
     int64_t minCost = std::numeric_limits<int64_t>::max();
@@ -231,8 +231,9 @@ static void pruneGraphByCost(GraphOp graphOp, int64_t defaultCost,
     }
 
     // Erase in reverse to preserve indices.
+    auto mutableInputs = classOp.getInputsMutable();
     for (auto it = toErase.rbegin(); it != toErase.rend(); ++it)
-      classOp->eraseOperand(*it);
+      mutableInputs.erase(*it);
   }
 
   // Clear min_cost_index so the next selectGreedy starts fresh.
