@@ -129,9 +129,7 @@ void ClassOpUnionFind::classUnion(PatternRewriter &rewriter, Value a, Value b) {
   other->setOperands(ValueRange{});
   pendingErase.push_back(other);
 
-  assert(leader->getNumOperands() > 0 &&
-         "Leader ClassOp must have at least one operand");
-  worklist.push_back(leader->getOperand(0));
+  worklist.push_back(leader);
 }
 
 void ClassOpUnionFind::classUnion(PatternRewriter &rewriter, Operation *op,
@@ -179,16 +177,6 @@ void ClassOpUnionFind::processPendingClassUnions(PatternRewriter &rewriter) {
   pendingClassUnions.clear();
 }
 
-/// Given a representative value (an operand of some ClassOp), find the
-/// ClassOp that currently contains it by scanning its users.
-static equivalence::ClassOp findContainingClassOp(Value representative) {
-  for (Operation *user : representative.getUsers()) {
-    if (auto classOp = dyn_cast<equivalence::ClassOp>(user))
-      return classOp;
-  }
-  llvm_unreachable("Representative value must be an operand of a ClassOp");
-}
-
 bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
   TAMAGOYAKI_SCOPED_TIMER("rebuild");
   LLVM_DEBUG({
@@ -205,17 +193,18 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
     return false;
 
   while (!worklist.empty()) {
-    // Create an ordered set of unique leaders from the worklist.
-    // Each worklist entry is a representative value; find its containing
-    // ClassOp to get the current leader.
     llvm::SetVector<equivalence::ClassOp> todo;
-    for (Value representative : worklist) {
-      todo.insert(findContainingClassOp(representative));
+    for (equivalence::ClassOp c : worklist) {
+      // Skip ClassOps that were merged away: classUnion clears operands
+      // of the merged-away op, and the leader is separately in the worklist.
+      if (c->getNumOperands() > 0)
+        todo.insert(c);
     }
     worklist.clear();
 
-    // Repair each unique leader
     for (equivalence::ClassOp c : todo) {
+      if (c->getNumOperands() == 0)
+        continue;
       repair(rewriter, c);
     }
   }
@@ -229,8 +218,10 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
       dead.dump();
     }
   });
+  SmallPtrSet<Operation *, 8> erased;
   for (equivalence::ClassOp dead : pendingErase) {
-    rewriter.eraseOp(dead);
+    if (erased.insert(dead.getOperation()).second)
+      rewriter.eraseOp(dead);
   }
   pendingErase.clear();
 

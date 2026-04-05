@@ -73,9 +73,10 @@ public:
   /// a merged ClassOp.
   void repair(HashConsPatternRewriter &rewriter, equivalence::ClassOp classOp);
 
-  /// Worklist of representative values (first operand of merged ClassOps)
-  /// whose parent ClassOps potentially need to be repaired.
-  SmallVector<mlir::Value> worklist;
+  /// Worklist of ClassOps whose parents potentially need to be repaired.
+  /// Entries may become stale (operands cleared) if they were merged into
+  /// another class; such entries are skipped during rebuild.
+  SmallVector<equivalence::ClassOp> worklist;
 
 private:
   SmallVector<equivalence::ClassOp> pendingErase;
