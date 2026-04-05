@@ -128,21 +128,25 @@ def Equivalence_GraphOp : Equivalence_Op<"graph", [
 def Equivalence_ClassOp : Equivalence_Op<"class", [
     Pure, 
     SameOperandsAndResultType,
+    AttrSizedOperandSegments,
 ]> {
     let summary = "An e-class representing a set of equivalent values";
     let description = [{
         An e-class operation representing a set of equivalent values.
+        Optionally carries a `leader` operand for lazy union-find: when
+        present, `leader` points to the canonical representative e-class.
     }];
 
     let arguments = (ins 
         Variadic<AnyType>:$inputs,
+        Optional<AnyType>:$leader,
         OptionalAttr<I64Attr>:$min_cost_index
     );
 
     let results = (outs AnyType:$result);
 
     let assemblyFormat = [{
-        $inputs (` ` `(` `min_cost_index` `=` $min_cost_index^ `)` )? attr-dict `:` type($result)
+        $inputs (`leader` $leader^)? (` ` `(` `min_cost_index` `=` $min_cost_index^ `)` )? attr-dict `:` type($result)
     }];
 
     // Verify the following:

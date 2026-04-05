@@ -27,6 +27,10 @@ SmallVector<mlir::Value> getClassVals(mlir::PatternRewriter &rewriter,
 mlir::Value getClassRepresentative(mlir::PatternRewriter &rewriter,
                                    mlir::Value val);
 
+/// Follow the leader chain of a ClassOp to find the canonical leader,
+/// performing path compression along the way.
+equivalence::ClassOp getCanonicalLeader(equivalence::ClassOp classOp);
+
 /// Helper function to get the result of a ClassOp
 mlir::Value getClassResult(mlir::PatternRewriter &rewriter, mlir::Value val);
 

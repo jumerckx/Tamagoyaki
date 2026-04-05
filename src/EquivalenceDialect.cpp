@@ -87,6 +87,13 @@ LogicalResult ClassOp::verify() {
     }
   }
 
+  if (Value leader = getLeader()) {
+    Operation *defOp = leader.getDefiningOp();
+    if (!defOp || !isa<ClassOp>(defOp)) {
+      return emitOpError("leader must be the result of a class operation");
+    }
+  }
+
   return success();
 }
 
@@ -113,7 +120,8 @@ void wrapValuesInClassOps(Region &region, OpBuilder &builder) {
       builder.setInsertionPointToStart(&block);
       for (BlockArgument arg : block.getArguments()) {
         auto classOp = ClassOp::create(
-            builder, arg.getLoc(), TypeRange{arg.getType()}, ValueRange{arg});
+            builder, arg.getLoc(), TypeRange{arg.getType()}, ValueRange{arg},
+            /*leader=*/Value{}, /*min_cost_index=*/nullptr);
         arg.replaceAllUsesExcept(classOp.getResult(), classOp);
       }
     }
@@ -139,9 +147,10 @@ void wrapValuesInClassOps(Region &region, OpBuilder &builder) {
       if (op->getNumResults() > 0) {
         builder.setInsertionPointAfter(op);
         for (OpResult result : op->getResults()) {
-          auto classOp =
-              ClassOp::create(builder, result.getLoc(),
-                              TypeRange{result.getType()}, ValueRange{result});
+          auto classOp = ClassOp::create(builder, result.getLoc(),
+                                         TypeRange{result.getType()},
+                                         ValueRange{result}, /*leader=*/Value{},
+                                         /*min_cost_index=*/nullptr);
           result.replaceAllUsesExcept(classOp.getResult(), classOp);
         }
       }
