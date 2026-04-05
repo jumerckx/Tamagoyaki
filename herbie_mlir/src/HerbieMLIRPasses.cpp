@@ -1077,7 +1077,64 @@ public:
     // ---------------------------------------------------------------
     // Step 5: Greedy initial selection.
     // ---------------------------------------------------------------
-    selectGreedy(graphOp, 1, "herbie.cost");
+    // Herbie cost function: maps MLIR operation names to Herbie's
+    // measured cycle costs for C/C++ on Linux (binary64).
+    auto herbieCostFn = [](Operation *op) -> int {
+      auto cost =
+          llvm::StringSwitch<int>(op->getName().getStringRef())
+              // arith ops
+              .Case("arith.addf", 16)
+              .Case("arith.subf", 15)
+              .Case("arith.mulf", 21)
+              .Case("arith.divf", 27)
+              .Case("arith.negf", 10)
+              .Case("arith.constant", 9) // fl-move-cost
+              // math unary ops
+              .Case("math.absf", 10)
+              .Case("math.sin", 332)
+              .Case("math.cos", 333)
+              .Case("math.tan", 371)
+              .Case("math.sinh", 121)
+              .Case("math.cosh", 95)
+              .Case("math.acos", 36)
+              .Case("math.acosh", 66)
+              .Case("math.asin", 39)
+              .Case("math.asinh", 84)
+              .Case("math.atan", 84)
+              .Case("math.atanh", 36)
+              .Case("math.cbrt", 157)
+              .Case("math.ceil", 47)
+              .Case("math.erf", 81)
+              .Case("math.exp", 108)
+              .Case("math.exp2", 83)
+              .Case("math.floor", 47)
+              .Case("math.log", 51)
+              .Case("math.log10", 87)
+              .Case("math.log2", 68)
+              .Case("math.sqrt", 19)
+              .Case("math.tanh", 82)
+              .Case("math.trunc", 46)
+              .Case("math.round", 66)
+              .Case("math.roundeven", 12) // rint
+              // math binary ops
+              .Case("math.powf", 152)
+              .Case("math.atan2", 149)
+              .Case("math.copysign", 20)
+              .Case("math.fpowi", 152) // same as powf
+              // herbie-specific ops (use same cost as their lowered form)
+              .Case("herbie.sound_div", 27)
+              .Case("herbie.sound_pow", 152)
+              .Case("herbie.sound_log", 51)
+              .Case("herbie.constant", 9)
+              // equivalence.class has zero cost (just routing)
+              .Case("equivalence.class", 0)
+              .Default(-1);
+      if (cost == -1)
+        llvm::report_fatal_error("herbieCostFn: unknown op '" +
+                                 op->getName().getStringRef() + "'");
+      return cost;
+    };
+    selectGreedy(graphOp, herbieCostFn, "herbie.cost");
     // Ensure the original expression is selected by the greedy selection:
     for (auto originalOp : tracker.getOps()) {
       if (originalOp->hasOneUse()) {
