@@ -19,6 +19,10 @@ namespace mlir::equivalence {
 LogicalResult insertGraphInFunction(func::FuncOp funcOp,
                                     bool insertSingleElementEqs);
 
+/// A NodeCostFn takes an Operation* and returns its base cost.
+/// Return -1 to indicate "unresolvable / infinitely expensive".
+using NodeCostFn = std::function<int64_t(Operation *)>;
+
 /// A CostReductionFn takes (baseCost, childCosts) and returns the combined
 /// cost, or -1 if unresolvable.
 using CostReductionFn =
@@ -47,16 +51,36 @@ inline int64_t costReductionMax(int64_t baseCost,
 /// is the minimum among its operands. For other ops, the cost is computed
 /// via the reductionFn applied to base cost and child costs.
 DenseMap<Operation *, int64_t>
-computeGraphCosts(GraphOp graphOp, int64_t defaultCost,
+computeGraphCosts(GraphOp graphOp, const NodeCostFn &nodeCostFn,
                   llvm::StringRef costAttributeName = "equivalence.cost",
                   const CostReductionFn &reductionFn = costReductionSum);
+
+/// Convenience overload using a uniform default cost for all operations.
+inline DenseMap<Operation *, int64_t>
+computeGraphCosts(GraphOp graphOp, int64_t defaultCost,
+                  llvm::StringRef costAttributeName = "equivalence.cost",
+                  const CostReductionFn &reductionFn = costReductionSum) {
+  return computeGraphCosts(
+      graphOp, [defaultCost](Operation *) { return defaultCost; },
+      costAttributeName, reductionFn);
+}
 
 /// Run greedy cost-based selection on a single GraphOp.
 /// Assigns min_cost_index attributes to ClassOps based on minimum-cost
 /// operands.
-void selectGreedy(GraphOp graphOp, int64_t defaultCost,
+void selectGreedy(GraphOp graphOp, const NodeCostFn &nodeCostFn,
                   llvm::StringRef costAttributeName = "equivalence.cost",
                   const CostReductionFn &reductionFn = costReductionSum);
+
+/// Convenience overload using a uniform default cost for all operations.
+inline void
+selectGreedy(GraphOp graphOp, int64_t defaultCost,
+             llvm::StringRef costAttributeName = "equivalence.cost",
+             const CostReductionFn &reductionFn = costReductionSum) {
+  selectGreedy(
+      graphOp, [defaultCost](Operation *) { return defaultCost; },
+      costAttributeName, reductionFn);
+}
 
 /// Clear all selection state from a GraphOp: remove min_cost_index from
 /// ClassOps and the cost attribute from all other operations.

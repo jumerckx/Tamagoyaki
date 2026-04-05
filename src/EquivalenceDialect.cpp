@@ -272,21 +272,21 @@ void EquivalenceDialect::registerAttributes() {
 
 namespace mlir::equivalence {
 
-static int64_t getNodeBaseCost(Operation *op, int64_t defaultCost,
+static int64_t getNodeBaseCost(Operation *op, const NodeCostFn &nodeCostFn,
                                llvm::StringRef costAttributeName) {
   if (auto attr = op->getAttrOfType<CostAttr>(costAttributeName)) {
     return attr.getValue();
   }
-  return defaultCost;
+  return nodeCostFn(op);
 }
 
 // Compute the total cost of a non-class operation given current known costs.
 // Returns -1 if any dependency is unresolved.
-static int64_t computeNodeCost(Operation *op, int64_t defaultCost,
+static int64_t computeNodeCost(Operation *op, const NodeCostFn &nodeCostFn,
                                DenseMap<Operation *, int64_t> &opCosts,
                                const CostReductionFn &reductionFn,
                                llvm::StringRef costAttributeName) {
-  int64_t baseCost = getNodeBaseCost(op, defaultCost, costAttributeName);
+  int64_t baseCost = getNodeBaseCost(op, nodeCostFn, costAttributeName);
   if (baseCost == -1)
     return -1;
 
@@ -305,7 +305,7 @@ static int64_t computeNodeCost(Operation *op, int64_t defaultCost,
 }
 
 DenseMap<Operation *, int64_t>
-computeGraphCosts(GraphOp graphOp, int64_t defaultCost,
+computeGraphCosts(GraphOp graphOp, const NodeCostFn &nodeCostFn,
                   llvm::StringRef costAttributeName,
                   const CostReductionFn &reductionFn) {
   TAMAGOYAKI_SCOPED_TIMER("computeGraphCosts");
@@ -348,7 +348,7 @@ computeGraphCosts(GraphOp graphOp, int64_t defaultCost,
         // Block arguments have no defining op and are free (cost 0).
         int64_t cost = 0;
         if (candidate) {
-          cost = computeNodeCost(candidate, defaultCost, opCosts, reductionFn,
+          cost = computeNodeCost(candidate, nodeCostFn, opCosts, reductionFn,
                                  costAttributeName);
           // Store candidate cost so callers can look it up.
           if (cost >= 0)
@@ -371,7 +371,7 @@ computeGraphCosts(GraphOp graphOp, int64_t defaultCost,
 
     // ---- Process other tracked (non-class) ops ----
     for (Operation *op : otherTrackedOps) {
-      int64_t totalCost = computeNodeCost(op, defaultCost, opCosts, reductionFn,
+      int64_t totalCost = computeNodeCost(op, nodeCostFn, opCosts, reductionFn,
                                           costAttributeName);
       if (totalCost >= 0) {
         auto it = opCosts.find(op);
@@ -386,13 +386,13 @@ computeGraphCosts(GraphOp graphOp, int64_t defaultCost,
   return opCosts;
 }
 
-void selectGreedy(GraphOp graphOp, int64_t defaultCost,
+void selectGreedy(GraphOp graphOp, const NodeCostFn &nodeCostFn,
                   llvm::StringRef costAttributeName,
                   const CostReductionFn &reductionFn) {
   TAMAGOYAKI_SCOPED_TIMER("selectGreedy");
 
   DenseMap<Operation *, int64_t> opCosts =
-      computeGraphCosts(graphOp, defaultCost, costAttributeName, reductionFn);
+      computeGraphCosts(graphOp, nodeCostFn, costAttributeName, reductionFn);
 
   // Set min_cost_index on each ClassOp based on the computed costs.
   graphOp.walk([&](ClassOp classOp) {
