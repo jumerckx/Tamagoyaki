@@ -1,8 +1,8 @@
-// RUN: herbie-mlir-opt %s -herbie-optimize="max-saturation-iters=4 patterns-file=%p/patterns.mlir" --remove-dead-values
+// RUN: herbie-mlir-opt %s -herbie-optimize="max-saturation-iters=4 patterns-file=%p/patterns.mlir" --remove-dead-values | FileCheck %s
 
 
 // CHECK:      func.func @sqrt_example(%arg0: f32) -> f32 {
-// CHECK-NEXT:     %cst = arith.constant 1.000000e+00 : f32
+// CHECK-NEXT:     %cst = arith.constant {herbie.is_original} 1.000000e+00 : f32
 // CHECK-NEXT:     %0 = arith.addf %arg0, %cst : f32
 // CHECK-NEXT:     %1 = math.sqrt %arg0 : f32
 // CHECK-NEXT:     %2 = math.sqrt %0 : f32
