@@ -1080,6 +1080,7 @@ public:
     // Herbie cost function: maps MLIR operation names to Herbie's
     // measured cycle costs for C/C++ on Linux (binary64).
     auto herbieCostFn = [](Operation *op) -> int {
+      assert(!(op->getName().getStringRef() == "equivalence.class"));
       auto cost =
           llvm::StringSwitch<int>(op->getName().getStringRef())
               // arith ops
