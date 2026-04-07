@@ -26,6 +26,7 @@ rule all:
         f"{PLOTS_DIR}/accuracy_comparison.pdf",
         f"{PLOTS_DIR}/accuracy_comparison_compact.pdf",
         f"{PLOTS_DIR}/timing_comparison.pdf",
+        f"{PLOTS_DIR}/timing_comparison_no_pdl.pdf",
         f"{PLOTS_DIR}/matcher_speedup.pdf",
 
 # ============ Rules Processing Pipeline ============
@@ -175,6 +176,14 @@ rule generate_timing_plot:
         f"{PLOTS_DIR}/timing_comparison.pdf"
     shell:
         "uv run plot-timing {input} -o {output}"
+
+rule generate_timing_plot_no_pdl:
+    input:
+        f"{OUT_DIR}/evaluation.csv"
+    output:
+        f"{PLOTS_DIR}/timing_comparison_no_pdl.pdf"
+    shell:
+        "uv run plot-timing {input} -o {output} --no-pdl-loading"
 
 # ============ Utility Rules ============
 

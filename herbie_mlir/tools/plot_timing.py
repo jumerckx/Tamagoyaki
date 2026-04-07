@@ -23,6 +23,11 @@ def main():
         required=True,
         help="Path to output PDF file",
     )
+    parser.add_argument(
+        "--no-pdl-loading",
+        action="store_true",
+        help="Exclude PDL loading time from optimize_ms",
+    )
 
     args = parser.parse_args()
 
@@ -37,10 +42,13 @@ def main():
         df["herbie_wo_sampling"] + (256 / 8256) * df["herbie_sampling"]
     )
 
-    # Sum LoadPDL and processFunctions times and convert from seconds to milliseconds
-    df["optimize_ms"] = (
-        df["optimize_load_pdl_time"] + df["optimize_process_functions_time"]
-    ) * 1000
+    # Sum relevant times and convert from seconds to milliseconds
+    if args.no_pdl_loading:
+        df["optimize_ms"] = df["optimize_process_functions_time"] * 1000
+    else:
+        df["optimize_ms"] = (
+            df["optimize_load_pdl_time"] + df["optimize_process_functions_time"]
+        ) * 1000
 
     # Calculate speedup ratio
     df["speedup"] = df["optimize_ms"] / df["herbie_total_ms"]
