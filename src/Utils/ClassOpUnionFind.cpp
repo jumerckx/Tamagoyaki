@@ -50,11 +50,13 @@ Value mlir::ematch::getClassRepresentative(PatternRewriter &rewriter,
 
 equivalence::ClassOp
 mlir::ematch::getCanonicalLeader(equivalence::ClassOp classOp) {
+  assert(classOp->getBlock());
   Value leaderVal = classOp.getLeader();
   if (!leaderVal)
     return classOp; // I am the leader.
 
   auto parentOp = cast<equivalence::ClassOp>(leaderVal.getDefiningOp());
+  assert(parentOp->getBlock());
   if (!parentOp.getLeader())
     return parentOp; // My parent is the leader.
 
@@ -232,7 +234,7 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
 
         // remove c from IR and queue for erasure
         c.getInputsMutable().clear();
-        // leave leader operand (?)
+        c.getLeaderMutable().clear();
         c->remove();
         pendingErase.push_back(c);
       }
