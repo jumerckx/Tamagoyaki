@@ -1212,43 +1212,49 @@ public:
     ModuleOp irModule;
     OwningOpRef<ModuleOp> parsedPatternsModule;
 
-    if (!patternsFile.empty()) {
-      irModule = module;
-      parsedPatternsModule =
-          parseSourceFile<ModuleOp>(patternsFile, module.getContext());
-      if (!parsedPatternsModule) {
-        emitError(module.getLoc())
-            << "failed to parse patterns file: " << patternsFile;
-        return signalPassFailure();
-      }
-      patternsModule = parsedPatternsModule.release();
-    } else {
-      patternsModule = module.lookupSymbol<ModuleOp>(
-          StringAttr::get(module->getContext(), "patterns"));
-      irModule = module.lookupSymbol<ModuleOp>(
-          StringAttr::get(module->getContext(), "ir"));
+    {
+      TAMAGOYAKI_SCOPED_TIMER("LoadPDL");
+      if (!patternsFile.empty()) {
+        irModule = module;
+        parsedPatternsModule =
+            parseSourceFile<ModuleOp>(patternsFile, module.getContext());
+        if (!parsedPatternsModule) {
+          emitError(module.getLoc())
+              << "failed to parse patterns file: " << patternsFile;
+          return signalPassFailure();
+        }
+        patternsModule = parsedPatternsModule.release();
+      } else {
+        patternsModule = module.lookupSymbol<ModuleOp>(
+            StringAttr::get(module->getContext(), "patterns"));
+        irModule = module.lookupSymbol<ModuleOp>(
+            StringAttr::get(module->getContext(), "ir"));
 
-      if (!patternsModule || !irModule) {
-        emitError(module.getLoc()) << "missing 'patterns' or 'ir' submodule";
-        return signalPassFailure();
+        if (!patternsModule || !irModule) {
+          emitError(module.getLoc()) << "missing 'patterns' or 'ir' submodule";
+          return signalPassFailure();
+        }
       }
+
+      // Convert ematch ops once; each function will clone from this.
+      mlir::ematch::convertEmatchOpsToApplyRewrites(patternsModule);
     }
 
-    // Convert ematch ops once; each function will clone from this.
-    mlir::ematch::convertEmatchOpsToApplyRewrites(patternsModule);
+    {
+      TAMAGOYAKI_SCOPED_TIMER("processFunctions");
+      // ---------------------------------------------------------------
+      // Process each function independently.
+      // ---------------------------------------------------------------
+      auto walkResult =
+          irModule.walk([&](mlir::func::FuncOp funcOp) -> WalkResult {
+            if (failed(processFunction(funcOp, patternsModule)))
+              return WalkResult::interrupt();
+            return WalkResult::advance();
+          });
 
-    // ---------------------------------------------------------------
-    // Process each function independently.
-    // ---------------------------------------------------------------
-    auto walkResult =
-        irModule.walk([&](mlir::func::FuncOp funcOp) -> WalkResult {
-          if (failed(processFunction(funcOp, patternsModule)))
-            return WalkResult::interrupt();
-          return WalkResult::advance();
-        });
-
-    if (walkResult.wasInterrupted())
-      return signalPassFailure();
+      if (walkResult.wasInterrupted())
+        return signalPassFailure();
+    }
   }
 };
 
