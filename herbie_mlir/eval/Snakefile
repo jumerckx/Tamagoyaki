@@ -17,9 +17,9 @@ OPTIMIZED_DIR = f"{OUT_DIR}/optimized"
 OPTIMIZED_FPCORE_DIR = f"{OUT_DIR}/optimized_fpcore"
 FPCORE_MERGED_DIR = f"{OUT_DIR}/fpcore_merged"
 HERBIE_EVAL_DIR = f"{OUT_DIR}/herbie_eval"
-BENCHMARKS_DIR = f"{OUT_DIR}/benchmarks"
 PLOTS_DIR = f"{OUT_DIR}/plots"
 SATURATION_TIMING_DIR = f"{OUT_DIR}/saturation_timing"
+OPTIMIZE_TIMING_DIR = f"{OUT_DIR}/optimize_timing"
 
 rule all:
     input:
@@ -67,11 +67,10 @@ rule optimize:
         mlir = f"{MLIR_DIR}/{{benchmark}}.mlir",
         pdl_interp = f"{RULES_DIR}/rules_pdl_interp.mlir"
     output:
-        f"{OPTIMIZED_DIR}/{{benchmark}}.mlir"
-    benchmark:
-        f"{BENCHMARKS_DIR}/{{benchmark}}.tsv"
+        mlir = f"{OPTIMIZED_DIR}/{{benchmark}}.mlir",
+        timing = f"{OPTIMIZE_TIMING_DIR}/{{benchmark}}.json"
     shell:
-        '{herbie_mlir_opt_path} -herbie-optimize="max-saturation-iters=20 max-nodes=4000 patterns-file={input.pdl_interp}" --remove-dead-values {input.mlir} > {output}'
+        'mkdir -p {OPTIMIZE_TIMING_DIR} && {herbie_mlir_opt_path} -herbie-optimize="max-saturation-iters=20 max-nodes=4000 patterns-file={input.pdl_interp}" --remove-dead-values {input.mlir} -tamagoyaki-timing -tamagoyaki-timing-output=json 2> {output.timing} > {output.mlir}'
 
 # ============ Saturation Timing Pipeline ============
 
@@ -135,13 +134,13 @@ rule run_herbie_report:
 rule extract_evaluation_csv:
     input:
         report = f"{HERBIE_EVAL_DIR}/herbie_report",
-        benchmarks = expand(f"{BENCHMARKS_DIR}/{{benchmark}}.tsv", benchmark=benchmark_names),
+        optimize_timing = expand(f"{OPTIMIZE_TIMING_DIR}/{{benchmark}}.json", benchmark=benchmark_names),
         timing_joint = expand(f"{SATURATION_TIMING_DIR}/{{benchmark}}_joint.json", benchmark=benchmark_names),
         timing_individual = expand(f"{SATURATION_TIMING_DIR}/{{benchmark}}_individual.json", benchmark=benchmark_names),
     output:
         f"{OUT_DIR}/evaluation.csv"
     shell:
-        "uv run extract-accuracies {input.report}/results.json {BENCHMARKS_DIR} {SATURATION_TIMING_DIR} > {output}"
+        "uv run extract-accuracies {input.report}/results.json {OPTIMIZE_TIMING_DIR} {SATURATION_TIMING_DIR} > {output}"
 
 # ============ Plotting Pipeline ============
 

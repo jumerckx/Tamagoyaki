@@ -40,39 +40,57 @@ def extract_filename_from_target_prog(target_prog: str) -> str:
     return match.group(1)
 
 
-def extract_snakemake_benchmark_timing(benchmark_path: Path) -> str:
-    """Extract the wall-clock timing from a Snakemake benchmark TSV file.
+def extract_optimize_timing(timing_path: Path) -> tuple[str, str]:
+    """Extract LoadPDL and processFunctions durations from a tamagoyaki timing JSON file.
+
+    Looks for the top-level "HerbieOptimizePass" entry and extracts its
+    "LoadPDL" and "processFunctions" children's wall-clock durations.
 
     Args:
-        benchmark_path: Path to the Snakemake benchmark TSV file.
+        timing_path: Path to the timing JSON file.
 
     Returns:
-        The wall-clock seconds value as a string.
+        A tuple of (load_pdl_duration, process_functions_duration) as strings (in seconds).
 
     Raises:
-        FileNotFoundError: If the benchmark file does not exist.
-        ValueError: If the benchmark file is malformed.
+        FileNotFoundError: If the timing file does not exist.
+        ValueError: If the timing data is invalid or required entries are missing.
     """
-    if not benchmark_path.exists():
-        raise FileNotFoundError(f"Benchmark file not found: {benchmark_path}")
+    if not timing_path.exists():
+        raise FileNotFoundError(f"Timing file not found: {timing_path}")
 
-    with open(benchmark_path) as f:
-        lines = f.readlines()
+    with open(timing_path) as f:
+        timing_data: Any = json.load(f)
 
-    if len(lines) < 2:
-        raise ValueError(f"Benchmark file has fewer than 2 lines: {benchmark_path}")
+    if not isinstance(timing_data, list):
+        raise ValueError(
+            f"Expected timing data to be a list, got {type(timing_data).__name__}"
+        )
 
-    # Skip header, get first data row
-    first_data_row = lines[1].strip()
-    if not first_data_row:
-        raise ValueError(f"Second row of benchmark file is empty: {benchmark_path}")
+    for entry in timing_data:
+        if isinstance(entry, dict) and entry.get("name") == "HerbieOptimizePass":
+            load_pdl: str | None = None
+            process_functions: str | None = None
 
-    # Split by tab and get first column (wall-clock seconds)
-    columns = first_data_row.split("\t")
-    if not columns:
-        raise ValueError(f"Could not parse benchmark file: {benchmark_path}")
+            for sub_pass in entry.get("passes", []):
+                if not isinstance(sub_pass, dict):
+                    continue
+                wall: Any = sub_pass.get("wall")
+                if not isinstance(wall, dict) or "duration" not in wall:
+                    continue
+                if sub_pass.get("name") == "LoadPDL":
+                    load_pdl = str(wall["duration"])
+                elif sub_pass.get("name") == "processFunctions":
+                    process_functions = str(wall["duration"])
 
-    return columns[0]
+            if load_pdl is None:
+                raise ValueError(f"No 'LoadPDL' entry found in HerbieOptimizePass in {timing_path}")
+            if process_functions is None:
+                raise ValueError(f"No 'processFunctions' entry found in HerbieOptimizePass in {timing_path}")
+
+            return load_pdl, process_functions
+
+    raise ValueError(f"No 'HerbieOptimizePass' entry found in {timing_path}")
 
 
 def extract_target_accuracy(target: Any) -> str:
@@ -214,13 +232,13 @@ def extract_saturation_time(timing_path: Path) -> tuple[str, str]:
 
 
 def extract_accuracies(
-    json_file: str, benchmarks_dir: str, saturation_timing_dir: str
+    json_file: str, optimize_timing_dir: str, saturation_timing_dir: str
 ) -> None:
     """Extract accuracy metrics from a Herbie results JSON file and output as CSV.
 
     Args:
         json_file: Path to the JSON results file.
-        benchmarks_dir: Directory containing Snakemake benchmark TSV files.
+        optimize_timing_dir: Directory containing optimize timing JSON files.
         saturation_timing_dir: Directory containing saturation timing JSON files.
 
     Raises:
@@ -239,7 +257,8 @@ def extract_accuracies(
             "original_accuracy_bits",
             "optimized_accuracy_bits",
             "target_accuracy_bits",
-            "optimize_time",
+            "optimize_load_pdl_time",
+            "optimize_process_functions_time",
             "herbie_wo_sampling",
             "herbie_sampling",
             "saturation_time_joint",
@@ -262,11 +281,12 @@ def extract_accuracies(
         except KeyError as e:
             raise KeyError(f"Test {i}: Missing required field {e}")
 
-        # Extract optimization timing from Snakemake benchmark file
+        filename: str = extract_filename_from_target_prog(target_prog)
+
+        # Extract optimization timing from tamagoyaki timing JSON
         try:
-            filename: str = extract_filename_from_target_prog(target_prog)
-            optimize_time: str = extract_snakemake_benchmark_timing(
-                Path(benchmarks_dir) / f"{filename}.tsv"
+            load_pdl_time, process_functions_time = extract_optimize_timing(
+                Path(optimize_timing_dir) / f"{filename}.json"
             )
         except (ValueError, FileNotFoundError) as e:
             raise ValueError(f"Test {i} ({name}): {e}")
@@ -298,7 +318,8 @@ def extract_accuracies(
                 "original_accuracy_bits": start,
                 "optimized_accuracy_bits": end,
                 "target_accuracy_bits": target,
-                "optimize_time": optimize_time,
+                "optimize_load_pdl_time": load_pdl_time,
+                "optimize_process_functions_time": process_functions_time,
                 "herbie_wo_sampling": herbie_wo_sampling,
                 "herbie_sampling": herbie_sampling,
                 "saturation_time_joint": saturation_time_joint,
@@ -313,21 +334,21 @@ def main() -> None:
     """Main entry point."""
     if len(sys.argv) != 4:
         print(
-            "Usage: python extract_accuracies.py <json_file> <benchmarks_dir> <saturation_timing_dir>",
+            "Usage: python extract_accuracies.py <json_file> <optimize_timing_dir> <saturation_timing_dir>",
             file=sys.stderr,
         )
         sys.exit(1)
 
     json_file = sys.argv[1]
-    benchmarks_dir = sys.argv[2]
+    optimize_timing_dir = sys.argv[2]
     saturation_timing_dir = sys.argv[3]
 
     if not Path(json_file).exists():
         print(f"Error: File not found: {json_file}", file=sys.stderr)
         sys.exit(1)
 
-    if not Path(benchmarks_dir).is_dir():
-        print(f"Error: Directory not found: {benchmarks_dir}", file=sys.stderr)
+    if not Path(optimize_timing_dir).is_dir():
+        print(f"Error: Directory not found: {optimize_timing_dir}", file=sys.stderr)
         sys.exit(1)
 
     if not Path(saturation_timing_dir).is_dir():
@@ -336,7 +357,7 @@ def main() -> None:
         )
         sys.exit(1)
 
-    extract_accuracies(json_file, benchmarks_dir, saturation_timing_dir)
+    extract_accuracies(json_file, optimize_timing_dir, saturation_timing_dir)
 
 
 def entry() -> None:

@@ -37,8 +37,10 @@ def main():
         df["herbie_wo_sampling"] + (256 / 8256) * df["herbie_sampling"]
     )
 
-    # Convert optimize_time from seconds to milliseconds for comparison
-    df["optimize_ms"] = df["optimize_time"] * 1000
+    # Sum LoadPDL and processFunctions times and convert from seconds to milliseconds
+    df["optimize_ms"] = (
+        df["optimize_load_pdl_time"] + df["optimize_process_functions_time"]
+    ) * 1000
 
     # Calculate speedup ratio
     df["speedup"] = df["optimize_ms"] / df["herbie_total_ms"]
