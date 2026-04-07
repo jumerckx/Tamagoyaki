@@ -128,23 +128,44 @@ void ClassOpUnionFind::classUnion(PatternRewriter &rewriter, Value a, Value b) {
     return;
   }
 
-  equivalence::ClassOp classA = getClassOp(rewriter, a);
-  equivalence::ClassOp classB = getClassOp(rewriter, b);
+  equivalence::ClassOp classA = getClassOpIfExists(a);
+  equivalence::ClassOp classB = getClassOpIfExists(b);
 
-  if (classA == classB)
-    return;
+  if (classA && classB) {
+    // Both already belong to a class — perform the normal union.
+    if (classA == classB)
+      return;
 
-  equivalence::ClassOp leader = getCanonicalLeader(classA);
-  equivalence::ClassOp other = getCanonicalLeader(classB);
+    equivalence::ClassOp leader = getCanonicalLeader(classA);
+    equivalence::ClassOp other = getCanonicalLeader(classB);
 
-  if (leader == other)
-    return;
+    if (leader == other)
+      return;
 
-  // Lazy union: just point `other` at `leader` via the leader operand.
-  other.getLeaderMutable().assign(leader.getResult());
+    // Lazy union: just point `other` at `leader` via the leader operand.
+    other.getLeaderMutable().assign(leader.getResult());
 
-  // We push `other` such that at the start of `rebuild`,
-  worklist.push_back(other);
+    // We push `other` such that at the start of `rebuild`,
+    worklist.push_back(other);
+  } else if (classA || classB) {
+    // Exactly one value already has a class — add the other directly into it.
+    if (classB)
+      std::swap(a, b); // normalize so `a` is the one with a class
+    equivalence::ClassOp leader = getCanonicalLeader(getClassOpIfExists(a));
+    leader.getInputsMutable().append(ValueRange{b});
+    rewriter.replaceUsesWithIf(
+        b, leader.getResult(),
+        [&leader](OpOperand &operand) { return operand.getOwner() != leader; });
+    worklist.push_back(leader);
+  } else {
+    // Neither value has a class yet — create one for `a`, then add `b`.
+    equivalence::ClassOp leader = getClassOp(rewriter, a);
+    leader.getInputsMutable().append(ValueRange{b});
+    rewriter.replaceUsesWithIf(
+        b, leader.getResult(),
+        [&leader](OpOperand &operand) { return operand.getOwner() != leader; });
+    worklist.push_back(leader);
+  }
 }
 
 void ClassOpUnionFind::classUnion(PatternRewriter &rewriter, Operation *op,
