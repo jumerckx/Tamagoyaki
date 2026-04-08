@@ -331,9 +331,17 @@ void ClassOpUnionFind::repair(HashConsPatternRewriter &rewriter,
         // Case 2: only keep has a class — redirect other's results to the
         // class representative rather than the raw result.
         rewriter.replaceAllUsesWith(resOther, classKeep.getResult());
+      } else if (classOther) {
+        // Case 3: only other has a class — redirect keep's non-ClassOp users
+        // through classOther first, then retarget classOther from resOther to
+        // resKeep.
+        rewriter.replaceUsesWithIf(resKeep, classOther.getResult(),
+                                   [&](OpOperand &operand) {
+                                     return operand.getOwner() != classOther;
+                                   });
+        rewriter.replaceAllUsesWith(resOther, resKeep);
       } else {
-        // Case 3 (only other has a class) & Case 4 (neither has a class):
-        // replace other's results with keep's results.
+        // Case 4: neither has a class — simple replacement.
         rewriter.replaceAllUsesWith(resOther, resKeep);
       }
     }
