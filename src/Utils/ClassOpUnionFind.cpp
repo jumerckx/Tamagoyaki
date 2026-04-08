@@ -316,7 +316,20 @@ void ClassOpUnionFind::repair(HashConsPatternRewriter &rewriter,
         // Case 1: both values have a class — replace other's results with
         // keep's results, then union the two classes.
         rewriter.replaceAllUsesWith(resOther, resKeep);
+        // The replaceAllUsesWith above rewrote resOther -> resKeep inside
+        // classOther's input list.  That means resKeep is now an input of
+        // *both* classKeep and classOther, breaking the single-class-
+        // membership invariant.  Remove the stale occurrence from
+        // classOther so that resKeep only belongs to classKeep.
         if (classKeep != classOther) {
+          auto otherInputs = classOther.getInputsMutable();
+          SmallVector<Value> filtered;
+          for (Value v : classOther.getInputs()) {
+            if (v != resKeep)
+              filtered.push_back(v);
+          }
+          if (filtered.size() != otherInputs.size())
+            otherInputs.assign(filtered);
           classUnion(rewriter, classKeep.getResult(), classOther.getResult());
         } else {
           SmallPtrSet<Value, 8> seen;
