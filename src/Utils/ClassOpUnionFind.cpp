@@ -281,9 +281,10 @@ void ClassOpUnionFind::repair(HashConsPatternRewriter &rewriter,
   SmallPtrSet<Operation *, 8> scheduledForMerge;
   for (Operation *op1 : classOp.getResult().getUsers()) {
     // Skip ClassOps that use this result as their leader pointer.
-    if (auto op1class = llvm::dyn_cast<equivalence::ClassOp>(op1))
+    if (auto op1class = llvm::dyn_cast<equivalence::ClassOp>(op1)) {
       assert(op1class.getLeader() == classOp.getResult());
-    continue;
+      continue;
+    }
     Operation *op2 = uniqueParents.lookup(op1);
 
     if (op2) {
