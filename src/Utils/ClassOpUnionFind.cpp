@@ -22,6 +22,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/LogicalResult.h"
 #include <cassert>
 #include <cstddef>
 #include <type_traits>
@@ -288,6 +289,7 @@ void ClassOpUnionFind::repair(HashConsPatternRewriter &rewriter,
     Operation *op2 = uniqueParents.lookup(op1);
 
     if (op2) {
+      assert(op2->getBlock());
       if (scheduledForMerge.insert(op1).second)
         toMerge.emplace_back(op1, op2);
     } else {
@@ -295,31 +297,46 @@ void ClassOpUnionFind::repair(HashConsPatternRewriter &rewriter,
     }
   }
   // Now perform all merges after we're done with the hash map
-  for (auto [op1, op2] : toMerge) {
-    if (op1 == op2)
+  for (auto [other, keep] : toMerge) {
+    if (keep == other)
       continue;
-    // Collect eclass pairs before replacement
-    auto [keep, other] =
-        rewriter.lookup(op1) == op1 ? std::pair{op1, op2} : std::pair{op2, op1};
-    for (auto [resKeep, resOther] :
-         llvm::zip(keep->getResults(), other->getResults())) {
+
+    bool erased = rewriter.erase(keep).succeeded();
+    assert(erased);
+    bool inserted = rewriter.insert(keep).succeeded();
+    assert(inserted);
+
+    for (auto [resOther, resKeep] :
+         llvm::zip_equal(other->getResults(), keep->getResults())) {
+      // Collect eclass pairs before replacement
       equivalence::ClassOp classKeep = getClassOpIfExists(resKeep);
       equivalence::ClassOp classOther = getClassOpIfExists(resOther);
-      rewriter.replaceAllUsesWith(resOther, resKeep);
-      if (classKeep == nullptr || classOther == nullptr) {
-        continue;
-      }
-      if (classKeep != classOther) {
-        classUnion(rewriter, classKeep.getResult(), classOther.getResult());
-      } else {
-        SmallPtrSet<Value, 8> seen;
-        SmallVector<Value> uniqueOperands;
-        for (Value operand : classKeep.getInputs()) {
-          if (seen.insert(operand).second)
-            uniqueOperands.push_back(operand);
+
+      if (classKeep && classOther) {
+        // Case 1: both values have a class — replace other's results with
+        // keep's results, then union the two classes.
+        rewriter.replaceAllUsesWith(resOther, resKeep);
+        if (classKeep != classOther) {
+          classUnion(rewriter, classKeep.getResult(), classOther.getResult());
+        } else {
+          SmallPtrSet<Value, 8> seen;
+          SmallVector<Value> uniqueOperands;
+          for (Value operand : classKeep.getInputs()) {
+            if (seen.insert(operand).second)
+              uniqueOperands.push_back(operand);
+          }
+          classKeep.getInputsMutable().assign(uniqueOperands);
         }
-        classKeep.getInputsMutable().assign(uniqueOperands);
+      } else if (classKeep) {
+        // Case 2: only keep has a class — redirect other's results to the
+        // class representative rather than the raw result.
+        rewriter.replaceAllUsesWith(resOther, classKeep.getResult());
+      } else {
+        // Case 3 (only other has a class) & Case 4 (neither has a class):
+        // replace other's results with keep's results.
+        rewriter.replaceAllUsesWith(resOther, resKeep);
       }
     }
+    rewriter.eraseOp(other);
   }
 }
