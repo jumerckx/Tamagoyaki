@@ -73,7 +73,12 @@ LogicalResult ClassOp::verify() {
     return emitOpError("must have at least one operand");
   }
 
+  SmallPtrSet<Value, 8> seen;
   for (Value operand : getInputs()) {
+    if (!seen.insert(operand).second) {
+      return emitOpError("operands must be unique");
+    }
+
     Operation *defOp = operand.getDefiningOp();
     if (defOp && isa<ClassOp>(defOp)) {
       return emitOpError("result of a class operation cannot be used as an "
