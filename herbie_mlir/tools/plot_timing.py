@@ -88,10 +88,10 @@ def main():
     # Set up the plot with non-LaTeX styling and fonttype 42
     plt.rcParams["pdf.fonttype"] = 42
     plt.rcParams["ps.fonttype"] = 42
-    plt.rcParams["font.size"] = 7
+    plt.rcParams["font.size"] = 8
     plt.rcParams["axes.linewidth"] = 0.8
 
-    fig, ax = plt.subplots(figsize=(5.5, 2.0))
+    fig, ax = plt.subplots(figsize=(7.0, 1.8))
 
     # Set up bar positions
     x = np.arange(len(names))
@@ -136,8 +136,8 @@ def main():
     ]
 
     # Add speedup labels on top of bars
-    label_fontsize = 3
-    label_offset_factor = 1.15
+    label_fontsize = 6
+    label_offset_factor = 1.05
 
     for i, (bar_herbie, bar_eqsat) in enumerate(zip(bars_herbie_list, bars_eqsat_list)):
         height_herbie = bar_herbie.get_height()
@@ -185,10 +185,11 @@ def main():
     )
 
     ax.set_xticks(x)
-    ax.set_xticklabels(names, rotation=35, ha="right", fontsize=6)
+    ax.set_xticklabels(names, rotation=35, ha="right", fontsize=8)
 
     # Smaller tick labels
-    ax.tick_params(axis="y", labelsize=6)
+    ax.tick_params(axis="y", labelsize=8)
+    ax.tick_params(axis="x", pad=-1)
 
     # Legend positioning
     ax.legend(
@@ -196,7 +197,7 @@ def main():
         loc="upper right",
         bbox_to_anchor=(1.0, 1.2),
         frameon=False,
-        fontsize=6,
+        fontsize=8,
         ncol=2,
     )
 
@@ -206,9 +207,7 @@ def main():
 
     # Add some padding
     plt.tight_layout()
-    plt.subplots_adjust(
-        bottom=0.45, top=0.88
-    )  # Add space at bottom and top for legend
+    plt.subplots_adjust(bottom=0.45, top=0.88)  # Add space at bottom and top for legend
 
     # Save as high-resolution PDF
     plt.savefig(args.output, dpi=300, bbox_inches="tight", pad_inches=0)
