@@ -358,6 +358,9 @@ void ClassOpUnionFind::repair(HashConsPatternRewriter &rewriter,
         rewriter.replaceAllUsesWith(resOther, resKeep);
       }
     }
-    rewriter.eraseOp(other);
+    // Don't just erase the op, instead, replace. Listeners such as the
+    // OriginalOpTracker used in herbie-mlir should be able to tell what
+    // `other` is replaced with:
+    rewriter.replaceOp(other, keep);
   }
 }
