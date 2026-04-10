@@ -129,14 +129,14 @@ def extract_target_accuracy(target: Any) -> str:
     return str(accuracy)
 
 
-def extract_herbie_timings(timeline_path: Path) -> tuple[str, str]:
+def extract_herbie_timings(timeline_path: Path) -> tuple[str, str, str]:
     """Extract Herbie timing data from a timeline.json file.
 
     Args:
         timeline_path: Path to the timeline.json file.
 
     Returns:
-        A tuple of (herbie_wo_sampling, herbie_sampling) as strings.
+        A tuple of (herbie_wo_sampling, herbie_sampling, herbie_gc_time) as strings.
 
     Raises:
         FileNotFoundError: If the timeline.json file does not exist.
@@ -156,6 +156,7 @@ def extract_herbie_timings(timeline_path: Path) -> tuple[str, str]:
     timeline: list[Any] = cast(list[Any], timeline_data)
     herbie_wo_sampling: float = 0.0
     herbie_sampling: float = 0.0
+    herbie_gc_time: float = 0.0
 
     for entry in timeline:
         if not isinstance(entry, dict):
@@ -177,10 +178,12 @@ def extract_herbie_timings(timeline_path: Path) -> tuple[str, str]:
 
         if entry_type == "sample":
             herbie_sampling += time_value
+        elif entry_type == "gc":
+            herbie_gc_time += time_value
         else:
             herbie_wo_sampling += time_value
 
-    return str(herbie_wo_sampling), str(herbie_sampling)
+    return str(herbie_wo_sampling), str(herbie_sampling), str(herbie_gc_time)
 
 
 def extract_saturation_time(timing_path: Path) -> tuple[str, str]:
@@ -261,6 +264,7 @@ def extract_accuracies(
             "optimize_process_functions_time",
             "herbie_wo_sampling",
             "herbie_sampling",
+            "herbie_gc_time",
             "saturation_time_joint",
             "match_time_joint",
             "saturation_time_individual",
@@ -295,7 +299,7 @@ def extract_accuracies(
         try:
             herbie_eval_dir: Path = Path(json_file).parent
             timeline_path: Path = herbie_eval_dir / link / "timeline.json"
-            herbie_wo_sampling, herbie_sampling = extract_herbie_timings(timeline_path)
+            herbie_wo_sampling, herbie_sampling, herbie_gc_time = extract_herbie_timings(timeline_path)
         except (ValueError, FileNotFoundError) as e:
             raise ValueError(f"Test {i} ({name}): {e}")
 
@@ -322,6 +326,7 @@ def extract_accuracies(
                 "optimize_process_functions_time": process_functions_time,
                 "herbie_wo_sampling": herbie_wo_sampling,
                 "herbie_sampling": herbie_sampling,
+                "herbie_gc_time": herbie_gc_time,
                 "saturation_time_joint": saturation_time_joint,
                 "match_time_joint": match_time_joint,
                 "saturation_time_individual": saturation_time_individual,
