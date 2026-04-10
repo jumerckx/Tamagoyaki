@@ -123,7 +123,7 @@ def main():
     footprint_compact = 2 * 0.38
     if args.compact:
         fig_width = 3.5  # single-column LaTeX width
-        fig_height = 2.4
+        fig_height = 2.1
     else:
         fig_width = full_width
         fig_height = 1.7
@@ -206,7 +206,7 @@ def main():
                 # Low original accuracy: place baseline label on top of both bars, horizontally
                 top_of_bars = max(height2, height3)
                 baseline_lift = 1.0
-                extra_lift = 12.0
+                extra_lift = 17.0
 
                 # Baseline label: horizontal, centered over both bars
                 ax.text(
@@ -454,7 +454,7 @@ def main():
     if args.compact:
         ax.text(
             -1.7,
-            ylim[1] + y_range * 0.17,
+            ylim[1] + 30,
             "Accuracy (%)",
             fontsize=8,
             ha="left",
