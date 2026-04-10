@@ -51,7 +51,7 @@ def main():
         ) * 1000
 
     # Calculate speedup ratio
-    df["speedup"] = df["optimize_ms"] / df["herbie_total_ms"]
+    df["speedup"] = df["herbie_total_ms"] / df["optimize_ms"]
 
     geomean_slowdown = np.exp(np.log(df["speedup"]).mean())
 
@@ -144,27 +144,43 @@ def main():
         height_eqsat = bar_eqsat.get_height()
         speedup = speedups.iloc[i]
 
-        # Position label above the taller bar
-        max_height = max(height_herbie, height_eqsat)
-        label_y = max_height * label_offset_factor
-
-        # Center the label between the two bars
-        label_x = x[i] + 0.3
-
         # Format speedup as "XXXx" with appropriate precision
         if speedup >= 10:
             speedup_str = f"{speedup:.0f}×"
         else:
             speedup_str = f"{speedup:.1f}×"
 
+        # Place the label flat if the tamagoyaki bar is sufficiently taller
+        # (in log scale) than both bars of the next benchmark.
+        if i + 1 < len(bars_herbie_list):
+            next_herbie_height = bars_herbie_list[i + 1].get_height()
+            next_eqsat_height = bars_eqsat_list[i + 1].get_height()
+            log_gap = min(
+                np.log10(height_eqsat) - np.log10(next_herbie_height),
+                np.log10(height_eqsat) - np.log10(next_eqsat_height),
+            )
+        else:
+            log_gap = np.inf
+        if log_gap > 0.5:
+            label_x = x[i]
+            label_y = height_eqsat * label_offset_factor
+            rotation = 0
+            label_ha = "left"
+        else:
+            label_x = x[i] + 0.3
+            max_height = max(height_herbie, height_eqsat)
+            label_y = max_height * label_offset_factor
+            rotation = 60
+            label_ha = "center"
+
         ax.text(
             label_x,
             label_y,
             speedup_str,
-            ha="center",
+            ha=label_ha,
             va="bottom",
             fontsize=label_fontsize,
-            rotation=60,
+            rotation=rotation,
             color=color_eqsat,
             alpha=1.0,
         )
