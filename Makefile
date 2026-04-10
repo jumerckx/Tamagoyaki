@@ -11,19 +11,22 @@
 # The build directory can be overridden:
 #   make eval-build BUILD_DIR=build-eval-custom
 #
-# To pass extra CMake configure flags (e.g. CMAKE_PREFIX_PATH for MLIR):
-#   make eval-build CMAKE_EXTRA=-DCMAKE_PREFIX_PATH=/path/to/llvm/build
+# To pass extra CMake configure flags:
+#   make eval-build CMAKE_EXTRA=-DFOO=bar
+#
+# MLIR/LLVM is obtained automatically from the mlir-wheel Python package.
 
 BUILD_DIR   ?= build-eval
 CMAKE_EXTRA ?=
 
+# Derive CMAKE_PREFIX_PATH and tool paths from the uv-managed venv.
+MLIR_PREFIX  := $(shell uv run python -m mlir_wheel --root-dir)
+EXTERNAL_LIT := $(shell uv run which lit)
+
 .PHONY: eval-build eval eval-clean
 
 eval-build:
-ifndef CMAKE_PREFIX_PATH
-	$(error CMAKE_PREFIX_PATH is required (path to your LLVM/MLIR build). Set it via: make eval-build CMAKE_PREFIX_PATH=/path/to/llvm/build)
-endif
-	cmake --preset eval -DCMAKE_PREFIX_PATH=$(CMAKE_PREFIX_PATH) $(CMAKE_EXTRA)
+	cmake --preset eval -DCMAKE_PREFIX_PATH=$(MLIR_PREFIX) -DLLVM_EXTERNAL_LIT=$(EXTERNAL_LIT) $(CMAKE_EXTRA)
 	cmake --build --preset eval
 
 eval: eval-build
