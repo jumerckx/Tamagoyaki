@@ -435,17 +435,13 @@ def main():
     y_range = ylim[1] - ylim[0]
 
     if args.compact:
-        # Add headroom so the y-axis label and legend sit above bar labels
-        ax.set_ylim(ylim[0], ylim[1] + y_range * 0.35)
-        ylim = ax.get_ylim()
-        y_range = ylim[1] - ylim[0]
         ax.text(
-            -0.5,
-            ylim[1],
+            -1.7,
+            ylim[1] + y_range * 0.17,
             "Accuracy (%)",
             fontsize=8,
             ha="left",
-            va="top",
+            va="bottom",
         )
         ax.set_xticks(x)
         ax.set_xticklabels(
@@ -460,8 +456,8 @@ def main():
 
         ax.legend(
             handles=legend_elements,
-            loc="upper right",
-            bbox_to_anchor=(1.0, 1.0),
+            loc="lower right",
+            bbox_to_anchor=(1.0, 1.01),
             frameon=False,
             fontsize=8,
             ncol=2,
