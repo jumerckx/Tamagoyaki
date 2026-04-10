@@ -186,11 +186,18 @@ def main():
             height3 = target.iloc[i]
             low_baseline = baseline_y < 20
 
+            # Check if the next benchmark's herbie bar is much taller than
+            # this tamagoyaki bar — if so, rotate both labels to 90° to
+            # avoid overlap with the neighbouring bar.
+            next_herbie_tall = (
+                i + 1 < len(names) and optimized.iloc[i + 1] - height3 >= 5
+            )
+
             if low_baseline:
                 # Low original accuracy: place baseline label on top of both bars, horizontally
                 top_of_bars = max(height2, height3)
                 baseline_lift = 1.0
-                extra_lift = 6.0
+                extra_lift = 12.0
 
                 # Baseline label: horizontal, centered over both bars
                 ax.text(
@@ -205,9 +212,9 @@ def main():
                 )
 
                 # Herbie bar label (shifted up)
-                rotation2 = 90 if height3 > height2 * 1.01 else 60
+                rotation2 = 90 if (height3 > height2 * 1.01 or next_herbie_tall) else 60
                 x_pos2 = bars2_list[i].get_x() + bars2_list[i].get_width() / 2.0
-                y_pos2 = height2 + label_offset + extra_lift
+                y_pos2 = top_of_bars + label_offset + extra_lift
                 if rotation2 == 60:
                     x_pos2 += x_offset_60deg
                 else:
@@ -224,25 +231,26 @@ def main():
                 )
 
                 # Target bar label (shifted up)
-                x_pos3 = (
-                    bars3_list[i].get_x()
-                    + bars3_list[i].get_width() / 2.0
-                    + x_offset_60deg
-                    + x_offset_outer
-                )
+                rotation3 = 90 if next_herbie_tall else 60
+                x_pos3 = bars3_list[i].get_x() + bars3_list[i].get_width() / 2.0
+                y_pos3 = top_of_bars + label_offset + extra_lift
+                if rotation3 == 60:
+                    x_pos3 += x_offset_60deg + x_offset_outer
+                else:
+                    y_pos3 += 0.5
                 ax.text(
                     x_pos3,
-                    height3 + label_offset + extra_lift,
+                    y_pos3,
                     f"{height3:.1f}",
                     ha="center",
                     va="bottom",
                     fontsize=label_fontsize,
-                    rotation=60,
+                    rotation=rotation3,
                     color=color_target,
                 )
             else:
                 # Herbie bar label (blue, same style as normal mode)
-                rotation2 = 90 if height3 > height2 * 1.01 else 60
+                rotation2 = 90 if (height3 > height2 * 1.01 or next_herbie_tall) else 60
                 x_pos2 = bars2_list[i].get_x() + bars2_list[i].get_width() / 2.0
                 y_pos2 = height2 + label_offset
                 if rotation2 == 60:
@@ -276,14 +284,14 @@ def main():
                     color="black",
                 )
 
-                # Target bar label (60 degrees, on the right)
-                x_pos3 = (
-                    bars3_list[i].get_x()
-                    + bars3_list[i].get_width() / 2.0
-                    + x_offset_60deg
-                    + x_offset_outer
-                )
+                # Target bar label
+                rotation3 = 90 if next_herbie_tall else 60
+                x_pos3 = bars3_list[i].get_x() + bars3_list[i].get_width() / 2.0
                 y_pos3 = height3 + label_offset
+                if rotation3 == 60:
+                    x_pos3 += x_offset_60deg + x_offset_outer
+                else:
+                    y_pos3 += 0.5
                 # Ensure label doesn't fall below the dotted baseline
                 if y_pos3 < baseline_y + label_offset:
                     y_pos3 = baseline_y + label_offset
@@ -294,7 +302,7 @@ def main():
                     ha="center",
                     va="bottom",
                     fontsize=label_fontsize,
-                    rotation=60,
+                    rotation=rotation3,
                     color=color_target,
                 )
 
