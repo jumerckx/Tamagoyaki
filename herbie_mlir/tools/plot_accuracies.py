@@ -177,21 +177,30 @@ def main():
                 linewidth=1.35,
             )
 
-            label_fontsize = 6
-            label_offset = 0.5
-            x_offset_60deg = 0.12
-            x_offset_outer = 0.06
+        label_fontsize = 6
+        label_offset = 0.5
+        x_offset_60deg = 0.12
+        x_offset_outer = 0.06
+        rotated_label_extra = 20
 
+        # Pre-compute which benchmarks need 90° rotation by walking
+        # backwards so that a rotated label at i+1 (which adds visual
+        # height) can cascade to benchmark i.
+        rotate_needed = [False] * len(names)
+        for i in range(len(names) - 2, -1, -1):
+            next_effective = optimized.iloc[i + 1]
+            if rotate_needed[i + 1]:
+                next_effective += rotated_label_extra
+            if next_effective - target.iloc[i] >= 5:
+                rotate_needed[i] = True
+
+        for i in range(len(names)):
+            baseline_y = original.iloc[i]
             height2 = optimized.iloc[i]
             height3 = target.iloc[i]
             low_baseline = baseline_y < 20
 
-            # Check if the next benchmark's herbie bar is much taller than
-            # this tamagoyaki bar — if so, rotate both labels to 90° to
-            # avoid overlap with the neighbouring bar.
-            next_herbie_tall = (
-                i + 1 < len(names) and optimized.iloc[i + 1] - height3 >= 5
-            )
+            next_herbie_tall = rotate_needed[i]
 
             if low_baseline:
                 # Low original accuracy: place baseline label on top of both bars, horizontally
