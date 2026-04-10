@@ -112,34 +112,31 @@ def main():
     # Set up the plot with non-LaTeX styling and fonttype 42
     plt.rcParams["pdf.fonttype"] = 42
     plt.rcParams["ps.fonttype"] = 42
-    plt.rcParams["font.size"] = 7
+    plt.rcParams["font.size"] = 8 if args.compact else 7
     plt.rcParams["axes.linewidth"] = 0.8
 
     # Scale figure width so bars have consistent physical size.
     # Normal mode: 3 bars × 0.25 = 0.75 data-units per benchmark
-    # Compact mode: 2 bars × 0.30 = 0.60 data-units per benchmark
+    # Compact mode: fits single-column LaTeX template (3.5in wide)
     full_width = 5.5  # width when all benchmarks are present (normal mode)
     footprint_normal = 3 * 0.25
     footprint_compact = 2 * 0.38
     if args.compact:
-        fig_width = (
-            full_width
-            * (len(names) / max(total_before_compact, 1))
-            * (footprint_compact / footprint_normal)
-        )
+        fig_width = 3.5  # single-column LaTeX width
+        fig_height = 2.4
     else:
         fig_width = full_width
+        fig_height = 1.7
     fig_width = max(fig_width, 1.5)  # enforce a minimum so the plot isn't tiny
-    fig, ax = plt.subplots(figsize=(fig_width, 1.7))
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
 
     # Define bar colors
     color_original = "#cacaca"
     color_herbie = "#1f78b4"
     color_target = "#33a02c"
 
-    # Define alpha values
-    alpha_normal = 1.0
-    alpha_faded = 0.3
+    # Herbie vs Tamagoyaki difference > 1%
+    herbie_tama_diff = target < 0.99 * optimized
 
     if args.compact:
         # Compact mode: 2 bars + dotted baseline line
@@ -150,30 +147,25 @@ def main():
         bars3_list = []
 
         for i in range(len(names)):
-            faded = small_diff_mask.iloc[i] or close_to_herbie.iloc[i]
-            alpha_opt = 0.8 if not faded else alpha_faded * 0.8
-            alpha_tgt = 0.8 if not faded else alpha_faded * 0.8
-
             bar2 = ax.bar(
                 x[i] - width / 2,
                 optimized.iloc[i],
                 width,
                 color=color_herbie,
-                alpha=alpha_opt,
+                alpha=0.8,
             )
             bar3 = ax.bar(
                 x[i] + width / 2,
                 target.iloc[i],
                 width,
                 color=color_target,
-                alpha=alpha_tgt,
+                alpha=0.8,
             )
 
             bars2_list.append(bar2[0])
             bars3_list.append(bar3[0])
 
             # Draw dotted baseline line spanning both bars
-            label_alpha = 1.0 if not faded else 0.5
             baseline_y = original.iloc[i]
             line_x_start = x[i] - width - 0.05
             line_x_end = x[i] + width + 0.05
@@ -182,14 +174,13 @@ def main():
                 [baseline_y, baseline_y],
                 color="black",
                 linestyle=":",
-                linewidth=0.5,
-                alpha=label_alpha,
+                linewidth=1.35,
             )
 
-            label_fontsize = 3
-            label_offset = 0.3
-            x_offset_60deg = 0.08
-            x_offset_outer = 0.04
+            label_fontsize = 6
+            label_offset = 0.5
+            x_offset_60deg = 0.12
+            x_offset_outer = 0.06
 
             height2 = optimized.iloc[i]
             height3 = target.iloc[i]
@@ -211,7 +202,6 @@ def main():
                     fontsize=label_fontsize,
                     rotation=0,
                     color="black",
-                    alpha=label_alpha,
                 )
 
                 # Herbie bar label (shifted up)
@@ -231,7 +221,6 @@ def main():
                     fontsize=label_fontsize,
                     rotation=rotation2,
                     color=color_herbie,
-                    alpha=label_alpha,
                 )
 
                 # Target bar label (shifted up)
@@ -250,7 +239,6 @@ def main():
                     fontsize=label_fontsize,
                     rotation=60,
                     color=color_target,
-                    alpha=label_alpha,
                 )
             else:
                 # Herbie bar label (blue, same style as normal mode)
@@ -273,11 +261,10 @@ def main():
                     fontsize=label_fontsize,
                     rotation=rotation2,
                     color=color_herbie,
-                    alpha=label_alpha,
                 )
 
-                # Baseline accuracy label: black text, sideways, just below dotted line on the Herbie bar
-                x_pos_bl = bars2_list[i].get_x() + bars2_list[i].get_width() / 2.0
+                # Baseline accuracy label: black text, sideways, centered between both bars
+                x_pos_bl = x[i]
                 ax.text(
                     x_pos_bl,
                     baseline_y - 3,
@@ -287,7 +274,6 @@ def main():
                     fontsize=label_fontsize,
                     rotation=90,
                     color="black",
-                    alpha=label_alpha,
                 )
 
                 # Target bar label (60 degrees, on the right)
@@ -310,7 +296,6 @@ def main():
                     fontsize=label_fontsize,
                     rotation=60,
                     color=color_target,
-                    alpha=label_alpha,
                 )
 
         ax.set_xlim(-0.5, len(names) - 0.5)
@@ -320,7 +305,7 @@ def main():
         spacer = Patch(facecolor="none", edgecolor="none", label="")
         legend_elements = [
             plt.Line2D(
-                [], [], color="black", linestyle=":", linewidth=0.5, label="Original"
+                [], [], color="black", linestyle=":", linewidth=1.35, label="Original"
             ),
             spacer,
             Patch(facecolor=color_herbie, alpha=0.8, label="Herbie"),
@@ -336,10 +321,12 @@ def main():
         bars2_list = []
         bars3_list = []
 
+        alpha_faded = 0.3
         for i in range(len(names)):
-            alpha_orig = alpha_normal if not small_diff_mask.iloc[i] else alpha_faded
-            alpha_opt = 0.8 if not small_diff_mask.iloc[i] else alpha_faded * 0.8
-            alpha_tgt = 0.8 if not small_diff_mask.iloc[i] else alpha_faded * 0.8
+            faded = small_diff_mask.iloc[i]
+            alpha_orig = 1.0 if not faded else alpha_faded
+            alpha_opt = 0.8 if not faded else alpha_faded * 0.8
+            alpha_tgt = 0.8 if not faded else alpha_faded * 0.8
 
             bar1 = ax.bar(
                 x[i] - width,
@@ -372,7 +359,6 @@ def main():
             height2 = bar2.get_height()
             height3 = bar3.get_height()
 
-            # Use faded alpha for labels of small difference benchmarks
             label_alpha = 1.0 if not small_diff_mask.iloc[i] else 0.5
 
             # Herbie bar: rotate 90 if target is taller, else 60
@@ -447,42 +433,72 @@ def main():
     # Customize the plot
     ylim = ax.get_ylim()
     y_range = ylim[1] - ylim[0]
-    ax.text(
-        -0.5,
-        ylim[1] + y_range * 0.09,
-        "Accuracy (%)",
-        fontsize=6,
-        ha="left",
-        va="bottom",
-    )
 
-    ax.set_xticks(x)
-    ax.set_xticklabels(names, rotation=35, ha="right", fontsize=5)
+    if args.compact:
+        # Add headroom so the y-axis label and legend sit above bar labels
+        ax.set_ylim(ylim[0], ylim[1] + y_range * 0.35)
+        ylim = ax.get_ylim()
+        y_range = ylim[1] - ylim[0]
+        ax.text(
+            -0.5,
+            ylim[1],
+            "Accuracy (%)",
+            fontsize=8,
+            ha="left",
+            va="top",
+        )
+        ax.set_xticks(x)
+        ax.set_xticklabels(
+            names, rotation=35, ha="right", fontsize=8, rotation_mode="anchor"
+        )
+        ax.tick_params(axis="both", labelsize=8, pad=0)
 
-    # Smaller tick labels
-    ax.tick_params(axis="both", labelsize=5, pad=2)
+        # Bold x-labels where Herbie vs Tamagoyaki difference > 1%
+        for i, label in enumerate(ax.get_xticklabels()):
+            if herbie_tama_diff.iloc[i]:
+                label.set_fontweight("bold")
 
-    # Fade x-labels for small difference benchmarks
-    for i, label in enumerate(ax.get_xticklabels()):
-        if small_diff_mask.iloc[i]:
-            label.set_alpha(0.3)
+        ax.legend(
+            handles=legend_elements,
+            loc="upper right",
+            bbox_to_anchor=(1.0, 1.0),
+            frameon=False,
+            fontsize=8,
+            ncol=2,
+        )
+    else:
+        ax.text(
+            -0.5,
+            ylim[1] + y_range * 0.09,
+            "Accuracy (%)",
+            fontsize=6,
+            ha="left",
+            va="bottom",
+        )
+        ax.set_xticks(x)
+        ax.set_xticklabels(names, rotation=35, ha="right", fontsize=5)
+        ax.tick_params(axis="both", labelsize=5, pad=2)
 
-    # Legend positioning with smaller font
-    ax.legend(
-        handles=legend_elements,
-        loc="upper right",
-        bbox_to_anchor=(1.02, 1.23),
-        frameon=False,
-        fontsize=5,
-        ncol=2,
-    )
+        # Fade x-labels for small difference benchmarks
+        for i, label in enumerate(ax.get_xticklabels()):
+            if small_diff_mask.iloc[i]:
+                label.set_alpha(0.3)
+
+        ax.legend(
+            handles=legend_elements,
+            loc="upper right",
+            bbox_to_anchor=(1.02, 1.23),
+            frameon=False,
+            fontsize=5,
+            ncol=2,
+        )
 
     # Grid removed
     ax.set_axisbelow(True)
 
     # Add some padding
     plt.tight_layout()
-    plt.subplots_adjust(bottom=0.35)  # Make room for labels
+    plt.subplots_adjust(bottom=0.35 if not args.compact else 0.40)
 
     # Save as high-resolution PDF
     plt.savefig(args.output, dpi=300, bbox_inches="tight", pad_inches=0)
