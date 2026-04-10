@@ -17,7 +17,7 @@ if(HERBIE_MLIR_BUILD_HERBIE)
   include(ExternalProject)
   ExternalProject_Add(herbie
     GIT_REPOSITORY https://github.com/herbie-fp/herbie
-    GIT_TAG        main
+    GIT_TAG        v2.2
     GIT_SHALLOW    TRUE
     UPDATE_DISCONNECTED TRUE
     SOURCE_DIR     ${CMAKE_CURRENT_BINARY_DIR}/herbie-src
