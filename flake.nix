@@ -4,12 +4,18 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
     flake-utils.url = "github:numtide/flake-utils";
+    rust-overlay.url = "github:oxalica/rust-overlay";
+    rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils, rust-overlay }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs { inherit system; };
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = [ rust-overlay.overlays.default ];
+        };
+        rustToolchain = pkgs.rust-bin.stable.latest.minimal;
       in {
         devShells.default = pkgs.mkShell {
           name = "tamagoyaki-eval";
@@ -20,16 +26,18 @@
             ninja
             gnumake
             git
+            m4
 
             # C/C++ toolchain (uses system clang on macOS via stdenv)
             pkg-config
 
             # Rust (for Rival)
-            rustc
-            cargo
+            rustToolchain
 
             # Racket (for Herbie)
-            racket
+            racket-minimal
+            flex
+            bison
 
             # Python / evaluation pipeline
             python313
