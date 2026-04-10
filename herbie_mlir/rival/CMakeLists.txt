@@ -98,7 +98,7 @@ include(FetchContent)
 # Configuration options
 set(RIVAL_REPO_URL "https://github.com/herbie-fp/rival-rs.git"
     CACHE STRING "URL of the Rival repository")
-set(RIVAL_GIT_TAG "main"
+set(RIVAL_GIT_TAG "v1.0.2"
     CACHE STRING "Git tag/branch of Rival to use")
 set(RIVAL_LOCAL_PATH ""
     CACHE PATH "Path to local Rival repository (if set, uses local dev mode; otherwise fetches from GitHub)")
