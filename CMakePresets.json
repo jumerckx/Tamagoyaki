@@ -1,0 +1,24 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "eval",
+      "description": "Reproducible evaluation build",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build-eval",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BUILD_HERBIE_MLIR": "ON",
+        "BUILD_ROVER_MLIR": "OFF",
+        "HERBIE_MLIR_BUILD_HERBIE": "ON",
+        "RIVAL_LOCAL_PATH": ""
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "eval",
+      "configurePreset": "eval"
+    }
+  ]
+}
