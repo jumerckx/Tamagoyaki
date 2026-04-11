@@ -20,7 +20,7 @@ BUILD_DIR   ?= build-eval
 CMAKE_EXTRA ?=
 
 # Pinned versions of external dependencies.
-HERBIE_GIT_TAG ?= c01a0a12a04d44961b828a47a88ed4964810a3d4
+HERBIE_GIT_TAG ?= 5500c9684c044bdaca03aee415605f9ac2f05687
 RIVAL_GIT_TAG  ?= 8bc5eca5079497a41d37e20a66c833080c92c0ed
 
 # Derive CMAKE_PREFIX_PATH and tool paths from the uv-managed venv.
