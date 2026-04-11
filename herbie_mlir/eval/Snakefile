@@ -1,29 +1,21 @@
-import json
 import os
 import glob
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Resolve the build directory.
-# Priority: snakemake --config build_dir=... > $TAMAGOYAKI_BUILD_DIR > default
+# Usage: snakemake --config build_dir=...
 # ---------------------------------------------------------------------------
 EVAL_DIR   = Path(workflow.basedir).resolve()
 REPO_ROOT  = EVAL_DIR.parents[1]
 
-_build_cfg = config.get("build_dir") or os.environ.get("TAMAGOYAKI_BUILD_DIR") or "build-eval"
+_build_cfg = config.get("build_dir", "build-eval")
 BUILD_DIR  = Path(_build_cfg)
 if not BUILD_DIR.is_absolute():
     BUILD_DIR = (REPO_ROOT / BUILD_DIR).resolve()
 
 herbie_mlir_opt_path = str(BUILD_DIR / "bin" / "herbie-mlir-opt")
-
-# Read Herbie configuration written by CMake.
-_herbie_config_path = BUILD_DIR / "herbie_mlir" / "herbie-config.json"
-if _herbie_config_path.exists():
-    _herbie_cfg = json.loads(_herbie_config_path.read_text())
-    herbie_racket_prefix = _herbie_cfg["racket_prefix"]
-else:
-    herbie_racket_prefix = str(BUILD_DIR / "herbie_mlir" / "racket-pkgs")
+herbie_racket_prefix = str(BUILD_DIR / "herbie_mlir" / "racket-pkgs")
 
 # Get all benchmark names from fpcore files (sorted for reproducibility)
 benchmark_names = sorted([

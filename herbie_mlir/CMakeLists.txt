@@ -76,10 +76,6 @@ if(HERBIE_MLIR_BUILD_HERBIE)
     LOG TRUE
   )
 
-  # Write a config file so the Snakefile knows where PLTADDONDIR is.
-  file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/herbie-config.json"
-    "{\n  \"racket_prefix\": \"${HERBIE_RACKET_PREFIX}\"\n}\n")
-
   message(STATUS "Herbie will be installed to local Racket prefix: ${HERBIE_RACKET_PREFIX}")
   message(STATUS "To use Herbie, set PLTADDONDIR=${HERBIE_RACKET_PREFIX} or run:")
   message(STATUS "  PLTADDONDIR=${HERBIE_RACKET_PREFIX} ${RACKET} -l herbie -- --version")
