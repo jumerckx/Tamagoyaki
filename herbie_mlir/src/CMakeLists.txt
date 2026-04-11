@@ -43,5 +43,10 @@ target_include_directories(herbieMLIR PUBLIC ${CMAKE_BINARY_DIR}/herbie_mlir/inc
 # Ensure GMP/MPFR headers are available before compiling.
 # ExternalProject dependencies don't propagate through INTERFACE/IMPORTED
 # targets to object libraries created by add_mlir_library, so we need an
-# explicit dependency.
-add_dependencies(obj.herbieMLIR gmp_external mpfr_external)
+# explicit dependency when building from source.
+if(TARGET gmp_external)
+  add_dependencies(obj.herbieMLIR gmp_external)
+endif()
+if(TARGET mpfr_external)
+  add_dependencies(obj.herbieMLIR mpfr_external)
+endif()
