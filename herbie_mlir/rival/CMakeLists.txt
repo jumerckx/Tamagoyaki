@@ -58,6 +58,7 @@ ExternalProject_Add(mpfr_external
         --with-pic
         --disable-maintainer-mode
         --with-gmp=<INSTALL_DIR>
+        MAKEINFO=true
     BUILD_COMMAND make -j${CMAKE_BUILD_PARALLEL_LEVEL}
     INSTALL_COMMAND make install
     BUILD_BYPRODUCTS ${DEPS_INSTALL_DIR}/lib/libmpfr.a
@@ -98,8 +99,8 @@ include(FetchContent)
 # Configuration options
 set(RIVAL_REPO_URL "https://github.com/herbie-fp/rival-rs.git"
     CACHE STRING "URL of the Rival repository")
-set(RIVAL_GIT_TAG "v1.0.2"
-    CACHE STRING "Git tag/branch of Rival to use")
+set(RIVAL_GIT_TAG "main"
+    CACHE STRING "Git tag/branch/commit of Rival to use")
 set(RIVAL_LOCAL_PATH ""
     CACHE PATH "Path to local Rival repository (if set, uses local dev mode; otherwise fetches from GitHub)")
 
@@ -116,7 +117,7 @@ else()
     rival
     GIT_REPOSITORY "${RIVAL_REPO_URL}"
     GIT_TAG "${RIVAL_GIT_TAG}"
-    GIT_SHALLOW ON
+    GIT_SHALLOW OFF
     GIT_PROGRESS ON
   )
 
