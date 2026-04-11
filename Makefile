@@ -19,6 +19,10 @@
 BUILD_DIR   ?= build-eval
 CMAKE_EXTRA ?=
 
+# Pinned versions of external dependencies.
+HERBIE_GIT_TAG ?= c01a0a12a04d44961b828a47a88ed4964810a3d4
+RIVAL_GIT_TAG  ?= 8bc5eca5079497a41d37e20a66c833080c92c0ed
+
 # Derive CMAKE_PREFIX_PATH and tool paths from the uv-managed venv.
 MLIR_PREFIX  := $(shell uv run python -m mlir_wheel --root-dir)
 EXTERNAL_LIT := $(shell uv run which lit)
@@ -26,8 +30,18 @@ EXTERNAL_LIT := $(shell uv run which lit)
 .PHONY: eval-build eval eval-clean
 
 eval-build:
-	cmake --preset eval -DCMAKE_PREFIX_PATH=$(MLIR_PREFIX) -DLLVM_EXTERNAL_LIT=$(EXTERNAL_LIT) $(CMAKE_EXTRA)
-	cmake --build --preset eval
+	cmake -G Ninja -B $(BUILD_DIR) \
+		-DCMAKE_BUILD_TYPE=Release \
+		-DBUILD_HERBIE_MLIR=ON \
+		-DBUILD_ROVER_MLIR=OFF \
+		-DHERBIE_MLIR_BUILD_HERBIE=ON \
+		-DRIVAL_LOCAL_PATH= \
+		-DHERBIE_GIT_TAG=$(HERBIE_GIT_TAG) \
+		-DRIVAL_GIT_TAG=$(RIVAL_GIT_TAG) \
+		-DCMAKE_PREFIX_PATH=$(MLIR_PREFIX) \
+		-DLLVM_EXTERNAL_LIT=$(EXTERNAL_LIT) \
+		$(CMAKE_EXTRA)
+	cmake --build $(BUILD_DIR)
 
 eval: eval-build
 	cd herbie_mlir/eval && \
