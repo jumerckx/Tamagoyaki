@@ -1,6 +1,7 @@
 # Evaluation artifacts
 .snakemake
-eval/out/
+eval/out/*
+!eval/out/plots/
 
 # Build artifacts
 build/
