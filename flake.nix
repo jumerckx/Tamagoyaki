@@ -39,12 +39,33 @@
             flex
             bison
 
+            # Native libs needed by Racket packages pulled in by Herbie
+            gmp
+            mpfr
+            fontconfig
+            cairo
+            pango
+            libjpeg
+            libpng
+            zlib
+
             # Python / evaluation pipeline
             python313
             uv
           ];
 
+          # Racket's FFI needs to dlopen native libs (libmpfr, libcairo, …).
+          # In a Nix shell these live in the Nix store; expose them via lib path.
+          RACKET_FFI_LIB_PATH = pkgs.lib.makeLibraryPath (with pkgs; [
+            gmp mpfr fontconfig cairo pango libjpeg libpng zlib
+          ]);
+
           shellHook = ''
+            if [[ "$(uname)" == "Darwin" ]]; then
+              export DYLD_FALLBACK_LIBRARY_PATH="$RACKET_FFI_LIB_PATH''${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
+            else
+              export LD_LIBRARY_PATH="$RACKET_FFI_LIB_PATH''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+            fi
             echo "tamagoyaki eval shell ready"
             echo "  cmake  : $(cmake --version | head -1)"
             echo "  racket : $(racket --version)"
