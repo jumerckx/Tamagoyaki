@@ -42,6 +42,7 @@ if(HERBIE_MLIR_BUILD_HERBIE)
     CONFIGURE_COMMAND ""
     BUILD_COMMAND     ${CMAKE_COMMAND} -E env
                         "PLTADDONDIR=${HERBIE_RACKET_PREFIX}"
+                        "DYLD_FALLBACK_LIBRARY_PATH=$ENV{DYLD_FALLBACK_LIBRARY_PATH}"
                         "PATH=${_RACKET_BIN_DIR}:$ENV{PATH}"
                         make -C <SOURCE_DIR> install
     INSTALL_COMMAND   ""

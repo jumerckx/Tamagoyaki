@@ -57,7 +57,15 @@
           # Racket's FFI needs to dlopen native libs (libmpfr, libcairo, …).
           # In a Nix shell these live in the Nix store; expose them via lib path.
           RACKET_FFI_LIB_PATH = pkgs.lib.makeLibraryPath (with pkgs; [
-            gmp mpfr fontconfig cairo pango libjpeg libpng zlib
+            gmp mpfr
+            fontconfig cairo pango
+            glib
+            harfbuzz
+            freetype
+            fribidi
+            pixman
+            expat
+            libjpeg libpng zlib
           ]);
 
           shellHook = ''
