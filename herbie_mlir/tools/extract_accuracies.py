@@ -40,17 +40,19 @@ def extract_filename_from_target_prog(target_prog: str) -> str:
     return match.group(1)
 
 
-def extract_optimize_timing(timing_path: Path) -> tuple[str, str]:
-    """Extract LoadPDL and processFunctions durations from a tamagoyaki timing JSON file.
+def extract_optimize_timing(timing_path: Path) -> tuple[str, str, str]:
+    """Extract LoadPDL, processFunctions, and EqualitySaturation durations from a tamagoyaki timing JSON file.
 
     Looks for the top-level "HerbieOptimizePass" entry and extracts its
-    "LoadPDL" and "processFunctions" children's wall-clock durations.
+    "LoadPDL" and "processFunctions" children's wall-clock durations,
+    as well as the "EqualitySaturation" duration nested inside "processFunctions".
 
     Args:
         timing_path: Path to the timing JSON file.
 
     Returns:
-        A tuple of (load_pdl_duration, process_functions_duration) as strings (in seconds).
+        A tuple of (load_pdl_duration, process_functions_duration,
+        equality_saturation_duration) as strings (in seconds).
 
     Raises:
         FileNotFoundError: If the timing file does not exist.
@@ -71,6 +73,7 @@ def extract_optimize_timing(timing_path: Path) -> tuple[str, str]:
         if isinstance(entry, dict) and entry.get("name") == "HerbieOptimizePass":
             load_pdl: str | None = None
             process_functions: str | None = None
+            equality_saturation: str | None = None
 
             for sub_pass in entry.get("passes", []):
                 if not isinstance(sub_pass, dict):
@@ -82,13 +85,21 @@ def extract_optimize_timing(timing_path: Path) -> tuple[str, str]:
                     load_pdl = str(wall["duration"])
                 elif sub_pass.get("name") == "processFunctions":
                     process_functions = str(wall["duration"])
+                    # Extract EqualitySaturation from processFunctions children
+                    for child in sub_pass.get("passes", []):
+                        if isinstance(child, dict) and child.get("name") == "EqualitySaturation":
+                            child_wall: Any = child.get("wall")
+                            if isinstance(child_wall, dict) and "duration" in child_wall:
+                                equality_saturation = str(child_wall["duration"])
 
             if load_pdl is None:
                 raise ValueError(f"No 'LoadPDL' entry found in HerbieOptimizePass in {timing_path}")
             if process_functions is None:
                 raise ValueError(f"No 'processFunctions' entry found in HerbieOptimizePass in {timing_path}")
+            if equality_saturation is None:
+                raise ValueError(f"No 'EqualitySaturation' entry found in processFunctions in {timing_path}")
 
-            return load_pdl, process_functions
+            return load_pdl, process_functions, equality_saturation
 
     raise ValueError(f"No 'HerbieOptimizePass' entry found in {timing_path}")
 
@@ -129,14 +140,15 @@ def extract_target_accuracy(target: Any) -> str:
     return str(accuracy)
 
 
-def extract_herbie_timings(timeline_path: Path) -> tuple[str, str, str]:
+def extract_herbie_timings(timeline_path: Path) -> tuple[str, str, str, str]:
     """Extract Herbie timing data from a timeline.json file.
 
     Args:
         timeline_path: Path to the timeline.json file.
 
     Returns:
-        A tuple of (herbie_wo_sampling, herbie_sampling, herbie_gc_time) as strings.
+        A tuple of (herbie_wo_sampling, herbie_sampling, herbie_gc_time,
+        herbie_rewrite_time) as strings.
 
     Raises:
         FileNotFoundError: If the timeline.json file does not exist.
@@ -157,6 +169,7 @@ def extract_herbie_timings(timeline_path: Path) -> tuple[str, str, str]:
     herbie_wo_sampling: float = 0.0
     herbie_sampling: float = 0.0
     herbie_gc_time: float = 0.0
+    herbie_rewrite_time: float = 0.0
 
     for entry in timeline:
         if not isinstance(entry, dict):
@@ -183,7 +196,10 @@ def extract_herbie_timings(timeline_path: Path) -> tuple[str, str, str]:
         else:
             herbie_wo_sampling += time_value
 
-    return str(herbie_wo_sampling), str(herbie_sampling), str(herbie_gc_time)
+        if entry_type == "rewrite":
+            herbie_rewrite_time += time_value
+
+    return str(herbie_wo_sampling), str(herbie_sampling), str(herbie_gc_time), str(herbie_rewrite_time)
 
 
 def extract_saturation_time(timing_path: Path) -> tuple[str, str]:
@@ -262,9 +278,11 @@ def extract_accuracies(
             "target_accuracy_bits",
             "optimize_load_pdl_time",
             "optimize_process_functions_time",
+            "optimize_equality_saturation_time",
             "herbie_wo_sampling",
             "herbie_sampling",
             "herbie_gc_time",
+            "herbie_rewrite_time",
             "saturation_time_joint",
             "match_time_joint",
             "saturation_time_individual",
@@ -289,7 +307,7 @@ def extract_accuracies(
 
         # Extract optimization timing from tamagoyaki timing JSON
         try:
-            load_pdl_time, process_functions_time = extract_optimize_timing(
+            load_pdl_time, process_functions_time, equality_saturation_time = extract_optimize_timing(
                 Path(optimize_timing_dir) / f"{filename}.json"
             )
         except (ValueError, FileNotFoundError) as e:
@@ -299,7 +317,7 @@ def extract_accuracies(
         try:
             herbie_eval_dir: Path = Path(json_file).parent
             timeline_path: Path = herbie_eval_dir / link / "timeline.json"
-            herbie_wo_sampling, herbie_sampling, herbie_gc_time = extract_herbie_timings(timeline_path)
+            herbie_wo_sampling, herbie_sampling, herbie_gc_time, herbie_rewrite_time = extract_herbie_timings(timeline_path)
         except (ValueError, FileNotFoundError) as e:
             raise ValueError(f"Test {i} ({name}): {e}")
 
@@ -324,9 +342,11 @@ def extract_accuracies(
                 "target_accuracy_bits": target,
                 "optimize_load_pdl_time": load_pdl_time,
                 "optimize_process_functions_time": process_functions_time,
+                "optimize_equality_saturation_time": equality_saturation_time,
                 "herbie_wo_sampling": herbie_wo_sampling,
                 "herbie_sampling": herbie_sampling,
                 "herbie_gc_time": herbie_gc_time,
+                "herbie_rewrite_time": herbie_rewrite_time,
                 "saturation_time_joint": saturation_time_joint,
                 "match_time_joint": match_time_joint,
                 "saturation_time_individual": saturation_time_individual,
