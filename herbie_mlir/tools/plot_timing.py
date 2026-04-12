@@ -55,6 +55,10 @@ def main():
 
     geomean_slowdown = np.exp(np.log(df["speedup"]).mean())
 
+    # Equality saturation speedup (herbie_rewrite_time is in ms, optimize is in seconds)
+    df["eqsat_speedup"] = df["herbie_rewrite_time"] / (df["optimize_equality_saturation_time"] * 1000)
+    geomean_eqsat = np.exp(np.log(df["eqsat_speedup"]).mean())
+
     # Separate NMSE and non-NMSE benchmarks
     nmse_mask = df["name"].str.startswith("NMSE")
     df_nmse = df[nmse_mask].copy()
@@ -232,7 +236,11 @@ def main():
     print(f"Timing plot created successfully with {len(names)} benchmarks")
     print(f"Average speedup (eqsat/Herbie): {speedups.mean():.2f}x")
     print(f"Median speedup: {speedups.median():.2f}x")
-    print(f"Geometric mean slowdown (eqsat/Herbie): {geomean_slowdown:.2f}x")
+    print(f"Geometric mean speedup (Herbie/eqsat): {geomean_slowdown:.2f}x")
+    print(f"\nEquality saturation only:")
+    print(f"  Average speedup (Herbie rewrite / Tamagoyaki eqsat): {df['eqsat_speedup'].mean():.2f}x")
+    print(f"  Median speedup: {df['eqsat_speedup'].median():.2f}x")
+    print(f"  Geometric mean speedup: {geomean_eqsat:.2f}x")
     print(f"Saved as: {args.output}")
 
 
