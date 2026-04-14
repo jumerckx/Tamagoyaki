@@ -2,6 +2,7 @@
 .snakemake
 eval/out/*
 !eval/out/plots/
+!eval/out/evaluation.csv
 
 # Build artifacts
 build/
