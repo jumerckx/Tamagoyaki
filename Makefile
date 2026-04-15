@@ -45,7 +45,7 @@ eval-build:
 
 eval: eval-build
 	cd herbie_mlir/eval && \
-		uv run snakemake -j1 --config build_dir=$(abspath $(BUILD_DIR))
+		uv run snakemake -j1 --config build_dir=$(abspath $(BUILD_DIR)) --forceall
 
 eval-clean:
 	rm -rf $(BUILD_DIR)
