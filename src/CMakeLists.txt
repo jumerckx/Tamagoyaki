@@ -49,6 +49,7 @@ add_mlir_dialect_library(MLIREmatch
   ${PROJECT_SOURCE_DIR}/include
 
   DEPENDS
+  MLIREquivalenceIncGen
   MLIREmatchIncGen
 
   LINK_LIBS PUBLIC
