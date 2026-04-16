@@ -62,7 +62,9 @@ add_mlir_dialect_library(MLIREmatch
   ${PROJECT_SOURCE_DIR}/include
 
   DEPENDS
+  MLIREquivalenceIncGen
   MLIREmatchIncGen
+  copy_equivalence_generated_td_to_src_include
   copy_ematch_generated_td_to_src_include
 
   LINK_LIBS PUBLIC
