@@ -56,6 +56,12 @@ if(BUILD_ROVER_MLIR)
   add_subdirectory(rover-mlir)
 endif()
 
+# cranelift-mlir subproject (optional, can be disabled)
+option(BUILD_CRANELIFT_MLIR "Build cranelift-mlir subproject" ON)
+if(BUILD_CRANELIFT_MLIR)
+  add_subdirectory(cranelift-mlir)
+endif()
+
 # check-all: run all test suites that are enabled
 set(CHECK_ALL_DEPENDS check-tamagoyaki)
 if(BUILD_HERBIE_MLIR)
