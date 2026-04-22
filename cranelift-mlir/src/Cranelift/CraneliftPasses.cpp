@@ -8,6 +8,7 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
+#include "mlir/IR/IRMapping.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/OwningOpRef.h"
@@ -19,7 +20,10 @@
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopedHashTable.h"
 #include "llvm/ADT/SmallVector.h"
+#include <cassert>
+#include <functional>
 #include <utility>
 
 namespace cranelift {
@@ -128,6 +132,88 @@ public:
     return graphOp;
   }
 
+  /// Elaborate: materialize selected pure ops from the GraphOp back into the
+  /// funcOp. Visits blocks in domtree preorder, using a scoped map so that
+  /// values elaborated in a dominating block are reused by dominated blocks.
+  void elaborate(mlir::FunctionOpInterface funcOp,
+                 mlir::equivalence::GraphOp graphOp) {
+    auto yieldOp = mlir::cast<mlir::equivalence::YieldOp>(
+        graphOp.getBody().front().getTerminator());
+
+    // Map each graphOp result to the graph-internal value it forwards.
+    llvm::DenseMap<mlir::Value, mlir::Value> resultToGraphValue;
+    for (auto [graphResult, yieldOperand] :
+         llvm::zip(graphOp.getResults(), yieldOp.getValues()))
+      resultToGraphValue[graphResult] = yieldOperand;
+
+    // Scoped map: graph-internal Value → elaborated Value in funcOp.
+    llvm::ScopedHashTable<mlir::Value, mlir::Value> elaborated;
+    mlir::Region &graphBody = graphOp.getBody();
+
+    // Recursively elaborate a graph-internal value, cloning its producing
+    // op (and transitive dependencies) into the funcOp at the builder's
+    // current insertion point.
+    std::function<mlir::Value(mlir::Value, mlir::OpBuilder &)> elaborateValue;
+    elaborateValue = [&](mlir::Value v,
+                         mlir::OpBuilder &builder) -> mlir::Value {
+      if (mlir::Value cached = elaborated.lookup(v))
+        return cached;
+
+      mlir::Operation *defOp = v.getDefiningOp();
+      assert(defOp && "graph value without a defining op");
+
+      // Elaborate operands that live inside the graph; others (block
+      // args, side-effecting op results) are already available in funcOp.
+      mlir::IRMapping mapping;
+      for (mlir::Value operand : defOp->getOperands()) {
+        if (auto *opDef = operand.getDefiningOp();
+            opDef && opDef->getParentRegion() == &graphBody)
+          mapping.map(operand, elaborateValue(operand, builder));
+      }
+
+      mlir::Operation *cloned = builder.clone(*defOp, mapping);
+
+      for (auto [origRes, clonedRes] :
+           llvm::zip(defOp->getResults(), cloned->getResults()))
+        elaborated.insert(origRes, clonedRes);
+
+      return cloned->getResult(mlir::cast<mlir::OpResult>(v).getResultNumber());
+    };
+
+    // DFS over the domtree; a ScopedHashTableScope is pushed per block
+    // so that mappings from dominating blocks are visible to children
+    // and automatically popped when backtracking to siblings.
+    mlir::DominanceInfo domInfo(funcOp);
+    mlir::Region &funcBody = funcOp.getFunctionBody();
+
+    std::function<void(mlir::Block *)> visitBlock;
+    visitBlock = [&](mlir::Block *block) {
+      llvm::ScopedHashTableScope<mlir::Value, mlir::Value> scope(elaborated);
+      mlir::OpBuilder builder(funcOp->getContext());
+
+      for (mlir::Operation &op : *block) {
+        builder.setInsertionPoint(&op);
+        for (mlir::OpOperand &operand : op.getOpOperands()) {
+          auto it = resultToGraphValue.find(operand.get());
+          if (it != resultToGraphValue.end()) {
+            mlir::Value elabVal = elaborateValue(it->second, builder);
+            operand.set(elabVal);
+          }
+        }
+      }
+
+      // Visit dominator-tree children.
+      if (funcBody.hasOneBlock())
+        return;
+      auto *domNode = domInfo.getNode(block);
+      for (auto *child : domNode->children())
+        visitBlock(child->getBlock());
+    };
+
+    visitBlock(&funcBody.front());
+    graphOp->erase();
+  }
+
   void runOnOperation() final {
     mlir::FunctionOpInterface funcOp = getOperation();
     mlir::equivalence::GraphOp graph = convertToSoN(funcOp);
@@ -165,10 +251,8 @@ public:
     }
 
     mlir::equivalence::selectGreedy(graph, /*defaultCost=*/1);
-    graph->dump();
-    funcOp->dump();
-
-    // elaborate
+    mlir::equivalence::extractFromGraph(graph);
+    elaborate(funcOp, graph);
   }
 };
 
