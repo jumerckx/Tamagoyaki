@@ -19,6 +19,7 @@ def CraneliftDummyPass : InterfacePass<"cranelift-dummy", "::mlir::FunctionOpInt
     Placeholder pass that does nothing. Used to verify the cranelift-mlir
     build infrastructure is wired up correctly.
   }];
+  let dependentDialects = ["::mlir::equivalence::EquivalenceDialect"];
 }
 
 #endif // CRANELIFT_DIALECT
