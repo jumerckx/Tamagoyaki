@@ -1,21 +1,30 @@
+#include "EmatchDialect.h"
+#include "EmatchUtils.h"
 #include "EquivalenceDialect.h"
+#include "EquivalenceUtils.h"
 #include "Utils/HashConsPatternRewriter.h"
+#include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
 #include "mlir/IR/Block.h"
 #include "mlir/IR/Builders.h"
+#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Dominance.h"
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
+#include "mlir/IR/OwningOpRef.h"
 #include "mlir/IR/Region.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "mlir/Parser/Parser.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
+#include <utility>
 
 namespace cranelift {
 
+#define GEN_PASS_DECL_CRANELIFTDUMMYPASS
 #define GEN_PASS_DEF_CRANELIFTDUMMYPASS
 #include "CraneliftPasses.h.inc"
 
@@ -123,13 +132,43 @@ public:
     mlir::FunctionOpInterface funcOp = getOperation();
     mlir::equivalence::GraphOp graph = convertToSoN(funcOp);
 
-    funcOp.dump();
-    graph.dump();
+    // Run equality saturation if a patterns file is provided.
+    if (!this->patternsFile.empty()) {
+      mlir::ModuleOp parentModule = funcOp->getParentOfType<mlir::ModuleOp>();
+      if (!parentModule) {
+        funcOp.emitError() << "function must be inside a module";
+        return this->signalPassFailure();
+      }
 
-    // ...run rewrites...
+      mlir::OwningOpRef<mlir::ModuleOp> parsedPatterns =
+          mlir::parseSourceFile<mlir::ModuleOp>(this->patternsFile,
+                                                funcOp->getContext());
+      if (!parsedPatterns) {
+        funcOp.emitError() << "failed to parse patterns file: "
+                           << this->patternsFile;
+        return this->signalPassFailure();
+      }
 
-    // selectGreedy
-    // scoped elaboration
+      mlir::ematch::convertEmatchOpsToApplyRewrites(parsedPatterns.get());
+
+      parsedPatterns.get().getOperation()->remove();
+      mlir::PDLPatternModule pdlPattern(parsedPatterns.release());
+
+      bool ok = mlir::ematch::runSaturation(
+          parentModule->getContext(), std::move(pdlPattern), parentModule,
+          this->maxIters, this->maxNodes, /*listener=*/nullptr,
+          this->eagerRewrite);
+      if (!ok) {
+        funcOp.emitError() << "equality saturation failed";
+        return this->signalPassFailure();
+      }
+    }
+
+    mlir::equivalence::selectGreedy(graph, /*defaultCost=*/1);
+    graph->dump();
+    funcOp->dump();
+
+    // elaborate
   }
 };
 
