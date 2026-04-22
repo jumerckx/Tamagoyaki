@@ -11,6 +11,7 @@
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/DepthFirstIterator.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 
 namespace cranelift {
@@ -26,24 +27,9 @@ public:
 
   mlir::equivalence::GraphOp convertToSoN(mlir::FunctionOpInterface funcOp) {
     mlir::OpBuilder builder(funcOp->getContext());
-    builder.setInsertionPoint(funcOp);
-
-    // Create a GraphOp with no results (results will be wired up later).
-    auto graphOp = mlir::equivalence::GraphOp::create(builder, funcOp.getLoc(),
-                                                      mlir::TypeRange{}, {});
-    // GraphOp's region is empty when created detached; add the required block
-    // with its implicit YieldOp terminator.
-    mlir::Block *graphBlock = builder.createBlock(&graphOp.getBody());
-    mlir::equivalence::YieldOp::create(builder, funcOp.getLoc());
-
-    // Set up hashcons with a root scope for the graph region.
-    mlir::ematch::HashConsPatternRewriter rewriter(funcOp->getContext());
-    rewriter.createRootScope(&graphOp.getBody());
-
-    // Traverse blocks in domtree preorder.
     mlir::Region &funcBody = funcOp.getFunctionBody();
 
-    // Build dominator tree iteration order.  For single-block regions the
+    // Build dominator tree iteration order. For single-block regions the
     // DominanceInfo API asserts, so handle that case directly.
     llvm::SmallVector<mlir::Block *> blockOrder;
     if (funcBody.hasOneBlock()) {
@@ -55,71 +41,82 @@ public:
       }
     }
 
+    // Analyze up front so we can create the GraphOp once with the right
+    // result types. Collect the ops destined for the graph (in processing
+    // order) and, separately, track them in a set for fast membership tests.
+    llvm::SmallVector<mlir::Operation *> opsToProcess;
+    llvm::SmallPtrSet<mlir::Operation *, 16> opsInGraph;
     for (mlir::Block *block : blockOrder) {
-      // Collect ops first to avoid iterator invalidation.
-      llvm::SmallVector<mlir::Operation *> opsToProcess;
       for (mlir::Operation &op : *block) {
         if (mlir::isSpeculatable(&op) &&
             !op.hasTrait<mlir::OpTrait::IsTerminator>()) {
           opsToProcess.push_back(&op);
-        }
-      }
-
-      for (mlir::Operation *op : opsToProcess) {
-        // Move op into the graph block (before the YieldOp terminator)
-        // so that lookup works within the graph region's scope.
-        op->moveBefore(graphBlock->getTerminator());
-
-        if (mlir::Operation *existing = rewriter.lookup(op)) {
-          // Duplicate found: replace uses with the existing one and erase.
-          op->replaceAllUsesWith(existing);
-          op->erase();
-        } else {
-          // New unique op: insert into hashcons and keep in graph.
-          (void)rewriter.insert(op);
+          opsInGraph.insert(&op);
         }
       }
     }
 
-    // Collect values defined inside the graph that are used outside it.
+    // A result escapes if any of its uses is by an op that is NOT going into
+    // the graph. This matches the post-move "not an ancestor of graphOp"
+    // check in the original, computed without mutating the IR.
     llvm::SmallVector<mlir::Value> escapingValues;
-    for (mlir::Operation &op : *graphBlock) {
-      for (mlir::Value result : op.getResults()) {
+    llvm::SmallVector<mlir::Type> resultTypes;
+    for (mlir::Operation *op : opsToProcess) {
+      for (mlir::Value result : op->getResults()) {
         for (mlir::OpOperand &use : result.getUses()) {
-          if (!graphOp->isAncestor(use.getOwner())) {
+          if (!opsInGraph.contains(use.getOwner())) {
             escapingValues.push_back(result);
+            resultTypes.push_back(result.getType());
             break;
           }
         }
       }
     }
 
-    // Update the YieldOp to yield the escaping values.
-    auto yieldOp =
-        mlir::cast<mlir::equivalence::YieldOp>(graphBlock->getTerminator());
-    yieldOp->setOperands(escapingValues);
+    // Create the GraphOp exactly once with the correct result types.
+    builder.setInsertionPoint(funcOp);
+    auto graphOp = mlir::equivalence::GraphOp::create(builder, funcOp.getLoc(),
+                                                      resultTypes, {});
+    builder.createBlock(&graphOp.getBody());
+    // The yield references the escaping values directly. Their producers
+    // still live in funcOp at this point and will be moved into the graph
+    // block below. Hash-consing may subsequently rewire individual yield
+    // operands via replaceAllUsesWith when duplicates are folded.
+    auto yieldOp = mlir::equivalence::YieldOp::create(builder, funcOp.getLoc(),
+                                                      escapingValues);
 
-    // Rebuild the GraphOp with the correct result types.
-    llvm::SmallVector<mlir::Type> resultTypes;
-    for (mlir::Value v : escapingValues)
-      resultTypes.push_back(v.getType());
-
-    builder.setInsertionPoint(graphOp);
-    auto newGraphOp = mlir::equivalence::GraphOp::create(
-        builder, graphOp.getLoc(), resultTypes, {});
-    newGraphOp.getBody().takeBody(graphOp.getBody());
-
-    // Replace external uses of the escaping values with the new GraphOp
-    // results.
+    // Redirect external uses of each escaping value to the corresponding
+    // GraphOp result now, before any producer moves. Uses that will end up
+    // inside the graph (producers still waiting to be moved, plus the yield
+    // operand we just created) must keep pointing at the original SSA value.
     for (auto [escapingVal, graphResult] :
-         llvm::zip(escapingValues, newGraphOp.getResults())) {
+         llvm::zip(escapingValues, graphOp.getResults())) {
       escapingVal.replaceUsesWithIf(graphResult, [&](mlir::OpOperand &use) {
-        return !newGraphOp->isAncestor(use.getOwner());
+        mlir::Operation *owner = use.getOwner();
+        return owner != yieldOp && !opsInGraph.contains(owner);
       });
     }
 
-    graphOp->erase();
-    return newGraphOp;
+    // Set up hashcons with a root scope for the graph region.
+    mlir::ematch::HashConsPatternRewriter rewriter(funcOp->getContext());
+    rewriter.createRootScope(&graphOp.getBody());
+
+    // Move ops into the graph block (before the yield) and hash-cons as we
+    // go. When a duplicate is found, replaceAllUsesWith updates any dangling
+    // internal uses — including yield operands — to the canonical
+    // representative. Hash-cons preserves result types, so the pre-computed
+    // GraphOp result types remain correct.
+    for (mlir::Operation *op : opsToProcess) {
+      op->moveBefore(yieldOp);
+      if (mlir::Operation *existing = rewriter.lookup(op)) {
+        op->replaceAllUsesWith(existing);
+        op->erase();
+      } else {
+        (void)rewriter.insert(op);
+      }
+    }
+
+    return graphOp;
   }
 
   void runOnOperation() final {
