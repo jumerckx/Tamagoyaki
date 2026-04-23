@@ -13,7 +13,7 @@ include "mlir/Pass/PassBase.td"
 // Cranelift Passes
 //===----------------------------------------------------------------------===//
 
-def CraneliftDummyPass : InterfacePass<"cranelift-dummy", "::mlir::FunctionOpInterface"> {
+def CraneliftOptimizePass : InterfacePass<"cranelift-optimize", "::mlir::FunctionOpInterface"> {
   let summary = "A dummy pass for the cranelift-mlir subproject.";
   let description = [{
     Placeholder pass that does nothing. Used to verify the cranelift-mlir

@@ -28,15 +28,15 @@
 
 namespace cranelift {
 
-#define GEN_PASS_DECL_CRANELIFTDUMMYPASS
-#define GEN_PASS_DEF_CRANELIFTDUMMYPASS
+#define GEN_PASS_DECL_CRANELIFTOPTIMIZEPASS
+#define GEN_PASS_DEF_CRANELIFTOPTIMIZEPASS
 #include "CraneliftPasses.h.inc"
 
-class CraneliftDummyPass
-    : public impl::CraneliftDummyPassBase<CraneliftDummyPass> {
+class CraneliftOptimizePass
+    : public impl::CraneliftOptimizePassBase<CraneliftOptimizePass> {
 public:
-  using impl::CraneliftDummyPassBase<
-      CraneliftDummyPass>::CraneliftDummyPassBase;
+  using impl::CraneliftOptimizePassBase<
+      CraneliftOptimizePass>::CraneliftOptimizePassBase;
 
   mlir::equivalence::GraphOp convertToSoN(mlir::FunctionOpInterface funcOp) {
     mlir::OpBuilder builder(funcOp->getContext());
