@@ -7,3 +7,5 @@ option(CRANELIFT_MLIR_BUILD_TOOLS "Build cranelift-mlir tools (cranelift-mlir-op
 if(CRANELIFT_MLIR_BUILD_TOOLS)
     add_subdirectory(tools)
 endif()
+
+add_subdirectory(test)
