@@ -130,6 +130,45 @@ set(RIVAL_GIT_TAG "main"
     CACHE STRING "Git tag/branch/commit of Rival to use")
 set(RIVAL_LOCAL_PATH ""
     CACHE PATH "Path to local Rival repository (if set, uses local dev mode; otherwise fetches from GitHub)")
+set(RIVAL_PREBUILT_LIB ""
+    CACHE FILEPATH "Path to a prebuilt librival3_ffi.a. If set, skips FetchContent + cargo entirely.")
+set(RIVAL_PREBUILT_INCLUDE ""
+    CACHE PATH "Path to directory containing rival.h (used together with RIVAL_PREBUILT_LIB).")
+
+# =============================================================================
+# Fast path: prebuilt Rival library (e.g. provided by Nix).
+# Skip FetchContent and the cargo build entirely.
+# =============================================================================
+if(RIVAL_PREBUILT_LIB)
+    if(NOT EXISTS "${RIVAL_PREBUILT_LIB}")
+        message(FATAL_ERROR
+            "RIVAL_PREBUILT_LIB is set but file does not exist: ${RIVAL_PREBUILT_LIB}")
+    endif()
+    message(STATUS "Using prebuilt Rival library: ${RIVAL_PREBUILT_LIB}")
+
+    add_library(RivalCLib STATIC IMPORTED GLOBAL)
+    set_target_properties(RivalCLib PROPERTIES
+        IMPORTED_LOCATION "${RIVAL_PREBUILT_LIB}"
+    )
+    if(RIVAL_PREBUILT_INCLUDE)
+        set_target_properties(RivalCLib PROPERTIES
+            INTERFACE_INCLUDE_DIRECTORIES "${RIVAL_PREBUILT_INCLUDE}"
+        )
+    endif()
+
+    add_library(Rival INTERFACE)
+    target_link_libraries(Rival INTERFACE RivalCLib MPFR::MPFR GMP::GMP)
+    if(RIVAL_PREBUILT_INCLUDE)
+        target_include_directories(Rival INTERFACE "${RIVAL_PREBUILT_INCLUDE}")
+        message(STATUS "  Include dir: ${RIVAL_PREBUILT_INCLUDE}")
+    endif()
+    message(STATUS "  Library: ${RIVAL_PREBUILT_LIB}")
+
+    # Provide a no-op `buildRival` target so consumers that
+    # add_dependencies(... buildRival) keep working.
+    add_custom_target(buildRival)
+    return()
+endif()
 
 # Handle local development vs GitHub fetch
 if(RIVAL_LOCAL_PATH)
