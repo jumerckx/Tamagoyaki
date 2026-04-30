@@ -1237,7 +1237,7 @@ requires-dist = [
     { name = "pre-commit", specifier = ">=4.5.1" },
     { name = "snakemake", specifier = ">=9" },
     { name = "snakemake-executor-plugin-cluster-generic", specifier = ">=1" },
-    { name = "xdsl", git = "https://github.com/xdslproject/xdsl?rev=79bcf5f7f8c7ac11bdb44d0c34fe874c953eaa5a" },
+    { name = "xdsl", specifier = ">=0.56.2" },
 ]
 
 [package.metadata.requires-dev]
@@ -1358,11 +1358,15 @@ wheels = [
 [[package]]
 name = "xdsl"
 version = "0.62.0"
-source = { git = "https://github.com/xdslproject/xdsl?rev=79bcf5f7f8c7ac11bdb44d0c34fe874c953eaa5a#79bcf5f7f8c7ac11bdb44d0c34fe874c953eaa5a" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "immutabledict" },
     { name = "ordered-set" },
     { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f8/a6/e897187deb28e81131f4a3b9e713e37fcf8cb305715fa15d8455541da42a/xdsl-0.62.0.tar.gz", hash = "sha256:f2da1b5a05cea65d831c5f40c06d993c60e86d707695ed1b5f1cd47e62a3a312", size = 4050436, upload-time = "2026-04-10T08:33:21.637Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1f/09/4ae8e00d70ba94fd177f71f139640afe1d111789f6f430936f2693fb3411/xdsl-0.62.0-py3-none-any.whl", hash = "sha256:c5b2d84eb2c520c673cd61a3f1285f98989260c8f9aaef0ed2919d663a5b2465", size = 4305464, upload-time = "2026-04-10T08:33:19.919Z" },
 ]
 
 [[package]]
