@@ -60,6 +60,8 @@ def RoverExtractPass : Pass<"rover-extract", "::mlir::ModuleOp"> {
     let options = [
     Option<"extractDelay", "delay", "bool", "false",
            "Extract based on delay else use area.">,
+    Option<"debugExtract", "debug", "bool", "false",
+           "Enable debug output for extraction.">,
   ];
 }
 
