@@ -265,18 +265,15 @@ public:
         auto [area, delay] =
             llvm::TypeSwitch<Operation *, std::pair<unsigned, unsigned>>(op)
                 .Case<comb::AddOp>([](comb::AddOp addOp) {
+                  auto numOps = addOp.getNumOperands();
                   // Adder cost = width
-                  if (addOp.getNumOperands() == 2 &&
-                      addOp.getOperand(0) == addOp.getOperand(1)) {
-                    return std::pair{0, 0};
-                  }
                   int addArea =
-                      addOp.getResult().getType().getIntOrFloatBitWidth();
+                      getBinaryOpCost(addOp.getOperand(0), addOp.getOperand(1));
                   auto lhsWidth = getZeroExtendedWidth(addOp.getOperand(0));
                   auto rhsWidth = getZeroExtendedWidth(addOp.getOperand(1));
                   int addDelay = ceilLog2(std::max(
                       lhsWidth, rhsWidth)); // assume a tree of 2-input adders
-                  return std::pair{addArea, addDelay};
+                  return std::pair{addArea, addDelay + ceilLog2(numOps)};
                   // return std::pair{10000, addDelay};
                 })
                 .Case<comb::MulOp>([](comb::MulOp mulOp) {
@@ -320,7 +317,13 @@ public:
                     [](comb::ExtractOp extractOp) { return std::pair{0, 0}; })
                 .Case<comb::ConcatOp>(
                     [](comb::ConcatOp concatOp) { return std::pair{0, 0}; })
-                .Default([](auto) { return std::pair{0, 1}; });
+                .Case<comb::AndOp>(
+                    [](comb::AndOp andOp) { return std::pair{1, 1}; })
+                .Case<comb::OrOp>(
+                    [](comb::OrOp andOp) { return std::pair{1, 1}; })
+                .Case<comb::MuxOp>(
+                    [](comb::MuxOp muxOp) { return std::pair{3, 3}; })
+                .Default([](auto) { return std::pair{0, 0}; });
 
         op->setAttr("equivalence.delay",
                     CostAttr::get(op->getContext(), delay));
@@ -330,9 +333,11 @@ public:
       if (extractDelay) {
         pruneGraphByCost(graphOp, /*defaultCost=*/-1, "equivalence.delay",
                          costReductionMax);
-        llvm::errs() << "=== IR After Delay Pruning ===\n";
-        module.print(llvm::errs());
-        llvm::errs() << "\n";
+        if (debugExtract) {
+          llvm::errs() << "=== IR After Delay Pruning ===\n";
+          module.print(llvm::errs());
+          llvm::errs() << "\n";
+        }
       }
 
       selectGreedy(graphOp, /*defaultCost=*/-1, "equivalence.area");
