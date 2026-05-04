@@ -188,17 +188,25 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
   TAMAGOYAKI_SCOPED_TIMER("rebuild");
   LLVM_DEBUG({
     llvm::dbgs() << "Starting rebuild. Worklist contains " << worklist.size()
-                 << " classes\n";
+                 << " entries\n";
   });
 
   if (worklist.empty())
     return false;
 
   while (!worklist.empty()) {
-    llvm::SetVector<equivalence::ClassOp> todo;
-    for (equivalence::ClassOp c : worklist) {
-      if (!c->getBlock()) {
-        continue; // c has already been removed
+    llvm::SetVector<Operation *> todo;
+    for (Operation *op : worklist) {
+      if (!op || !op->getBlock()) {
+        continue; // op has already been removed/erased
+      }
+
+      auto c = llvm::dyn_cast<equivalence::ClassOp>(op);
+      if (!c) {
+        // Non-ClassOp entries come from `mergeResults`: their users may
+        // have become identical and need to be deduplicated.
+        todo.insert(op);
+        continue;
       }
 
       auto leader = getCanonicalLeader(c);
@@ -226,14 +234,18 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
         c->remove();
         pendingErase.push_back(c);
       }
-      todo.insert(leader);
+      todo.insert(leader.getOperation());
     }
     worklist.clear();
 
-    for (equivalence::ClassOp c : todo) {
-      if (c.getInputs().empty())
+    for (Operation *op : todo) {
+      if (!op || !op->getBlock())
         continue;
-      repair(rewriter, c);
+      if (auto c = llvm::dyn_cast<equivalence::ClassOp>(op)) {
+        if (c.getInputs().empty())
+          continue;
+      }
+      repair(rewriter, op);
     }
   }
 
@@ -286,21 +298,28 @@ void ClassOpUnionFind::hashconsGraph(HashConsPatternRewriter &rewriter,
 }
 
 void ClassOpUnionFind::repair(HashConsPatternRewriter &rewriter,
-                              equivalence::ClassOp classOp) {
-  if (classOp->getBlock() == nullptr) {
+                              Operation *op) {
+  if (op == nullptr || op->getBlock() == nullptr) {
     return;
   }
+
+  // For a ClassOp we look at users of its single class result; for any
+  // other operation we look at users of all of its results.
+  auto classOp = llvm::dyn_cast<equivalence::ClassOp>(op);
 
   llvm::DenseMap<Operation *, Operation *, SimpleOperationInfo> uniqueParents;
   // Collect pairs of duplicate operations to merge AFTER the loop
   SmallVector<std::pair<Operation *, Operation *>> toMerge;
 
   SmallPtrSet<Operation *, 8> scheduledForMerge;
-  for (Operation *op1 : classOp.getResult().getUsers()) {
-    // Skip ClassOps that use this result as their leader pointer.
-    if (auto op1class = llvm::dyn_cast<equivalence::ClassOp>(op1)) {
-      assert(op1class.getLeader() == classOp.getResult());
-      continue;
+
+  for (Operation *op1 : op->getUsers()) {
+    if (classOp) {
+      // Skip ClassOps that use this result as their leader pointer.
+      if (auto op1class = llvm::dyn_cast<equivalence::ClassOp>(op1)) {
+        assert(op1class.getLeader() == classOp.getResult());
+        continue;
+      }
     }
     Operation *op2 = uniqueParents.lookup(op1);
 
@@ -383,4 +402,12 @@ void ClassOpUnionFind::mergeResults(HashConsPatternRewriter &rewriter,
       rewriter.replaceAllUsesWith(resOther, resKeep);
     }
   }
+
+  // After redirecting `other`'s users onto `keep`, the users of `keep`
+  // may have become identical and need to be deduplicated.  Schedule
+  // `keep` for repair in the next rebuild iteration.  The worklist
+  // entry will be skipped if `keep` is later detached or erased
+  // (checked via `op->getBlock()` in `rebuild`).
+  if (keep && keep->getBlock())
+    worklist.push_back(keep);
 }
