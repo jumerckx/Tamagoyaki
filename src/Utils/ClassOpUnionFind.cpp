@@ -249,6 +249,42 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
   return true;
 }
 
+void ClassOpUnionFind::hashconsGraph(HashConsPatternRewriter &rewriter,
+                                     equivalence::GraphOp graph) {
+  TAMAGOYAKI_SCOPED_TIMER("hashconsGraph");
+
+  Region *region = &graph.getBody();
+  rewriter.createRootScope(region);
+
+  SmallVector<std::pair<Operation *, Operation *>> toMerge;
+  SmallPtrSet<Operation *, 8> scheduledForMerge;
+
+  for (Operation &opRef : graph.getBody().getOps()) {
+    Operation *op = &opRef;
+    if (llvm::isa<equivalence::ClassOp>(op))
+      continue;
+    if (succeeded(rewriter.insert(op)))
+      continue;
+
+    Operation *existing = rewriter.lookup(op);
+    assert(existing && existing != op &&
+           "insert failed but no duplicate found");
+    if (scheduledForMerge.insert(op).second)
+      toMerge.emplace_back(op, existing);
+  }
+
+  for (auto [other, keep] : toMerge) {
+    bool erased = rewriter.erase(keep).succeeded();
+    assert(erased);
+    bool inserted = rewriter.insert(keep).succeeded();
+    assert(inserted);
+
+    mergeResults(rewriter, other, keep);
+    rewriter.replaceOp(other, keep);
+  }
+  rebuild(rewriter);
+}
+
 void ClassOpUnionFind::repair(HashConsPatternRewriter &rewriter,
                               equivalence::ClassOp classOp) {
   if (classOp->getBlock() == nullptr) {

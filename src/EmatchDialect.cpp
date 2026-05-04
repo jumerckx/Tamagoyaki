@@ -146,16 +146,7 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
     hashconsRewriter.setListener(listener);
 
   irModule.walk([&](equivalence::GraphOp graph) {
-    Region *region = &(graph.getBody());
-    auto scope = hashconsRewriter.createRootScope(region);
-
-    graph->walk([&](Operation *op) {
-      if (dyn_cast<equivalence::ClassOp>(*op)) {
-        return;
-      }
-      scope->insert(op, op);
-      hashconsRewriter.setNodeCount(hashconsRewriter.getNodeCount() + 1);
-    });
+    uf.hashconsGraph(hashconsRewriter, graph);
   });
 
   pdlPattern.registerRewriteFunction("get_class_vals", getClassVals);

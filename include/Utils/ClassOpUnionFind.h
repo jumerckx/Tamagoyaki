@@ -73,6 +73,13 @@ public:
   /// Returns false when the worklist was empty, otherwise true.
   bool rebuild(HashConsPatternRewriter &rewriter);
 
+  /// Create a hash-cons scope for the given graph's region and insert every
+  /// non-ClassOp operation into it. Duplicate operations encountered during
+  /// insertion are collected and merged via `mergeResults`, mirroring the
+  /// pair-collect-then-process pattern used by `repair`.
+  void hashconsGraph(HashConsPatternRewriter &rewriter,
+                     equivalence::GraphOp graph);
+
   /// Repair e-graph by potentially deduplicating the parents of
   /// a merged ClassOp.
   void repair(HashConsPatternRewriter &rewriter, equivalence::ClassOp classOp);
