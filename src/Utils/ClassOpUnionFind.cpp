@@ -299,10 +299,6 @@ void ClassOpUnionFind::hashconsGraph(HashConsPatternRewriter &rewriter,
 
 void ClassOpUnionFind::repair(HashConsPatternRewriter &rewriter,
                               Operation *op) {
-  if (op == nullptr || op->getBlock() == nullptr) {
-    return;
-  }
-
   // For a ClassOp we look at users of its single class result; for any
   // other operation we look at users of all of its results.
   auto classOp = llvm::dyn_cast<equivalence::ClassOp>(op);
@@ -403,11 +399,5 @@ void ClassOpUnionFind::mergeResults(HashConsPatternRewriter &rewriter,
     }
   }
 
-  // After redirecting `other`'s users onto `keep`, the users of `keep`
-  // may have become identical and need to be deduplicated.  Schedule
-  // `keep` for repair in the next rebuild iteration.  The worklist
-  // entry will be skipped if `keep` is later detached or erased
-  // (checked via `op->getBlock()` in `rebuild`).
-  if (keep && keep->getBlock())
-    worklist.push_back(keep);
+  worklist.push_back(keep);
 }
