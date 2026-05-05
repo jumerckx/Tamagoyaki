@@ -105,7 +105,7 @@ module @ir {
     // CHECK-NEXT:     %c1_i32 = arith.constant 1 : i32
     // CHECK-NEXT:     %3 = arith.shli %1, %c1_i32 : i32
     // CHECK-NEXT:     %4 = arith.muli %1, %2 : i32
-    // CHECK-NEXT:     %5 = "test.op"() : () -> i32
+    // CHECK-NEXT:     %5 = "test.op"() {equivalence.allow_unspeculatable} : () -> i32
     // CHECK-NEXT:     %6 = equivalence.class %5, %4, %3 : i32
     // CHECK-NEXT:     equivalence.yield %6 : i32
     // CHECK-NEXT:   }
@@ -118,7 +118,7 @@ module @ir {
             %c2_i32 = arith.constant 2 : i32
             %2 = equivalence.class %c2_i32 : i32
             %3 = arith.muli %1, %2 : i32
-            %someotherval = "test.op"() : () -> (i32)
+            %someotherval = "test.op"() {equivalence.allow_unspeculatable} : () -> (i32)
             %4 = equivalence.class %someotherval, %3 : i32
             equivalence.yield %4 : i32
         }
