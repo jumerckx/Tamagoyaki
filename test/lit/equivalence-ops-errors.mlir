@@ -1,4 +1,4 @@
-// RUN: tamagoyaki-opt --verify-diagnostics %s
+// RUN: tamagoyaki-opt --verify-diagnostics -allow-unregistered-dialect %s
 
 // ===----------------------------------------------------------------------===//
 // Test equivalence.class verification - error cases
@@ -30,4 +30,28 @@ func.func @test_class_operand_multiple_users() {
     %1 = equivalence.class %0 : i32
     %2 = equivalence.class %0 : i32
     return
+}
+
+// ===----------------------------------------------------------------------===//
+// Test equivalence.graph verification - error cases
+// ===----------------------------------------------------------------------===//
+
+// Test: graph region cannot contain operations that are not AlwaysSpeculatable
+func.func @test_graph_unspeculatable_op() -> i32 {
+    %0 = equivalence.graph -> (i32) {
+        // expected-error@+1 {{operation in equivalence.graph region must be AlwaysSpeculatable}}
+        %1 = "test.op"() : () -> (i32)
+        equivalence.yield %1 : i32
+    }
+    return %0 : i32
+}
+
+// Test: unspeculatable operation is allowed when carrying the
+// `equivalence.allow_unspeculatable` unit attribute.
+func.func @test_graph_unspeculatable_op_allowed() -> i32 {
+    %0 = equivalence.graph -> (i32) {
+        %1 = "test.op"() {equivalence.allow_unspeculatable} : () -> (i32)
+        equivalence.yield %1 : i32
+    }
+    return %0 : i32
 }
