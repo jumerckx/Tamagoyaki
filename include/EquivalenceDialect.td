@@ -122,6 +122,8 @@ def Equivalence_GraphOp : Equivalence_Op<"graph", [
     let assemblyFormat = [{
         ( `->` `(` type($outputs)^ `)` )? $body attr-dict
     }];
+
+    let hasVerifier = 1; 
 }
 
 

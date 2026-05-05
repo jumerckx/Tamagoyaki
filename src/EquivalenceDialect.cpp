@@ -102,6 +102,8 @@ LogicalResult ClassOp::verify() {
   return success();
 }
 
+LogicalResult GraphOp::verify() { return success(); }
+
 //===----------------------------------------------------------------------===//
 // Equivalence passes
 //===----------------------------------------------------------------------===//
