@@ -19,6 +19,8 @@
 #include "mlir/Support/LLVM.h"
 #include "vendor/mlir/SimpleOperationInfo.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/ScopeExit.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
@@ -194,10 +196,32 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
   if (worklist.empty())
     return false;
 
+  // Track ops that get erased during the loop below. Operations queued in
+  // `todo` (or `worklist` re-entry) may be freed by `repair`'s
+  // `replaceOp`, so we must not dereference their pointers afterwards.
+  // Just checking `op->getBlock()` is unsafe because the Operation memory
+  // itself may have been freed.
+  SmallPtrSet<Operation *, 16> erasedOps;
+  struct EraseTracker : public RewriterBase::ForwardingListener {
+    EraseTracker(OpBuilder::Listener *previous,
+                 SmallPtrSet<Operation *, 16> &erased)
+        : RewriterBase::ForwardingListener(previous), erased(erased) {}
+    void notifyOperationErased(Operation *op) override {
+      erased.insert(op);
+      RewriterBase::ForwardingListener::notifyOperationErased(op);
+    }
+    SmallPtrSet<Operation *, 16> &erased;
+  };
+  OpBuilder::Listener *previousListener = rewriter.getListener();
+  EraseTracker tracker(previousListener, erasedOps);
+  rewriter.setListener(&tracker);
+  auto restoreListener =
+      llvm::scope_exit([&] { rewriter.setListener(previousListener); });
+
   while (!worklist.empty()) {
     llvm::SetVector<Operation *> todo;
     for (Operation *op : worklist) {
-      if (!op || !op->getBlock()) {
+      if (!op || erasedOps.contains(op) || !op->getBlock()) {
         continue; // op has already been removed/erased
       }
 
@@ -239,7 +263,7 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
     worklist.clear();
 
     for (Operation *op : todo) {
-      if (!op || !op->getBlock())
+      if (!op || erasedOps.contains(op) || !op->getBlock())
         continue;
       if (auto c = llvm::dyn_cast<equivalence::ClassOp>(op)) {
         if (c.getInputs().empty())
