@@ -12,9 +12,11 @@
 #include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/OwningOpRef.h"
+#include "mlir/IR/PDLPatternMatch.h.inc"
 #include "mlir/IR/Region.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
+#include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Support/LLVM.h"
@@ -42,82 +44,94 @@ public:
     mlir::OpBuilder builder(funcOp->getContext());
     mlir::Region &funcBody = funcOp.getFunctionBody();
 
-    // Build dominator tree iteration order. For single-block regions the
-    // DominanceInfo API asserts, so handle that case directly.
-    llvm::SmallVector<mlir::Block *> blockOrder;
-    if (funcBody.hasOneBlock()) {
-      blockOrder.push_back(&funcBody.front());
-    } else {
-      mlir::DominanceInfo domInfo(funcOp);
-      for (auto *domNode : llvm::depth_first(domInfo.getRootNode(&funcBody))) {
-        blockOrder.push_back(domNode->getBlock());
-      }
-    }
-
-    // Analyze up front so we can create the GraphOp once with the right
-    // result types. Collect the ops destined for the graph (in processing
-    // order) and, separately, track them in a set for fast membership tests.
+    // Collected in processing order (innermost-first by construction). The
+    // set is for fast membership tests during escape analysis.
     llvm::SmallVector<mlir::Operation *> opsToProcess;
     llvm::SmallPtrSet<mlir::Operation *, 16> opsInGraph;
-    for (mlir::Block *block : blockOrder) {
-      for (mlir::Operation &op : block->without_terminator()) {
-        if (mlir::isSpeculatable(&op)) {
-          opsToProcess.push_back(&op);
-          opsInGraph.insert(&op);
-        }
-      }
-    }
 
-    // A result escapes if any of its uses is by an op that is NOT going into
-    // the graph. This matches the post-move "not an ancestor of graphOp"
-    // check in the original, computed without mutating the IR.
+    // Collect speculatable non-terminator ops from a single region in
+    // dominator-tree block order. Ops nested inside a child region are NOT
+    // visited here; the LoopLikeInterface walk below handles those first.
+    auto collectFromRegion = [&](mlir::Region &region) {
+      if (region.empty())
+        return;
+      auto take = [&](mlir::Block *block) {
+        for (mlir::Operation &op : block->without_terminator())
+          if (mlir::isSpeculatable(&op)) {
+            opsToProcess.push_back(&op);
+            opsInGraph.insert(&op);
+          }
+      };
+      if (region.hasOneBlock()) {
+        take(&region.front());
+        return;
+      }
+      mlir::DominanceInfo domInfo(region.getParentOp());
+      for (auto *domNode : llvm::depth_first(domInfo.getRootNode(&region)))
+        take(domNode->getBlock());
+    };
+
+    // Walk loop-like ops in post-order so nested loop bodies are drained
+    // before their enclosing loop. The loop op itself is collected later,
+    // when its surrounding region is processed; by then, its body contains
+    // only the yield (assuming all body ops were speculatable).
+    funcOp.walk<mlir::WalkOrder::PostOrder>(
+        [&](mlir::LoopLikeOpInterface loop) {
+          for (mlir::Region *body : loop.getLoopRegions())
+            collectFromRegion(*body);
+        });
+    collectFromRegion(funcBody);
+
+    // An op ends up in the graph if itself or any ancestor (up to but not
+    // including funcOp) is being moved. A non-speculatable op inside a
+    // speculatable loop body is carried into the graph by its enclosing
+    // loop op even though it isn't in `opsInGraph` directly.
+    auto endsUpInGraph = [&](mlir::Operation *op) {
+      for (mlir::Operation *cur = op; cur && cur != funcOp;
+           cur = cur->getParentOp())
+        if (opsInGraph.contains(cur))
+          return true;
+      return false;
+    };
+
+    // A result escapes if any use is by an op that does NOT end up in the
+    // graph.
     llvm::SmallVector<mlir::Value> escapingValues;
     llvm::SmallVector<mlir::Type> resultTypes;
-    for (mlir::Operation *op : opsToProcess) {
-      for (mlir::Value result : op->getResults()) {
-        for (mlir::OpOperand &use : result.getUses()) {
-          if (!opsInGraph.contains(use.getOwner())) {
+    for (mlir::Operation *op : opsToProcess)
+      for (mlir::Value result : op->getResults())
+        for (mlir::OpOperand &use : result.getUses())
+          if (!endsUpInGraph(use.getOwner())) {
             escapingValues.push_back(result);
             resultTypes.push_back(result.getType());
             break;
           }
-        }
-      }
-    }
 
-    // Create the GraphOp exactly once with the correct result types.
+    // Create the GraphOp once with the correct result types.
     builder.setInsertionPoint(funcOp);
     auto graphOp = mlir::equivalence::GraphOp::create(builder, funcOp.getLoc(),
                                                       resultTypes, {});
     builder.createBlock(&graphOp.getBody());
-    // The yield references the escaping values directly. Their producers
-    // still live in funcOp at this point and will be moved into the graph
-    // block below. Hash-consing may subsequently rewire individual yield
-    // operands via replaceAllUsesWith when duplicates are folded.
     auto yieldOp = mlir::equivalence::YieldOp::create(builder, funcOp.getLoc(),
                                                       escapingValues);
 
-    // Redirect external uses of each escaping value to the corresponding
-    // GraphOp result now, before any producer moves. Uses that will end up
-    // inside the graph (producers still waiting to be moved, plus the yield
-    // operand we just created) must keep pointing at the original SSA value.
+    // Redirect external uses of escaping values to the corresponding GraphOp
+    // result. Uses that will end up inside the graph -- including the yield
+    // we just created -- keep pointing at the original SSA value.
     for (auto [escapingVal, graphResult] :
-         llvm::zip(escapingValues, graphOp.getResults())) {
+         llvm::zip(escapingValues, graphOp.getResults()))
       escapingVal.replaceUsesWithIf(graphResult, [&](mlir::OpOperand &use) {
         mlir::Operation *owner = use.getOwner();
-        return owner != yieldOp && !opsInGraph.contains(owner);
+        return owner != yieldOp && !endsUpInGraph(owner);
       });
-    }
 
-    // Set up hashcons with a root scope for the graph region.
+    // Set up hash-cons for the graph region.
     mlir::ematch::HashConsPatternRewriter rewriter(funcOp->getContext());
     rewriter.createRootScope(&graphOp.getBody());
 
-    // Move ops into the graph block (before the yield) and hash-cons as we
-    // go. When a duplicate is found, replaceAllUsesWith updates any dangling
-    // internal uses — including yield operands — to the canonical
-    // representative. Hash-cons preserves result types, so the pre-computed
-    // GraphOp result types remain correct.
+    // Move ops into the graph block (before the yield) and hash-cons. The
+    // collection order guarantees inner-region ops move first, so when an
+    // enclosing loop op finally moves, it carries an already-drained body.
     for (mlir::Operation *op : opsToProcess) {
       op->moveBefore(yieldOp);
       if (mlir::Operation *existing = rewriter.lookup(op)) {
@@ -131,9 +145,6 @@ public:
     return graphOp;
   }
 
-  /// Elaborate: materialize selected pure ops from the GraphOp back into the
-  /// funcOp. Visits blocks in domtree preorder, using a scoped map so that
-  /// values elaborated in a dominating block are reused by dominated blocks.
   void elaborate(mlir::FunctionOpInterface funcOp,
                  mlir::equivalence::GraphOp graphOp) {
     auto yieldOp = mlir::cast<mlir::equivalence::YieldOp>(
@@ -145,13 +156,22 @@ public:
          llvm::zip(graphOp.getResults(), yieldOp.getValues()))
       resultToGraphValue[graphResult] = yieldOperand;
 
-    // Scoped map: graph-internal Value → elaborated Value in funcOp.
+    // Scoped map: graph-internal Value -> elaborated Value in funcOp.
+    // Scopes are pushed both per-block (for the dominator tree of a region)
+    // and on every nested-region descent (for structured control flow).
+    // Together they ensure an elaborated value is reused only at locations
+    // dominated by the point at which it was first elaborated.
     llvm::ScopedHashTable<mlir::Value, mlir::Value> elaborated;
-    mlir::Region &graphBody = graphOp.getBody();
 
-    // Recursively elaborate a graph-internal value, cloning its producing
-    // op (and transitive dependencies) into the funcOp at the builder's
-    // current insertion point.
+    auto isInsideGraph = [&](mlir::Operation *op) {
+      for (mlir::Operation *cur = op; cur; cur = cur->getParentOp())
+        if (cur == graphOp)
+          return true;
+      return false;
+    };
+
+    // Recursively clone a graph value (and transitive graph-defined
+    // dependencies) into funcOp at the builder's current insertion point.
     std::function<mlir::Value(mlir::Value, mlir::OpBuilder &)> elaborateValue;
     elaborateValue = [&](mlir::Value v,
                          mlir::OpBuilder &builder) -> mlir::Value {
@@ -161,12 +181,10 @@ public:
       mlir::Operation *defOp = v.getDefiningOp();
       assert(defOp && "graph value without a defining op");
 
-      // Elaborate operands that live inside the graph; others (block
-      // args, side-effecting op results) are already available in funcOp.
       mlir::IRMapping mapping;
       for (mlir::Value operand : defOp->getOperands()) {
         if (auto *opDef = operand.getDefiningOp();
-            opDef && opDef->getParentRegion() == &graphBody)
+            opDef && isInsideGraph(opDef))
           mapping.map(operand, elaborateValue(operand, builder));
       }
 
@@ -179,37 +197,52 @@ public:
       return cloned->getResult(mlir::cast<mlir::OpResult>(v).getResultNumber());
     };
 
-    // DFS over the domtree; a ScopedHashTableScope is pushed per block
-    // so that mappings from dominating blocks are visible to children
-    // and automatically popped when backtracking to siblings.
-    mlir::DominanceInfo domInfo(funcOp);
-    mlir::Region &funcBody = funcOp.getFunctionBody();
+    // visitRegion walks the entry block of `region`; visitBlock then
+    // recurses through the dominator tree of that region (with a per-block
+    // scope) and into nested regions of every op (with a fresh scope per
+    // region descent).
+    std::function<void(mlir::Region &)> visitRegion;
+    std::function<void(mlir::Block *, mlir::DominanceInfo *)> visitBlock;
 
-    std::function<void(mlir::Block *)> visitBlock;
-    visitBlock = [&](mlir::Block *block) {
-      llvm::ScopedHashTableScope<mlir::Value, mlir::Value> scope(elaborated);
+    visitBlock = [&](mlir::Block *block, mlir::DominanceInfo *domInfo) {
+      llvm::ScopedHashTableScope<mlir::Value, mlir::Value> blockScope(
+          elaborated);
       mlir::OpBuilder builder(funcOp->getContext());
 
       for (mlir::Operation &op : *block) {
         builder.setInsertionPoint(&op);
         for (mlir::OpOperand &operand : op.getOpOperands()) {
           auto it = resultToGraphValue.find(operand.get());
-          if (it != resultToGraphValue.end()) {
-            mlir::Value elabVal = elaborateValue(it->second, builder);
-            operand.set(elabVal);
-          }
+          if (it != resultToGraphValue.end())
+            operand.set(elaborateValue(it->second, builder));
         }
+        // Descend into nested regions (loop bodies, if/else arms, ...) so
+        // operands inside structured ops are also re-elaborated. The scoped
+        // hashtable prevents elaborations made inside from leaking back to
+        // siblings or to enclosing scopes.
+        for (mlir::Region &nested : op.getRegions())
+          visitRegion(nested);
       }
 
-      // Visit dominator-tree children.
-      if (funcBody.hasOneBlock())
-        return;
-      auto *domNode = domInfo.getNode(block);
-      for (auto *child : domNode->children())
-        visitBlock(child->getBlock());
+      if (domInfo) {
+        auto *domNode = domInfo->getNode(block);
+        for (auto *child : domNode->children())
+          visitBlock(child->getBlock(), domInfo);
+      }
     };
 
-    visitBlock(&funcBody.front());
+    visitRegion = [&](mlir::Region &region) {
+      if (region.empty())
+        return;
+      if (region.hasOneBlock()) {
+        visitBlock(&region.front(), nullptr);
+        return;
+      }
+      mlir::DominanceInfo domInfo(region.getParentOp());
+      visitBlock(&region.front(), &domInfo);
+    };
+
+    visitRegion(funcOp.getFunctionBody());
     graphOp->erase();
   }
 
