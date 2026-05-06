@@ -60,9 +60,8 @@ public:
     llvm::SmallVector<mlir::Operation *> opsToProcess;
     llvm::SmallPtrSet<mlir::Operation *, 16> opsInGraph;
     for (mlir::Block *block : blockOrder) {
-      for (mlir::Operation &op : *block) {
-        if (mlir::isSpeculatable(&op) &&
-            !op.hasTrait<mlir::OpTrait::IsTerminator>()) {
+      for (mlir::Operation &op : block->without_terminator()) {
+        if (mlir::isSpeculatable(&op)) {
           opsToProcess.push_back(&op);
           opsInGraph.insert(&op);
         }
