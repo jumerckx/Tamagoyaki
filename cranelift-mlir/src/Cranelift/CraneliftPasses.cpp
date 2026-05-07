@@ -24,9 +24,12 @@
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopedHashTable.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Debug.h"
 #include <cassert>
 #include <functional>
 #include <utility>
+
+#define DEBUG_TYPE "cranelift"
 
 namespace cranelift {
 
@@ -249,6 +252,12 @@ public:
   void runOnOperation() final {
     mlir::FunctionOpInterface funcOp = getOperation();
     mlir::equivalence::GraphOp graph = convertToSoN(funcOp);
+    LLVM_DEBUG({
+      llvm::dbgs() << "Graph:\n";
+      graph->dump();
+      llvm::dbgs() << "\nSkeleton:\n";
+      funcOp.dump();
+    });
 
     // Run equality saturation if a patterns file is provided.
     if (!this->patternsFile.empty()) {
