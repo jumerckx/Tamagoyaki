@@ -15,6 +15,7 @@
 #include "mlir/IR/PDLPatternMatch.h.inc"
 #include "mlir/IR/Region.h"
 #include "mlir/IR/Value.h"
+#include "mlir/IR/Visitors.h"
 #include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -59,11 +60,12 @@ public:
       if (region.empty())
         return;
       auto take = [&](mlir::Block *block) {
-        for (mlir::Operation &op : block->without_terminator())
+        for (mlir::Operation &op : block->without_terminator()) {
           if (mlir::isSpeculatable(&op)) {
             opsToProcess.push_back(&op);
             opsInGraph.insert(&op);
           }
+        }
       };
       if (region.hasOneBlock()) {
         take(&region.front());
@@ -175,7 +177,27 @@ public:
 
     // Recursively clone a graph value (and transitive graph-defined
     // dependencies) into funcOp at the builder's current insertion point.
+    // builder.clone deep-copies regions verbatim, so after each clone we
+    // walk the cloned regions and rewrite any operand still referencing a
+    // graph-internal value -- the canonical offender is a body terminator
+    // (e.g. a loop yield) holding onto a value that was hoisted out during
+    // saturation.
     std::function<mlir::Value(mlir::Value, mlir::OpBuilder &)> elaborateValue;
+    std::function<void(mlir::Region &, mlir::Region &)> elaborateClonedRegion;
+    std::function<void(mlir::Block *, mlir::Block *, mlir::DominanceInfo *,
+                       const llvm::DenseMap<mlir::Block *, mlir::Block *> &)>
+        elaborateClonedBlock;
+
+    // True for any value (op result or block argument) whose definition
+    // sits structurally inside graphOp.
+    auto isGraphInternalValue = [&](mlir::Value v) {
+      if (mlir::Operation *defOp = v.getDefiningOp())
+        return isInsideGraph(defOp);
+      auto blockArg = mlir::cast<mlir::BlockArgument>(v);
+      mlir::Operation *parentOp = blockArg.getOwner()->getParentOp();
+      return parentOp && isInsideGraph(parentOp);
+    };
+
     elaborateValue = [&](mlir::Value v,
                          mlir::OpBuilder &builder) -> mlir::Value {
       if (mlir::Value cached = elaborated.lookup(v))
@@ -185,9 +207,12 @@ public:
       assert(defOp && "graph value without a defining op");
 
       mlir::IRMapping mapping;
+      // Recurse on operands defined inside the graph -- including block
+      // args of an enclosing graph-internal region. For block args the
+      // recursive elaborateValue call short-circuits at the cache lookup
+      // (the cache was pre-populated on entry to the cloned region).
       for (mlir::Value operand : defOp->getOperands()) {
-        if (auto *opDef = operand.getDefiningOp();
-            opDef && isInsideGraph(opDef))
+        if (isGraphInternalValue(operand))
           mapping.map(operand, elaborateValue(operand, builder));
       }
 
@@ -197,7 +222,98 @@ public:
            llvm::zip(defOp->getResults(), cloned->getResults()))
         elaborated.insert(origRes, clonedRes);
 
+      // Fix up operands inside any cloned region: clone's IRMapping only
+      // knows about the operands we passed in plus this region's own block
+      // args; values from elsewhere in the graph come through unchanged
+      // and need to be re-elaborated at a point inside the clone.
+      for (auto [origRegion, clonedRegion] :
+           llvm::zip(defOp->getRegions(), cloned->getRegions()))
+        elaborateClonedRegion(origRegion, clonedRegion);
+
       return cloned->getResult(mlir::cast<mlir::OpResult>(v).getResultNumber());
+    };
+
+    // Walk a cloned block in parallel with its original. For each cloned
+    // op, re-point operands that still reference graph-internal values
+    // through elaborateValue, which clones the necessary support ops at
+    // the builder's insertion point (i.e. inside the cloned region).
+    elaborateClonedBlock =
+        [&](mlir::Block *origBlock, mlir::Block *clonedBlock,
+            mlir::DominanceInfo *domInfo,
+            const llvm::DenseMap<mlir::Block *, mlir::Block *> &clonedToOrig) {
+          // Per-block scope. Pre-populate the cache with mappings from each
+          // original block argument (iter_args, induction var, ...) to its
+          // cloned counterpart so that hoisted-out ops referring to them
+          // resolve at elaborateValue's top-of-function cache lookup.
+          llvm::ScopedHashTableScope<mlir::Value, mlir::Value> blockScope(
+              elaborated);
+          for (auto [origArg, clonedArg] : llvm::zip(
+                   origBlock->getArguments(), clonedBlock->getArguments()))
+            elaborated.insert(origArg, clonedArg);
+
+          mlir::OpBuilder builder(funcOp->getContext());
+          // Iterate ops in parallel by raw ilist iterators. elaborateValue may
+          // splice new ops in before the current clonedOp, but ilist iterators
+          // are stable across insertions of unrelated nodes, so the parallel
+          // walk stays in lockstep with the (untouched) original block.
+          auto origIt = origBlock->begin(), origEnd = origBlock->end();
+          auto clonedIt = clonedBlock->begin(), clonedEnd = clonedBlock->end();
+          for (; origIt != origEnd && clonedIt != clonedEnd;
+               ++origIt, ++clonedIt) {
+            mlir::Operation &origOp = *origIt;
+            mlir::Operation &clonedOp = *clonedIt;
+            builder.setInsertionPoint(&clonedOp);
+            for (mlir::OpOperand &operand : clonedOp.getOpOperands()) {
+              mlir::Value v = operand.get();
+              if (isGraphInternalValue(v))
+                operand.set(elaborateValue(v, builder));
+            }
+            // Recurse into this op's own nested regions (e.g. an scf.if inside
+            // an scf.for body). Each region descent gets a fresh scope so
+            // elaborations inside don't leak to siblings.
+            for (auto [origNested, clonedNested] :
+                 llvm::zip(origOp.getRegions(), clonedOp.getRegions()))
+              elaborateClonedRegion(origNested, clonedNested);
+          }
+
+          // Multi-block region: continue down the dominator tree, each child
+          // block getting its own pushed scope on entry.
+          if (domInfo) {
+            auto *domNode = domInfo->getNode(clonedBlock);
+            for (auto *child : domNode->children()) {
+              mlir::Block *childCloned = child->getBlock();
+              auto it = clonedToOrig.find(childCloned);
+              assert(it != clonedToOrig.end() &&
+                     "missing orig/cloned block pair");
+              elaborateClonedBlock(it->second, childCloned, domInfo,
+                                   clonedToOrig);
+            }
+          }
+        };
+
+    elaborateClonedRegion = [&](mlir::Region &origRegion,
+                                mlir::Region &clonedRegion) {
+      if (clonedRegion.empty())
+        return;
+      if (clonedRegion.hasOneBlock()) {
+        llvm::DenseMap<mlir::Block *, mlir::Block *> clonedToOrig;
+        elaborateClonedBlock(&origRegion.front(), &clonedRegion.front(),
+                             /*domInfo=*/nullptr, clonedToOrig);
+        return;
+      }
+      // Multi-block region: build a cloned-block -> orig-block map (the
+      // block lists are 1:1 in the same order after cloning) and walk in
+      // dominator-tree order on the clone side.
+      llvm::DenseMap<mlir::Block *, mlir::Block *> clonedToOrig;
+      auto origBlockIt = origRegion.begin();
+      auto clonedBlockIt = clonedRegion.begin();
+      for (; origBlockIt != origRegion.end() &&
+             clonedBlockIt != clonedRegion.end();
+           ++origBlockIt, ++clonedBlockIt)
+        clonedToOrig[&*clonedBlockIt] = &*origBlockIt;
+      mlir::DominanceInfo domInfo(clonedRegion.getParentOp());
+      elaborateClonedBlock(&origRegion.front(), &clonedRegion.front(), &domInfo,
+                           clonedToOrig);
     };
 
     // visitRegion walks the entry block of `region`; visitBlock then
