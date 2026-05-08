@@ -22,6 +22,21 @@ find_path(GMP_INCLUDE_DIR NAMES gmp.h)
 find_library(MPFR_LIBRARY NAMES mpfr)
 find_path(MPFR_INCLUDE_DIR NAMES mpfr.h)
 
+# Try to find system MPC (used by rival-ffi via the rug crate's xmpc bindings:
+# `mpc_dot`/`mpc_sum`. These symbols are stripped from the final link in
+# Release builds via dead-code elimination, but survive in Debug builds, so
+# the executable must be linked against libmpc.)
+find_library(MPC_LIBRARY NAMES mpc)
+find_path(MPC_INCLUDE_DIR NAMES mpc.h)
+if(MPC_LIBRARY AND MPC_INCLUDE_DIR)
+    message(STATUS "Found system MPC: ${MPC_LIBRARY} (include: ${MPC_INCLUDE_DIR})")
+    add_library(MPC::MPC UNKNOWN IMPORTED GLOBAL)
+    set_target_properties(MPC::MPC PROPERTIES
+        IMPORTED_LOCATION "${MPC_LIBRARY}"
+        INTERFACE_INCLUDE_DIRECTORIES "${MPC_INCLUDE_DIR}"
+    )
+endif()
+
 if(GMP_LIBRARY AND GMP_INCLUDE_DIR AND MPFR_LIBRARY AND MPFR_INCLUDE_DIR)
     # --- Use system-provided GMP and MPFR ---
     message(STATUS "Found system GMP: ${GMP_LIBRARY} (include: ${GMP_INCLUDE_DIR})")
@@ -158,6 +173,9 @@ if(RIVAL_PREBUILT_LIB)
 
     add_library(Rival INTERFACE)
     target_link_libraries(Rival INTERFACE RivalCLib MPFR::MPFR GMP::GMP)
+    if(TARGET MPC::MPC)
+        target_link_libraries(Rival INTERFACE MPC::MPC)
+    endif()
     if(RIVAL_PREBUILT_INCLUDE)
         target_include_directories(Rival INTERFACE "${RIVAL_PREBUILT_INCLUDE}")
         message(STATUS "  Include dir: ${RIVAL_PREBUILT_INCLUDE}")
@@ -267,6 +285,9 @@ add_dependencies(RivalCLib buildRival)
 # Expose via interface library for easy consumption
 add_library(Rival INTERFACE)
 target_link_libraries(Rival INTERFACE RivalCLib MPFR::MPFR GMP::GMP)
+if(TARGET MPC::MPC)
+    target_link_libraries(Rival INTERFACE MPC::MPC)
+endif()
 target_include_directories(Rival INTERFACE "${RIVAL_SOURCE_DIR}")
 
 message(STATUS "Rival C API:")

@@ -2,8 +2,12 @@
 # This subproject extends Tamagoyaki with interval arithmetic via Rival
 
 add_subdirectory(include)
-add_subdirectory(src)
+# rival must be configured before src so that the gmp_external / mpfr_external
+# ExternalProject targets exist when src/CMakeLists.txt wires up its
+# add_dependencies() calls. Otherwise obj.herbieMLIR can compile before mpfr.h
+# has been generated.
 add_subdirectory(rival)
+add_subdirectory(src)
 
 add_subdirectory(tools)
 
