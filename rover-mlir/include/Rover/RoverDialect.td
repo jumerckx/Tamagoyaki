@@ -23,13 +23,12 @@ def RoverSaturatePass : Pass<"rover-saturate", "::mlir::ModuleOp"> {
   }];
   let dependentDialects = [
     "::mlir::func::FuncDialect",
-    "::mlir::arith::ArithDialect",
     "::mlir::equivalence::EquivalenceDialect",
     "::mlir::ematch::EmatchDialect",
     "::mlir::pdl_interp::PDLInterpDialect",
-    "::datapath::DatapathDialect",
-    // "::hw::HWDialect",
-    "::comb::CombDialect"
+    "::circt::datapath::DatapathDialect",
+    "::circt::hw::HWDialect",
+    "::circt::comb::CombDialect"
   ];
   let options = [
     Option<"maxIters", "max-iters", "int", "3",
@@ -52,12 +51,11 @@ def RoverExtractPass : Pass<"rover-extract", "::mlir::ModuleOp"> {
   }];
   let dependentDialects = [
     "::mlir::func::FuncDialect",
-    "::mlir::arith::ArithDialect",
     "::mlir::equivalence::EquivalenceDialect",
     "::mlir::pdl_interp::PDLInterpDialect",
-    "::datapath::DatapathDialect",
-    // "::hw::HWDialect",
-    "::comb::CombDialect"
+    "::circt::datapath::DatapathDialect",
+    "::circt::hw::HWDialect",
+    "::circt::comb::CombDialect"
   ];
     let options = [
     Option<"extractDelay", "delay", "bool", "false",

@@ -7,9 +7,9 @@ set(ROVER_MLIR_OPT_LIBS
   ${dialect_libs}
   ${conversion_libs}
   MLIROptLib
-  Comb
-  DatapathDialect
-  HWDialect
+  CIRCTComb
+  CIRCTHW
+  CIRCTDatapath
   RoverDialect
   MLIREquivalence
   MLIREmatch
@@ -22,13 +22,11 @@ target_include_directories(rover-mlir-opt PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/../include
   ${CMAKE_BINARY_DIR}/rover-mlir/include
   ${PROJECT_SOURCE_DIR}/include
+  ${CIRCT_INCLUDE_DIRS}
 )
 
 target_link_libraries(rover-mlir-opt PRIVATE ${ROVER_MLIR_OPT_LIBS})
 add_dependencies(rover-mlir-opt
-  MLIRCombIncGen
-  MLIRDatapathIncGen
-  MLIRHWIncGen
   MLIRRoverIncGen
   MLIREquivalenceIncGen
   MLIREmatchIncGen

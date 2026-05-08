@@ -14,11 +14,12 @@
 #include "EquivalenceDialect.h"
 #include "EquivalenceUtils.h"
 
-#include "Comb/Comb.h"
-#include "Datapath/Datapath.h"
-#include "HW/HW.h"
 #include "Rover/Rover.h"
+#include "circt/Dialect/Comb/CombDialect.h"
+#include "circt/Dialect/Datapath/DatapathDialect.h"
+#include "circt/Dialect/HW/HWDialect.h"
 
+using namespace circt;
 using namespace mlir::equivalence;
 using namespace mlir::ematch;
 

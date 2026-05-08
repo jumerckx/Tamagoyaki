@@ -38,9 +38,16 @@
         };
         lib = pkgs.lib;
 
-        # ---------- LLVM / MLIR (from circt-nix) ----------
+        # ---------- LLVM / MLIR / CIRCT (from circt-nix) ----------
         mlir = circt-nix.packages.${system}.mlir;
         libllvm = circt-nix.packages.${system}.libllvm;
+        circt = circt-nix.packages.${system}.circt.override {
+          enableSlang = false;
+          enableLLHD = false;
+          enableOrTools = false;
+          enableDocs = false;
+          withVerilator = false;
+        };
 
         # ---------- Rival (Rust) ----------
         rustToolchain = pkgs.rust-bin.stable."1.91.0".default;
@@ -126,6 +133,8 @@
           buildInputs = [
             mlir.dev
             libllvm.dev
+            circt.dev
+            circt.lib
           ]
           ++ (with pkgs; [
             gmp
@@ -136,6 +145,7 @@
           cmakeFlags = [
             "-DMLIR_DIR=${mlir.dev}/lib/cmake/mlir"
             "-DLLVM_DIR=${libllvm.dev}/lib/cmake/llvm"
+            "-DCIRCT_DIR=${circt.dev}/lib/cmake/circt"
             "-DLLVM_EXTERNAL_LIT=${pkgs.lit}/bin/lit"
             "-DRIVAL_PREBUILT_LIB=${rival-ffi}/lib/librival3_ffi.a"
             "-DRIVAL_PREBUILT_INCLUDE=${rival-ffi}/include"
@@ -167,7 +177,7 @@
       {
         packages = {
           default = tamagoyaki;
-          inherit tamagoyaki rival-ffi mlir libllvm;
+          inherit tamagoyaki rival-ffi mlir libllvm circt;
         };
 
         devShells.default = pkgs.mkShell {

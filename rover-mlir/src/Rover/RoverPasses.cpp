@@ -1,11 +1,14 @@
-#include "Comb/Comb.h"
-#include "Datapath/Datapath.h"
 #include "EmatchDialect.h"
 #include "EmatchUtils.h"
 #include "EquivalenceDialect.h"
 #include "EquivalenceUtils.h"
-#include "HW/HW.h"
 #include "Rover/Rover.h"
+#include "circt/Dialect/Comb/CombDialect.h"
+#include "circt/Dialect/Comb/CombOps.h"
+#include "circt/Dialect/Datapath/DatapathDialect.h"
+#include "circt/Dialect/Datapath/DatapathOps.h"
+#include "circt/Dialect/HW/HWDialect.h"
+#include "circt/Dialect/HW/HWOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
 #include "mlir/IR/Block.h"
@@ -42,6 +45,7 @@ namespace rover {
 
 using namespace mlir;
 using namespace mlir::equivalence;
+using namespace circt;
 
 static unsigned ceilLog2(unsigned v) {
   assert(v > 0 && "undefined for zero");
