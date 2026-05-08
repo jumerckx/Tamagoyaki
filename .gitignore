@@ -22,6 +22,7 @@ CMakeUserPresets.json
 __pycache__
 /mlir/
 build/
+build-debug/
 build-eval/
 .cache
 _deps
