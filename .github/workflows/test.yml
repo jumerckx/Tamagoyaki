@@ -2,119 +2,89 @@ name: Test
 
 on:
   pull_request:
-    branches:
-      - main
+    branches: [main]
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
-    branches:
-      - main
   schedule:
     # At minute 0 past hour 6. (see https://crontab.guru)
     - cron: "00 06 * * *"
 
 concurrency:
-  # A PR number if a pull request and otherwise the commit hash. This cancels
-  # queued and in-progress runs for the same PR (presubmit) or commit
-  # (postsubmit).
-  group: ci-build-test-${{ github.event.number || github.sha }}
+  # A PR number if a pull request, otherwise the commit hash. This
+  # cancels queued and in-progress runs for the same PR (presubmit) or
+  # commit (postsubmit).
+  group: ci-${{ github.event.number || github.sha }}
   cancel-in-progress: true
 
-env:
-  # this actually turns build isolation on!
-  # pip flags -> env variables conversion is weird...
-  PIP_NO_BUILD_ISOLATION: false
-
 jobs:
-  # format:
-  #   runs-on: ubuntu-22.04
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - name: Run clang-format style check for C/C++/Protobuf programs.
-  #       uses: jidicula/clang-format-action@v4.16.0
-
   test:
+    name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
 
     strategy:
       fail-fast: false
       matrix:
-        os: [
-            ubuntu-22.04,
-            # ubuntu-22.04-arm,
-            macos-15,
-          ]
-        py_version: ["3.13"]
-        # py_version: ["3.10", "3.11", "3.12", "3.13", "3.14", "3.14t"]
+        os:
+          - ubuntu-22.04
+          - macos-15
 
     defaults:
       run:
-        shell: bash
+        # Run every step inside the project's `nix develop` shell so that
+        # commands see the exact same toolchain/env as a local checkout.
+        shell: nix develop --command bash -e {0}
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
 
-      - name: Install Ninja
-        uses: seanmiddleditch/gha-setup-ninja@v6
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
         with:
-          version: "1.12.1"
+          # Trust the dtz-circt binary cache so CI fetches the prebuilt
+          # LLVM/MLIR/CIRCT store paths instead of rebuilding them
+          # (which would take hours). The flake already declares this
+          # substituter under `nixConfig`, but `nixConfig` only takes
+          # effect for trusted users, so we set it explicitly here too.
+          extra-conf: |
+            extra-substituters = https://dtz-circt.cachix.org
+            extra-trusted-public-keys = dtz-circt.cachix.org-1:PHe0okMASm5d9SD+UE0I0wptCy58IK8uNF9P3K7f+IU=
 
-      - name: Install GMP and MPFR (Linux)
-        if: contains(matrix.os, 'ubuntu')
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgmp-dev libmpfr-dev
+      - name: Cache /nix/store
+        # The substituter above already covers LLVM/MLIR/CIRCT. This
+        # cache is mainly there to avoid rebuilding `rival-ffi` (a
+        # locally-built Rust derivation) and to skip re-realising the
+        # dev-shell closure on every run.
+        uses: nix-community/cache-nix-action@v6
+        with:
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+          # Trim before saving so the cache stays well under GitHub's
+          # 10 GB per-repo budget.
+          gc-max-store-size-linux: 5G
+          gc-max-store-size-macos: 5G
+          purge: true
+          purge-prefixes: nix-${{ runner.os }}-
+          purge-created: 0
+          purge-primary-key: never
 
-      - name: Install GMP and MPFR (macOS)
-        if: contains(matrix.os, 'macos')
-        run: |
-          brew install gmp mpfr
-
-      - name: set ENV macos
-        if: contains(matrix.os, 'macos')
+      # Realise the dev shell up front so its build/fetch time is
+      # attributed to a clearly named step rather than the first
+      # `nix develop --command ...` we run below.
+      - name: Realise dev shell
         shell: bash
-        run: |
-          # error: 'value' is unavailable: introduced in macOS 10.13
-          echo "MACOSX_DEPLOYMENT_TARGET=$(sw_vers -productVersion)" | tee -a $GITHUB_ENV
+        run: nix develop --command true
 
-      - name: Install uv
-        uses: astral-sh/setup-uv@v6
-        with:
-          python-version: "${{ matrix.py_version }}"
+      - name: Configure
+        run: tamagoyaki-configure build
 
-      - name: Install dependencies
-        run: |
-          cat >> pyproject.toml << 'EOF'
-          required-environments = [
-              "sys_platform == 'linux' and platform_machine == 'x86_64'",
-              "sys_platform == 'darwin' and platform_machine == 'arm64'",
-          ]
-          EOF
-          uv sync
-
-      - name: Configure CMake
-        run: >-
-          uv run cmake -G Ninja
-          -DCMAKE_BUILD_TYPE=Release
-          -DCMAKE_PREFIX_PATH=$(uv run python -m mlir_wheel --root-dir)
-          -DLLVM_EXTERNAL_LIT=$(uv run which lit)
-          -DPython3_EXECUTABLE=$(uv run which python)
-          -DENABLE_HERBIE=ON
-          -B build
-          -S $PWD
-
-      - name: Build and test tamagoyaki
-        run: |
-          uv run cmake --build build --target check-tamagoyaki
-
-      - name: Build and test herbie-mlir
-        run: |
-          uv run cmake --build build --target check-herbie-mlir
+      - name: Build and test (check-all)
+        run: ninja -C build check-all
 
       - name: Upload ExternalProject logs on failure
         if: failure()
+        shell: bash
         uses: actions/upload-artifact@v4
         with:
           name: externalproject-logs-${{ matrix.os }}
