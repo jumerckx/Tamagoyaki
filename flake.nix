@@ -38,16 +38,36 @@
         };
         lib = pkgs.lib;
 
-        # ---------- LLVM / MLIR / CIRCT (from circt-nix) ----------
-        mlir = circt-nix.packages.${system}.mlir;
-        libllvm = circt-nix.packages.${system}.libllvm;
-        circt = circt-nix.packages.${system}.circt.override {
+        # ---------- LLVM / MLIR / CIRCT (Release, from circt-nix cachix) ----------
+        circtOverrides = {
           enableSlang = false;
           enableLLHD = false;
           enableOrTools = false;
           enableDocs = false;
           withVerilator = false;
         };
+
+        mlir = circt-nix.packages.${system}.mlir;
+        libllvm = circt-nix.packages.${system}.libllvm;
+        circt = circt-nix.packages.${system}.circt.override circtOverrides;
+
+        # ---------- LLVM / MLIR / CIRCT (Debug, rebuilt locally) ----------
+        # The dtz-circt cachix only carries Release artifacts, so the Debug
+        # variants below trigger a full local rebuild of LLVM and CIRCT —
+        # expect multi-hour compilation and several GB of installed libs
+        # the first time you enter `nix develop .#debug`.
+        mkDebug = drv: drv.overrideAttrs (old: {
+          cmakeBuildType = "Debug";
+          cmakeFlags = (old.cmakeFlags or [ ]) ++ [
+            "-DLLVM_ENABLE_ASSERTIONS=ON"
+          ];
+          dontStrip = true;
+          separateDebugInfo = false;
+        });
+
+        mlir-debug = mkDebug circt-nix.packages.${system}.mlir;
+        libllvm-debug = mkDebug circt-nix.packages.${system}.libllvm;
+        circt-debug = mkDebug (circt-nix.packages.${system}.circt.override circtOverrides);
 
         # ---------- Rival (Rust) ----------
         rustToolchain = pkgs.rust-bin.stable."1.91.0".default;
@@ -64,12 +84,6 @@
           hash = "sha256-fnIvGCaiHqCM+ANwfLSQMTNQXw4VAewXeXU8iWePx9Y=";
         };
 
-        # rival3-ffi static C-API library + cbindgen-generated header.
-        # The subcrate has its own Cargo.lock (it's a standalone workspace)
-        # so we point cargoRoot/buildAndTestSubdir at it. We use system
-        # GMP/MPFR instead of letting gmp-mpfr-sys vendor them, otherwise
-        # the static archive would carry duplicate copies that conflict
-        # with the system libs the C++ tool also links against.
         rival-ffi = rustPlatform.buildRustPackage {
           pname = "rival3-ffi";
           version = "unstable-2026-04-28";
@@ -83,8 +97,6 @@
 
           doCheck = false;
 
-          # Force gmp-mpfr-sys to link the system libs rather than vendor
-          # GMP/MPFR sources into the archive.
           cargoBuildFlags = [
             "--features"
             "gmp-mpfr-sys/use-system-libs"
@@ -93,7 +105,7 @@
           nativeBuildInputs = with pkgs; [
             m4
             pkg-config
-            rustPlatform.bindgenHook # libclang for gmp-mpfr-sys's bindgen
+            rustPlatform.bindgenHook
           ];
 
           buildInputs = with pkgs; [
@@ -102,9 +114,6 @@
             libmpc
           ];
 
-          # cargo's default install hook only installs binaries; for a
-          # staticlib we copy it (and the header) into $out manually.
-          # Build runs inside `rival3-ffi/`, so target/ is relative to it.
           installPhase = ''
             runHook preInstall
             mkdir -p $out/lib $out/include
@@ -115,68 +124,82 @@
           '';
         };
 
-        # ---------- Main C++/MLIR build ----------
-        tamagoyaki = pkgs.stdenv.mkDerivation {
-          pname = "tamagoyaki";
-          version = "0.1.0";
-          src = lib.cleanSource ./.;
+        # ---------- Main C++/MLIR build (parameterised) ----------
+        makeTamagoyaki =
+          { mlirPkg, libllvmPkg, circtPkg, buildType }:
+          pkgs.stdenv.mkDerivation {
+            pname = "tamagoyaki" + lib.optionalString (buildType != "Release") "-${lib.toLower buildType}";
+            version = "0.1.0";
+            src = lib.cleanSource ./.;
 
-          nativeBuildInputs = with pkgs; [
-            cmake
-            ninja
-            pkg-config
-            git
-            m4
-            lit # llvm-lit, required by add_lit_testsuite
-          ];
+            nativeBuildInputs = with pkgs; [
+              cmake
+              ninja
+              pkg-config
+              git
+              m4
+              lit
+            ];
 
-          buildInputs = [
-            mlir.dev
-            libllvm.dev
-            circt.dev
-            circt.lib
-          ]
-          ++ (with pkgs; [
-            gmp
-            mpfr
-            libmpc
-          ]);
+            buildInputs = [
+              mlirPkg.dev
+              libllvmPkg.dev
+              circtPkg.dev
+              circtPkg.lib
+            ]
+            ++ (with pkgs; [
+              gmp
+              mpfr
+              libmpc
+            ]);
 
-          cmakeFlags = [
-            "-DMLIR_DIR=${mlir.dev}/lib/cmake/mlir"
-            "-DLLVM_DIR=${libllvm.dev}/lib/cmake/llvm"
-            "-DCIRCT_DIR=${circt.dev}/lib/cmake/circt"
-            "-DLLVM_EXTERNAL_LIT=${pkgs.lit}/bin/lit"
-            "-DRIVAL_PREBUILT_LIB=${rival-ffi}/lib/librival3_ffi.a"
-            "-DRIVAL_PREBUILT_INCLUDE=${rival-ffi}/include"
-          ];
+            cmakeBuildType = buildType;
 
-          # The project's CMakeLists.txt has no install() rules for the
-          # *-opt executables, so `cmake --install` only picks up libraries.
-          # Manually copy the binaries we care about out of the build tree.
-          installPhase = ''
-            runHook preInstall
-            mkdir -p $out/bin
-            for exe in tamagoyaki-opt herbie-mlir-opt cranelift-mlir-opt rover-mlir-opt; do
-              if [ -x "bin/$exe" ]; then
-                cp "bin/$exe" "$out/bin/$exe"
-              else
-                echo "warning: expected executable bin/$exe not found in build tree" >&2
-              fi
-            done
-            runHook postInstall
-          '';
+            cmakeFlags = [
+              "-DMLIR_DIR=${mlirPkg.dev}/lib/cmake/mlir"
+              "-DLLVM_DIR=${libllvmPkg.dev}/lib/cmake/llvm"
+              "-DCIRCT_DIR=${circtPkg.dev}/lib/cmake/circt"
+              "-DLLVM_EXTERNAL_LIT=${pkgs.lit}/bin/lit"
+              "-DRIVAL_PREBUILT_LIB=${rival-ffi}/lib/librival3_ffi.a"
+              "-DRIVAL_PREBUILT_INCLUDE=${rival-ffi}/include"
+            ]
+            ++ lib.optional (buildType != "Release") "-DLLVM_ENABLE_ASSERTIONS=ON";
 
-          meta = with lib; {
-            description = "Tamagoyaki MLIR equality saturation tool";
-            platforms = platforms.unix;
+            installPhase = ''
+              runHook preInstall
+              mkdir -p $out/bin
+              for exe in tamagoyaki-opt herbie-mlir-opt cranelift-mlir-opt rover-mlir-opt; do
+                if [ -x "bin/$exe" ]; then
+                  cp "bin/$exe" "$out/bin/$exe"
+                else
+                  echo "warning: expected executable bin/$exe not found in build tree" >&2
+                fi
+              done
+              runHook postInstall
+            '';
+
+            meta = with lib; {
+              description = "Tamagoyaki MLIR equality saturation tool"
+                + lib.optionalString (buildType != "Release") " (${buildType})";
+              platforms = platforms.unix;
+            };
           };
+
+        tamagoyaki = makeTamagoyaki {
+          mlirPkg = mlir;
+          libllvmPkg = libllvm;
+          circtPkg = circt;
+          buildType = "Release";
         };
 
-        # ---------- Shell-agnostic configure wrapper ----------
-        # A real script on PATH (works from bash / zsh / fish / nushell
-        # / etc.). All nix store paths are baked in at build time, so
-        # the script does not depend on env vars set by shellHook.
+        tamagoyaki-debug = makeTamagoyaki {
+          mlirPkg = mlir-debug;
+          libllvmPkg = libllvm-debug;
+          circtPkg = circt-debug;
+          buildType = "Debug";
+        };
+
+        # ---------- Shell-agnostic configure wrapper (parameterised) ----------
         sharedLibExt = pkgs.stdenv.hostPlatform.extensions.sharedLibrary;
         cmakeIgnorePaths = lib.concatStringsSep ";" [
           "/opt/homebrew"
@@ -188,171 +211,206 @@
           "/usr/local/lib"
           "/usr/local/include"
         ];
-        cmakePrefixPath = lib.concatStringsSep ";" [
-          "${mlir.dev}"
-          "${libllvm.dev}"
-          "${circt.dev}"
-          "${pkgs.gmp.dev}"
-          "${pkgs.mpfr.dev}"
-        ];
-        # circt-nix's prebuilt LLVM was compiled with macOS deployment
-        # target 14.0. Linking it with the nixpkgs default (11.3 on
-        # 25.05) produces a flood of "object file ... was built for
-        # newer macOS version (14.0) than being linked (11.3)" warnings,
-        # so we pin our own target to match.
+
         darwinDeploymentTarget = "14.0";
         deploymentTargetFlag =
           lib.optionalString pkgs.stdenv.isDarwin
             "-DCMAKE_OSX_DEPLOYMENT_TARGET=${darwinDeploymentTarget}";
 
-        tamagoyaki-configure = pkgs.writeShellApplication {
+        makeConfigure =
+          { name, mlirPkg, libllvmPkg, circtPkg, buildType, defaultBuilddir }:
+          let
+            cmakePrefixPath = lib.concatStringsSep ";" [
+              "${mlirPkg.dev}"
+              "${libllvmPkg.dev}"
+              "${circtPkg.dev}"
+              "${pkgs.gmp.dev}"
+              "${pkgs.mpfr.dev}"
+              "${pkgs.libmpc}"
+            ];
+            extraFlags = lib.optionalString (buildType != "Release")
+              "-DLLVM_ENABLE_ASSERTIONS=ON";
+          in
+          pkgs.writeShellApplication {
+            inherit name;
+            runtimeInputs = with pkgs; [
+              cmake
+              ninja
+              lit
+              coreutils
+            ];
+            checkPhase = "";
+            text = ''
+              set -euo pipefail
+
+              builddir="''${1:-${defaultBuilddir}}"
+              if [ $# -gt 0 ]; then shift; fi
+
+              if [ ! -f CMakeLists.txt ]; then
+                echo "${name}: must be run from the project root" >&2
+                echo "  (no CMakeLists.txt in $(pwd))" >&2
+                exit 1
+              fi
+
+              echo "==> Wiping $builddir/ to discard any stale CMake cache"
+              rm -rf "$builddir"
+
+              echo "==> Configuring $builddir/ (CMAKE_BUILD_TYPE=${buildType})"
+              cmake -G Ninja \
+                -B "$builddir" -S . \
+                -DCMAKE_BUILD_TYPE=${buildType} \
+                ${extraFlags} \
+                ${deploymentTargetFlag} \
+                -DCMAKE_IGNORE_PATH="${cmakeIgnorePaths}" \
+                -DCMAKE_IGNORE_PREFIX_PATH="/opt/homebrew;/usr/local" \
+                -DCMAKE_PREFIX_PATH="${cmakePrefixPath}" \
+                -DMLIR_DIR="${mlirPkg.dev}/lib/cmake/mlir" \
+                -DLLVM_DIR="${libllvmPkg.dev}/lib/cmake/llvm" \
+                -DCIRCT_DIR="${circtPkg.dev}/lib/cmake/circt" \
+                -DLLVM_EXTERNAL_LIT="${pkgs.lit}/bin/lit" \
+                -DGMP_LIBRARY="${pkgs.gmp}/lib/libgmp${sharedLibExt}" \
+                -DGMP_INCLUDE_DIR="${pkgs.gmp.dev}/include" \
+                -DMPFR_LIBRARY="${pkgs.mpfr}/lib/libmpfr${sharedLibExt}" \
+                -DMPFR_INCLUDE_DIR="${pkgs.mpfr.dev}/include" \
+                -DMPC_LIBRARY="${pkgs.libmpc}/lib/libmpc${sharedLibExt}" \
+                -DMPC_INCLUDE_DIR="${pkgs.libmpc}/include" \
+                -DRIVAL_PREBUILT_LIB="${rival-ffi}/lib/librival3_ffi.a" \
+                -DRIVAL_PREBUILT_INCLUDE="${rival-ffi}/include" \
+                "$@"
+
+              echo ""
+              echo "Configured. Build with:"
+              echo "  ninja -C $builddir check-all"
+            '';
+          };
+
+        tamagoyaki-configure = makeConfigure {
           name = "tamagoyaki-configure";
-          runtimeInputs = with pkgs; [
-            cmake
-            ninja
-            lit
-            coreutils
-          ];
-          # shellcheck flags off our intentional quoted-but-empty
-          # deploymentTargetFlag on linux; suppress that lint.
-          checkPhase = "";
-          text = ''
-            set -euo pipefail
-
-            builddir="''${1:-build}"
-            if [ $# -gt 0 ]; then shift; fi
-
-            if [ ! -f CMakeLists.txt ]; then
-              echo "tamagoyaki-configure: must be run from the project root" >&2
-              echo "  (no CMakeLists.txt in $(pwd))" >&2
-              exit 1
-            fi
-
-            echo "==> Wiping $builddir/ to discard any stale CMake cache"
-            rm -rf "$builddir"
-
-            echo "==> Configuring $builddir/"
-            cmake -G Ninja \
-              -B "$builddir" -S . \
-              -DCMAKE_BUILD_TYPE=Release \
-              ${deploymentTargetFlag} \
-              -DCMAKE_IGNORE_PATH="${cmakeIgnorePaths}" \
-              -DCMAKE_IGNORE_PREFIX_PATH="/opt/homebrew;/usr/local" \
-              -DCMAKE_PREFIX_PATH="${cmakePrefixPath}" \
-              -DMLIR_DIR="${mlir.dev}/lib/cmake/mlir" \
-              -DLLVM_DIR="${libllvm.dev}/lib/cmake/llvm" \
-              -DCIRCT_DIR="${circt.dev}/lib/cmake/circt" \
-              -DLLVM_EXTERNAL_LIT="${pkgs.lit}/bin/lit" \
-              -DGMP_LIBRARY="${pkgs.gmp}/lib/libgmp${sharedLibExt}" \
-              -DGMP_INCLUDE_DIR="${pkgs.gmp.dev}/include" \
-              -DMPFR_LIBRARY="${pkgs.mpfr}/lib/libmpfr${sharedLibExt}" \
-              -DMPFR_INCLUDE_DIR="${pkgs.mpfr.dev}/include" \
-              -DRIVAL_PREBUILT_LIB="${rival-ffi}/lib/librival3_ffi.a" \
-              -DRIVAL_PREBUILT_INCLUDE="${rival-ffi}/include" \
-              "$@"
-
-            echo ""
-            echo "Configured. Build with:"
-            echo "  ninja -C $builddir check-all"
-          '';
+          mlirPkg = mlir;
+          libllvmPkg = libllvm;
+          circtPkg = circt;
+          buildType = "Release";
+          defaultBuilddir = "build";
         };
+
+        tamagoyaki-configure-debug = makeConfigure {
+          name = "tamagoyaki-configure-debug";
+          mlirPkg = mlir-debug;
+          libllvmPkg = libllvm-debug;
+          circtPkg = circt-debug;
+          buildType = "Debug";
+          defaultBuilddir = "build-debug";
+        };
+
+        # ---------- Dev shell (parameterised) ----------
+        makeShell =
+          { name, mlirPkg, libllvmPkg, circtPkg, tamagoyakiPkg, configurePkg, buildType, banner }:
+          pkgs.mkShell {
+            inherit name;
+            inputsFrom = [ tamagoyakiPkg ];
+
+            mlir = mlirPkg;
+            libllvm = libllvmPkg;
+            circt = circtPkg;
+
+            packages = (with pkgs; [
+              rustToolchain
+              racket-minimal
+              flex
+              bison
+              gmp
+              mpfr
+              libmpc
+              fontconfig
+              cairo
+              pango
+              libjpeg
+              libpng
+              zlib
+              uv
+              lit
+              cmake
+              ninja
+              pkg-config
+            ]) ++ [ configurePkg ];
+
+            MLIR_DIR = "${mlirPkg.dev}/lib/cmake/mlir";
+            LLVM_DIR = "${libllvmPkg.dev}/lib/cmake/llvm";
+            CIRCT_DIR = "${circtPkg.dev}/lib/cmake/circt";
+            GMP_PREFIX = "${pkgs.gmp}";
+            GMP_DEV    = "${pkgs.gmp.dev}";
+            MPFR_PREFIX = "${pkgs.mpfr}";
+            MPFR_DEV    = "${pkgs.mpfr.dev}";
+            RIVAL_PREBUILT_LIB = "${rival-ffi}/lib/librival3_ffi.a";
+            RIVAL_PREBUILT_INCLUDE = "${rival-ffi}/include";
+            TAMAGOYAKI_BUILD_TYPE = buildType;
+
+            RACKET_FFI_LIB_PATH = lib.makeLibraryPath (
+              with pkgs;
+              [
+                stdenv.cc.cc.lib
+                gmp
+                mpfr
+                fontconfig
+                cairo
+                pango
+                glib
+                freetype
+                fribidi
+                pixman
+                expat
+                libjpeg
+                libpng
+                zlib
+              ]
+            );
+
+            shellHook = ''
+              case "$(uname)" in
+                Darwin)
+                  export DYLD_FALLBACK_LIBRARY_PATH="$RACKET_FFI_LIB_PATH''${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
+                  export MACOSX_DEPLOYMENT_TARGET="${darwinDeploymentTarget}"
+                  ;;
+                *)
+                  export LD_LIBRARY_PATH="$RACKET_FFI_LIB_PATH''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+                  ;;
+              esac
+
+              unset PYTHONPATH
+
+              ${banner}
+            '';
+          };
 
       in
       {
         packages = {
           default = tamagoyaki;
-          inherit tamagoyaki rival-ffi mlir libllvm circt tamagoyaki-configure;
+          inherit
+            tamagoyaki
+            tamagoyaki-debug
+            rival-ffi
+            mlir
+            libllvm
+            circt
+            mlir-debug
+            libllvm-debug
+            circt-debug
+            tamagoyaki-configure
+            tamagoyaki-configure-debug
+            ;
         };
 
-        devShells.default = pkgs.mkShell {
+        devShells.default = makeShell {
           name = "tamagoyaki-eval";
-          inputsFrom = [ tamagoyaki ];
-
-          # Expose the prebuilt CIRCT/MLIR/LLVM packages so they're
-          # readily available for ad-hoc commands inside the shell.
-          inherit circt mlir libllvm;
-
-          packages = (with pkgs; [
-            rustToolchain
-            racket-minimal
-            flex
-            bison
-            gmp
-            mpfr
-            fontconfig
-            cairo
-            pango
-            libjpeg
-            libpng
-            zlib
-            uv
-            lit
-            cmake
-            ninja
-            pkg-config
-          ]) ++ [
-            # Shell-agnostic configure helper (works from bash/zsh/fish/…).
-            tamagoyaki-configure
-          ];
-
-          # Exposed for ad-hoc use; the configure wrapper below is the
-          # supported entry point because CMake does not honour most of
-          # these as environment variables (only CMAKE_PREFIX_PATH).
-          MLIR_DIR = "${mlir.dev}/lib/cmake/mlir";
-          LLVM_DIR = "${libllvm.dev}/lib/cmake/llvm";
-          CIRCT_DIR = "${circt.dev}/lib/cmake/circt";
-          GMP_PREFIX = "${pkgs.gmp}";
-          GMP_DEV    = "${pkgs.gmp.dev}";
-          MPFR_PREFIX = "${pkgs.mpfr}";
-          MPFR_DEV    = "${pkgs.mpfr.dev}";
-          RIVAL_PREBUILT_LIB = "${rival-ffi}/lib/librival3_ffi.a";
-          RIVAL_PREBUILT_INCLUDE = "${rival-ffi}/include";
-
-          RACKET_FFI_LIB_PATH = lib.makeLibraryPath (
-            with pkgs;
-            [
-              stdenv.cc.cc.lib
-              gmp
-              mpfr
-              fontconfig
-              cairo
-              pango
-              glib
-              freetype
-              fribidi
-              pixman
-              expat
-              libjpeg
-              libpng
-              zlib
-            ]
-          );
-
-          # POSIX-only shellHook: every meaningful behaviour (CMake
-          # cache vars, ignore paths, deployment target) is baked into
-          # the `tamagoyaki-configure` script, so this hook only sets
-          # env vars that need to propagate to the eventual user shell
-          # (bash / zsh / fish / nushell / ...). `nix develop` itself
-          # always runs this hook in bash before launching the user
-          # shell, so plain POSIX assignments are fine.
-          shellHook = ''
-            case "$(uname)" in
-              Darwin)
-                export DYLD_FALLBACK_LIBRARY_PATH="$RACKET_FFI_LIB_PATH''${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
-                # Match the deployment target circt-nix's prebuilt LLVM
-                # was built with, so ld doesn't complain that the LLVM
-                # archives target a newer macOS than what we're linking.
-                export MACOSX_DEPLOYMENT_TARGET="${darwinDeploymentTarget}"
-                ;;
-              *)
-                export LD_LIBRARY_PATH="$RACKET_FFI_LIB_PATH''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-                ;;
-            esac
-
-            # Don't let the system Python interfere with uv-managed envs.
-            unset PYTHONPATH
-
-            echo "tamagoyaki eval shell ready"
+          mlirPkg = mlir;
+          libllvmPkg = libllvm;
+          circtPkg = circt;
+          tamagoyakiPkg = tamagoyaki;
+          configurePkg = tamagoyaki-configure;
+          buildType = "Release";
+          banner = ''
+            echo "tamagoyaki eval shell ready (Release)"
             echo "  uv     : $(uv --version)"
             echo "  cargo  : $(cargo --version)"
             echo "  cmake  : $(cmake --version | head -1)"
@@ -364,6 +422,31 @@
             echo "Configure & build with:"
             echo "  tamagoyaki-configure          # works from bash / zsh / fish / nushell"
             echo "  ninja -C build check-all      # build & run all test suites"
+          '';
+        };
+
+        devShells.debug = makeShell {
+          name = "tamagoyaki-eval-debug";
+          mlirPkg = mlir-debug;
+          libllvmPkg = libllvm-debug;
+          circtPkg = circt-debug;
+          tamagoyakiPkg = tamagoyaki-debug;
+          configurePkg = tamagoyaki-configure-debug;
+          buildType = "Debug";
+          banner = ''
+            echo "tamagoyaki eval shell ready (DEBUG — full LLVM/MLIR/CIRCT debug build)"
+            echo ""
+            echo "  uv     : $(uv --version)"
+            echo "  cargo  : $(cargo --version)"
+            echo "  cmake  : $(cmake --version | head -1)"
+            echo "  lit    : $(command -v lit)"
+            echo "  MLIR   : $MLIR_DIR"
+            echo "  LLVM   : $LLVM_DIR"
+            echo "  CIRCT  : $CIRCT_DIR"
+            echo ""
+            echo "Configure & build with:"
+            echo "  tamagoyaki-configure-debug              # defaults to build-debug/"
+            echo "  ninja -C build-debug check-all"
           '';
         };
       }
