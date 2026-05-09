@@ -58,6 +58,7 @@ jobs:
           extra-conf: |
             extra-substituters = https://dtz-circt.cachix.org
             extra-trusted-public-keys = dtz-circt.cachix.org-1:PHe0okMASm5d9SD+UE0I0wptCy58IK8uNF9P3K7f+IU=
+            accept-flake-config = true
 
       - name: Magic Nix Cache
         uses: DeterminateSystems/magic-nix-cache-action@main
