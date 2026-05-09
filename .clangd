@@ -1,35 +1,8 @@
+---
 # Clangd configuration
-# ====================
-#
-# IMPORTANT: Nix-wrapped compilers don't expose their internal include paths
-# to clangd easily. If you see missing standard library or MLIR headers:
-#
-# 1. Ensure you have run `tamagoyaki-configure-debug` or `tamagoyaki-configure`.
-# 2. Add `--query-driver=/nix/store/*/bin/g++` to your editor's clangd arguments.
-#    (e.g., in VSCode: "clangd.arguments": ["--query-driver=/nix/store/*/bin/g++"])
-#
-# This file provides fallbacks but --query-driver is the most robust solution.
-
 Diagnostics:
   UnusedIncludes: Strict
   MissingIncludes: Strict
 
 CompileFlags:
-  # CompilationDatabase: build # Handled by symlink in root
-  Add:
-    - "-I/home/jumerckx/Tamagoyaki/include"
-    - "-I/home/jumerckx/Tamagoyaki/build-debug/include"
-    - "-I/home/jumerckx/Tamagoyaki/build/include"
-    - "-I/nix/store/shyzx2dpiw52r0dmn7wkqvc4gykfjv0d-mlir-23.0.0-20260312_7cb3005-dev/include"
-    - "-I/nix/store/cc20x5p04b46i275lybxg8jnr3pc4166-llvm-23.0.0-20260312_7cb3005-dev/include"
-    - "-I/nix/store/r0csxp6vq1yiqpr8ygq5s23bk8z93dy2-circt-1.144.0g20260331_5dc62fe-dev/include"
-    - "-isystem"
-    - "/nix/store/y28c83zz73yr4vwz1fsl4nsrn6yz5fj0-gcc-14.3.0/include/c++/14.3.0"
-    - "-isystem"
-    - "/nix/store/y28c83zz73yr4vwz1fsl4nsrn6yz5fj0-gcc-14.3.0/include/c++/14.3.0/x86_64-unknown-linux-gnu"
-    - "-D__STDC_CONSTANT_MACROS"
-    - "-D__STDC_FORMAT_MACROS"
-    - "-D__STDC_LIMIT_MACROS"
-
-Index:
-  Background: Build
+  CompilationDatabase: build
