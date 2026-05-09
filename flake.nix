@@ -65,9 +65,19 @@
           separateDebugInfo = false;
         });
 
-        mlir-debug = mkDebug circt-nix.packages.${system}.mlir;
-        libllvm-debug = mkDebug circt-nix.packages.${system}.libllvm;
-        circt-debug = mkDebug (circt-nix.packages.${system}.circt.override circtOverrides);
+        libllvm-debug = mkDebug libllvm;
+
+        mlir-debug = (mkDebug mlir).overrideAttrs (old: {
+          # Ensure we use the debug version of LLVM
+          buildInputs = [ libllvm-debug.dev ]
+            ++ (lib.filter (x: x != libllvm && x != libllvm.dev && x != libllvm.lib && x != libllvm.out) (old.buildInputs or [ ]));
+        });
+
+        circt-debug = (mkDebug (circt-nix.packages.${system}.circt.override circtOverrides)).overrideAttrs (old: {
+          # Ensure we use debug versions of MLIR and LLVM
+          buildInputs = [ mlir-debug.dev libllvm-debug.dev ]
+            ++ (lib.filter (x: x != mlir && x != mlir.dev && x != mlir.out && x != libllvm && x != libllvm.dev && x != libllvm.lib && x != libllvm.out) (old.buildInputs or [ ]));
+        });
 
         # ---------- Rival (Rust) ----------
         rustToolchain = pkgs.rust-bin.stable."1.91.0".default;
@@ -154,6 +164,7 @@
             ]);
 
             cmakeBuildType = buildType;
+            dontStrip = buildType != "Release";
 
             cmakeFlags = [
               "-DMLIR_DIR=${mlirPkg.dev}/lib/cmake/mlir"
@@ -281,6 +292,12 @@
               echo ""
               echo "Configured. Build with:"
               echo "  ninja -C $builddir check-all"
+
+              # Symlink compile_commands.json to root for editor support
+              if [ -f "$builddir/compile_commands.json" ]; then
+                echo "==> Symlinking $builddir/compile_commands.json to root"
+                ln -sf "$builddir/compile_commands.json" .
+              fi
             '';
           };
 
