@@ -1,5 +1,5 @@
 {
-  description = "Tamagoyaki – reproducible evaluation environment";
+  description = "Nix flake for building Tamagoyaki and related tools (herbie-mlir, rover-mlir, cranelift-mlir)";
 
   nixConfig = {
     extra-substituters = [ "https://dtz-circt.cachix.org" ];
@@ -127,7 +127,7 @@
             pkg-config
             git
             m4
-            lit # llvm-lit, required by add_lit_testsuite
+            lit
           ];
 
           buildInputs = [
@@ -178,16 +178,6 @@
         # / etc.). All nix store paths are baked in at build time, so
         # the script does not depend on env vars set by shellHook.
         sharedLibExt = pkgs.stdenv.hostPlatform.extensions.sharedLibrary;
-        cmakeIgnorePaths = lib.concatStringsSep ";" [
-          "/opt/homebrew"
-          "/opt/homebrew/bin"
-          "/opt/homebrew/lib"
-          "/opt/homebrew/include"
-          "/usr/local"
-          "/usr/local/bin"
-          "/usr/local/lib"
-          "/usr/local/include"
-        ];
         cmakePrefixPath = lib.concatStringsSep ";" [
           "${mlir.dev}"
           "${libllvm.dev}"
@@ -195,15 +185,6 @@
           "${pkgs.gmp.dev}"
           "${pkgs.mpfr.dev}"
         ];
-        # circt-nix's prebuilt LLVM was compiled with macOS deployment
-        # target 14.0. Linking it with the nixpkgs default (11.3 on
-        # 25.05) produces a flood of "object file ... was built for
-        # newer macOS version (14.0) than being linked (11.3)" warnings,
-        # so we pin our own target to match.
-        darwinDeploymentTarget = "14.0";
-        deploymentTargetFlag =
-          lib.optionalString pkgs.stdenv.isDarwin
-            "-DCMAKE_OSX_DEPLOYMENT_TARGET=${darwinDeploymentTarget}";
 
         tamagoyaki-configure = pkgs.writeShellApplication {
           name = "tamagoyaki-configure";
@@ -235,9 +216,6 @@
             cmake -G Ninja \
               -B "$builddir" -S . \
               -DCMAKE_BUILD_TYPE=Release \
-              ${deploymentTargetFlag} \
-              -DCMAKE_IGNORE_PATH="${cmakeIgnorePaths}" \
-              -DCMAKE_IGNORE_PREFIX_PATH="/opt/homebrew;/usr/local" \
               -DCMAKE_PREFIX_PATH="${cmakePrefixPath}" \
               -DMLIR_DIR="${mlir.dev}/lib/cmake/mlir" \
               -DLLVM_DIR="${libllvm.dev}/lib/cmake/llvm" \
@@ -328,21 +306,10 @@
             ]
           );
 
-          # POSIX-only shellHook: every meaningful behaviour (CMake
-          # cache vars, ignore paths, deployment target) is baked into
-          # the `tamagoyaki-configure` script, so this hook only sets
-          # env vars that need to propagate to the eventual user shell
-          # (bash / zsh / fish / nushell / ...). `nix develop` itself
-          # always runs this hook in bash before launching the user
-          # shell, so plain POSIX assignments are fine.
           shellHook = ''
             case "$(uname)" in
               Darwin)
                 export DYLD_FALLBACK_LIBRARY_PATH="$RACKET_FFI_LIB_PATH''${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
-                # Match the deployment target circt-nix's prebuilt LLVM
-                # was built with, so ld doesn't complain that the LLVM
-                # archives target a newer macOS than what we're linking.
-                export MACOSX_DEPLOYMENT_TARGET="${darwinDeploymentTarget}"
                 ;;
               *)
                 export LD_LIBRARY_PATH="$RACKET_FFI_LIB_PATH''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -362,7 +329,7 @@
             echo "  CIRCT  : $CIRCT_DIR  (required by rover-mlir)"
             echo ""
             echo "Configure & build with:"
-            echo "  tamagoyaki-configure          # works from bash / zsh / fish / nushell"
+            echo "  tamagoyaki-configure"
             echo "  ninja -C build check-all      # build & run all test suites"
           '';
         };
