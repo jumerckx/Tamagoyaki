@@ -3,6 +3,3 @@
 Diagnostics:
   UnusedIncludes: Strict
   MissingIncludes: Strict
-
-CompileFlags:
-  CompilationDatabase: build
