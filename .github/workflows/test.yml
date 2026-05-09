@@ -22,6 +22,12 @@ jobs:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
 
+    permissions:
+      # Required by magic-nix-cache-action to talk to the GitHub
+      # Actions cache service.
+      id-token: write
+      contents: read
+
     strategy:
       fail-fast: false
       matrix:
@@ -42,39 +48,19 @@ jobs:
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
         with:
-          # Trust the dtz-circt binary cache so CI fetches the prebuilt
-          # LLVM/MLIR/CIRCT store paths instead of rebuilding them
-          # (which would take hours). The flake already declares this
-          # substituter under `nixConfig`, but `nixConfig` only takes
-          # effect for trusted users, so we set it explicitly here too.
+          # Add the dtz-circt substituter to the system nix.conf as a
+          # *trusted* substituter. This both (a) lets CI fetch prebuilt
+          # LLVM/MLIR/CIRCT instead of rebuilding them, and (b) silences
+          # the "ignoring untrusted flake configuration setting" warning
+          # we'd otherwise get from the flake's own `nixConfig`, since
+          # the substituter is now accepted at the system level rather
+          # than only via the (untrusted) flake.
           extra-conf: |
             extra-substituters = https://dtz-circt.cachix.org
             extra-trusted-public-keys = dtz-circt.cachix.org-1:PHe0okMASm5d9SD+UE0I0wptCy58IK8uNF9P3K7f+IU=
 
-      - name: Cache /nix/store
-        # The substituter above already covers LLVM/MLIR/CIRCT. This
-        # cache is mainly there to avoid rebuilding `rival-ffi` (a
-        # locally-built Rust derivation) and to skip re-realising the
-        # dev-shell closure on every run.
-        uses: nix-community/cache-nix-action@v6
-        with:
-          primary-key: nix-${{ runner.os }}-${{ hashFiles('flake.lock', 'flake.nix') }}
-          restore-prefixes-first-match: nix-${{ runner.os }}-
-          # Trim before saving so the cache stays well under GitHub's
-          # 10 GB per-repo budget.
-          gc-max-store-size-linux: 5G
-          gc-max-store-size-macos: 5G
-          purge: true
-          purge-prefixes: nix-${{ runner.os }}-
-          purge-created: 0
-          purge-primary-key: never
-
-      # Realise the dev shell up front so its build/fetch time is
-      # attributed to a clearly named step rather than the first
-      # `nix develop --command ...` we run below.
-      - name: Realise dev shell
-        shell: bash
-        run: nix develop --command true
+      - name: Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
 
       - name: Configure
         run: tamagoyaki-configure build
