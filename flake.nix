@@ -185,6 +185,15 @@
           "${pkgs.gmp.dev}"
           "${pkgs.mpfr.dev}"
         ];
+        # circt-nix's prebuilt LLVM was compiled with macOS deployment
+        # target 14.0. Linking it with the nixpkgs default (11.3 on
+        # 25.05) produces a flood of "object file ... was built for
+        # newer macOS version (14.0) than being linked (11.3)" warnings,
+        # so we pin our own target to match.
+        darwinDeploymentTarget = "14.0";
+        deploymentTargetFlag =
+          lib.optionalString pkgs.stdenv.isDarwin
+            "-DCMAKE_OSX_DEPLOYMENT_TARGET=${darwinDeploymentTarget}";
 
         tamagoyaki-configure = pkgs.writeShellApplication {
           name = "tamagoyaki-configure";
@@ -216,6 +225,7 @@
             cmake -G Ninja \
               -B "$builddir" -S . \
               -DCMAKE_BUILD_TYPE=Release \
+              ${deploymentTargetFlag} \
               -DCMAKE_PREFIX_PATH="${cmakePrefixPath}" \
               -DMLIR_DIR="${mlir.dev}/lib/cmake/mlir" \
               -DLLVM_DIR="${libllvm.dev}/lib/cmake/llvm" \
@@ -310,6 +320,7 @@
             case "$(uname)" in
               Darwin)
                 export DYLD_FALLBACK_LIBRARY_PATH="$RACKET_FFI_LIB_PATH''${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
+                export MACOSX_DEPLOYMENT_TARGET="${darwinDeploymentTarget}"
                 ;;
               *)
                 export LD_LIBRARY_PATH="$RACKET_FFI_LIB_PATH''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
