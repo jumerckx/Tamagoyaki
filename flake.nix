@@ -57,6 +57,12 @@
           enableAssertions = false;   # → -DLLVM_ENABLE_ASSERTIONS=OFF
           # hostOnly defaults to true; explicit for clarity.
           hostOnly = true;
+          # Build & link against a single libLLVM.so. This collapses
+          # every LLVM/MLIR tool (mlir-opt, llc, etc.) from hundreds of
+          # MB of statically-linked binary down to a few MB that just
+          # dlopen libLLVM.so — the dominant slimming for the cached
+          # closure. Sets LLVM_BUILD_LLVM_DYLIB=ON + LLVM_LINK_LLVM_DYLIB=ON.
+          enableSharedLibraries = true;
         }).overrideAttrs (old: {
           cmakeFlags = (old.cmakeFlags or []) ++ extraLlvmCmakeFlags;
         });
@@ -64,6 +70,8 @@
         mlir = (circt-nix.packages.${system}.mlir.override {
           enableAssertions = false;
           hostOnly = true;
+          # Same reasoning as libllvm above; applied to the MLIR tools.
+          enableSharedLibraries = true;
         }).overrideAttrs (old: {
           cmakeFlags = (old.cmakeFlags or []) ++ [
             "-DLLVM_INCLUDE_TESTS=OFF"
