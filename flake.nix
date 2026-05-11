@@ -1,13 +1,6 @@
 {
   description = "Nix flake for building Tamagoyaki and related tools (herbie-mlir, rover-mlir, cranelift-mlir)";
 
-  nixConfig = {
-    extra-substituters = [ "https://dtz-circt.cachix.org" ];
-    extra-trusted-public-keys = [
-      "dtz-circt.cachix.org-1:PHe0okMASm5d9SD+UE0I0wptCy58IK8uNF9P3K7f+IU="
-    ];
-  };
-
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
     flake-utils.url = "github:numtide/flake-utils";
@@ -38,40 +31,66 @@
         };
         lib = pkgs.lib;
 
-        # 1. Shrunken LLVM
-                libllvm = circt-nix.packages.${system}.libllvm.overrideAttrs (old: {
-                  cmakeFlags = (old.cmakeFlags or []) ++ [
-                    "-DBUILD_SHARED_LIBS=ON"
-                    "-DLLVM_TARGETS_TO_BUILD=host"
-                    "-DCMAKE_BUILD_TYPE=Release"
-                  ];
-                });
+        # ---------- Slimmed LLVM/MLIR from circt-nix ----------
+        extraLlvmCmakeFlags = [
+          # LLVM_TARGETS_TO_BUILD=host is already on by default
+          # (hostOnly = true in circt-nix/llvm.nix), no need to repeat.
+          "-DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD="
+
+          # Strip the fat
+          "-DLLVM_ENABLE_BACKTRACES=OFF"
+          "-DLLVM_INCLUDE_BENCHMARKS=OFF"
+          "-DLLVM_INCLUDE_EXAMPLES=OFF"
+          "-DLLVM_INCLUDE_TESTS=OFF"
+          "-DLLVM_INCLUDE_DOCS=OFF"
+          "-DLLVM_BUILD_DOCS=OFF"
+          "-DLLVM_ENABLE_OCAMLDOC=OFF"
+          "-DLLVM_ENABLE_BINDINGS=OFF"
+          "-DLLVM_ENABLE_TERMINFO=OFF"
+          "-DLLVM_ENABLE_LIBXML2=OFF"
+          "-DLLVM_ENABLE_ZSTD=OFF"
+          "-DLLVM_ENABLE_LIBEDIT=OFF"
+          "-DLLVM_INSTALL_UTILS=OFF"
+        ];
+
+        libllvm = (circt-nix.packages.${system}.libllvm.override {
+          enableAssertions = false;   # → -DLLVM_ENABLE_ASSERTIONS=OFF
+          # hostOnly defaults to true; explicit for clarity.
+          hostOnly = true;
+        }).overrideAttrs (old: {
+          cmakeFlags = (old.cmakeFlags or []) ++ extraLlvmCmakeFlags;
+        });
+
+        mlir = (circt-nix.packages.${system}.mlir.override {
+          enableAssertions = false;
+          hostOnly = true;
+        }).overrideAttrs (old: {
+          cmakeFlags = (old.cmakeFlags or []) ++ [
+            "-DLLVM_INCLUDE_TESTS=OFF"
+            "-DMLIR_INCLUDE_TESTS=OFF"
+            "-DMLIR_INCLUDE_INTEGRATION_TESTS=OFF"
+          ];
+        });
         
-                # 2. Shrunken MLIR (No hacky buildInputs manipulation!)
-                mlir = circt-nix.packages.${system}.mlir.overrideAttrs (old: {
-                  cmakeFlags = (old.cmakeFlags or []) ++ [
-                    "-DBUILD_SHARED_LIBS=ON"
-                    "-DLLVM_TARGETS_TO_BUILD=host"
-                    "-DCMAKE_BUILD_TYPE=Release"
-                  ];
-                });
+        circt = (circt-nix.packages.${system}.circt.override {
+          # Rebuild circt against our slimmed libllvm/mlir so the
+          # closure doesn't end up with two copies of LLVM/MLIR.
+          inherit libllvm mlir;
+          enableSlang   = false;
+          enableLLHD    = false;
+          enableOrTools = false;
+          enableDocs    = false;
+          enableAssertions = false;
+          withVerilator = false;
+        }).overrideAttrs (old: {
+          cmakeFlags = (old.cmakeFlags or []) ++ [
+            "-DCIRCT_INCLUDE_TESTS=OFF"
+          ];
+          doCheck = false;
+        });
         
-                # 3. Shrunken CIRCT
-                circt = (circt-nix.packages.${system}.circt.override {
-                  enableSlang     = false;
-                  enableLLHD      = false;
-                  enableOrTools   = false;
-                  enableDocs      = false;
-                  withVerilator   = false;
-                  mlir            = mlir; # Cleanly inject custom MLIR
-                }).overrideAttrs (old: {
-                  cmakeFlags = (old.cmakeFlags or []) ++ [
-                    "-DBUILD_SHARED_LIBS=ON"
-                    "-DCMAKE_BUILD_TYPE=Release"
-                  ];
-                });        
         # ---------- Rival (Rust) ----------
-        rustToolchain = pkgs.rust-bin.stable."1.91.0".default;
+        rustToolchain = pkgs.rust-bin.stable."1.91.0".minimal;
 
         rustPlatform = pkgs.makeRustPlatform {
           cargo = rustToolchain;
@@ -153,23 +172,19 @@
 
           buildInputs = [
             mlir.dev
-            libllvm.dev
+            libllvm.dev      # ← put it back
             circt.dev
             circt.lib
-          ]
-          ++ (with pkgs; [
-            gmp
-            mpfr
-            libmpc
-          ]);
-
+          ] ++ (with pkgs; [ gmp mpfr libmpc ]);
+          
           cmakeFlags = [
             "-DMLIR_DIR=${mlir.dev}/lib/cmake/mlir"
-            "-DLLVM_DIR=${libllvm.dev}/lib/cmake/llvm"
+            "-DLLVM_DIR=${libllvm.dev}/lib/cmake/llvm"   # ← real path now
             "-DCIRCT_DIR=${circt.dev}/lib/cmake/circt"
             "-DLLVM_EXTERNAL_LIT=${pkgs.lit}/bin/lit"
             "-DRIVAL_PREBUILT_LIB=${rival-ffi}/lib/librival3_ffi.a"
             "-DRIVAL_PREBUILT_INCLUDE=${rival-ffi}/include"
+            "-DBUILD_SHARED_LIBS=ON"
           ];
 
           # The project's CMakeLists.txt has no install() rules for the
@@ -270,7 +285,7 @@
       {
         packages = {
           default = tamagoyaki;
-          inherit tamagoyaki rival-ffi mlir libllvm circt tamagoyaki-configure;
+          inherit tamagoyaki rival-ffi mlir circt tamagoyaki-configure;
         };
 
         devShells.default = pkgs.mkShell {
@@ -279,7 +294,7 @@
 
           # Expose the prebuilt CIRCT/MLIR/LLVM packages so they're
           # readily available for ad-hoc commands inside the shell.
-          inherit circt mlir libllvm;
+          inherit circt mlir;
 
           packages = (with pkgs; [
             rustToolchain
@@ -307,8 +322,8 @@
           # Exposed for ad-hoc use; the configure wrapper below is the
           # supported entry point because CMake does not honour most of
           # these as environment variables (only CMAKE_PREFIX_PATH).
-          MLIR_DIR = "${mlir.dev}/lib/cmake/mlir";
-          LLVM_DIR = "${libllvm.dev}/lib/cmake/llvm";
+          MLIR_DIR  = "${mlir.dev}/lib/cmake/mlir";
+          LLVM_DIR  = "${libllvm.dev}/lib/cmake/llvm";
           CIRCT_DIR = "${circt.dev}/lib/cmake/circt";
           GMP_PREFIX = "${pkgs.gmp}";
           GMP_DEV    = "${pkgs.gmp.dev}";
