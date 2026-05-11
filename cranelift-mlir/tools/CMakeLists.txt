@@ -28,3 +28,10 @@ add_dependencies(cranelift-mlir-opt
   MLIREmatchIncGen
 )
 mlir_check_all_link_libraries(cranelift-mlir-opt)
+
+# ============================================================================
+# Install Rules
+# ============================================================================
+install(TARGETS cranelift-mlir-opt
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)

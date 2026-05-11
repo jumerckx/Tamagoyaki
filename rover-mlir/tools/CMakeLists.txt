@@ -32,3 +32,10 @@ add_dependencies(rover-mlir-opt
   MLIREmatchIncGen
 )
 mlir_check_all_link_libraries(rover-mlir-opt)
+
+# ============================================================================
+# Install Rules
+# ============================================================================
+install(TARGETS rover-mlir-opt
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)

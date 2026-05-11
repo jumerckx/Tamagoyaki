@@ -23,10 +23,13 @@ add_mlir_library(RoverDialect
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRPass
+  MLIRParser
   MLIRTransforms
   MLIRFuncDialect
   MLIRArithDialect
   MLIRAnalysis
+  MLIREquivalence
+  MLIREmatch
   CIRCTComb
   CIRCTHW
   CIRCTDatapath
@@ -37,3 +40,12 @@ target_include_directories(RoverDialect PUBLIC ${CMAKE_BINARY_DIR}/rover-mlir/in
 target_include_directories(RoverDialect PUBLIC ${ROVER_MLIR_INCLUDE_DIR})
 target_include_directories(RoverDialect PUBLIC ${CMAKE_BINARY_DIR}/rover-mlir/include)
 target_include_directories(RoverDialect PUBLIC ${CIRCT_INCLUDE_DIRS})
+
+# ============================================================================
+# Install Rules
+# ============================================================================
+install(TARGETS RoverDialect
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)

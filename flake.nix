@@ -50,7 +50,13 @@
           "-DLLVM_ENABLE_LIBXML2=OFF"
           "-DLLVM_ENABLE_ZSTD=OFF"
           "-DLLVM_ENABLE_LIBEDIT=OFF"
-          "-DLLVM_INSTALL_UTILS=OFF"
+          # NOTE: LLVM_INSTALL_UTILS is left at its default (ON) so the lit
+          # helpers (FileCheck, count, not) end up in $out/bin. Our test
+          # suites in cranelift-mlir/, herbie_mlir/ and test/ invoke them
+          # via lit's config.llvm_tools_dir, which resolves to
+          # ${LLVM_DIR}/../../bin. With INSTALL_UTILS=OFF those binaries
+          # are built but never copied to the install prefix, so lit
+          # aborts with "Did not find FileCheck".
         ];
 
         libllvm = (circt-nix.packages.${system}.libllvm.override {
@@ -194,22 +200,6 @@
             "-DRIVAL_PREBUILT_INCLUDE=${rival-ffi}/include"
             "-DBUILD_SHARED_LIBS=ON"
           ];
-
-          # The project's CMakeLists.txt has no install() rules for the
-          # *-opt executables, so `cmake --install` only picks up libraries.
-          # Manually copy the binaries we care about out of the build tree.
-          installPhase = ''
-            runHook preInstall
-            mkdir -p $out/bin
-            for exe in tamagoyaki-opt herbie-mlir-opt cranelift-mlir-opt rover-mlir-opt; do
-              if [ -x "bin/$exe" ]; then
-                cp "bin/$exe" "$out/bin/$exe"
-              else
-                echo "warning: expected executable bin/$exe not found in build tree" >&2
-              fi
-            done
-            runHook postInstall
-          '';
 
           meta = with lib; {
             description = "Tamagoyaki MLIR equality saturation tool";

@@ -19,6 +19,7 @@ add_mlir_dialect_library(MLIREquivalence
   MLIRFuncDialect
   MLIRRegisterAllDialects
   MLIRRegisterAllPasses
+  TamagoyakiTiming
 )
 
 # ============================================================================
@@ -55,6 +56,7 @@ add_mlir_dialect_library(MLIREmatch
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRRegisterAllDialects
+  MLIREquivalence
   TamagoyakiTiming
 )
 
@@ -92,3 +94,20 @@ add_dependencies(tamagoyaki-opt
   MLIREmatchIncGen
 )
 mlir_check_all_link_libraries(tamagoyaki-opt)
+
+# ============================================================================
+# Install Rules
+# ============================================================================
+install(TARGETS
+  MLIREquivalence
+  MLIREmatch
+  TamagoyakiTiming
+  EquivalenceCAPI
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
+
+install(TARGETS tamagoyaki-opt
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)

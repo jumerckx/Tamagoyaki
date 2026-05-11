@@ -12,12 +12,21 @@ configure_lit_site_cfg(
   ${CMAKE_CURRENT_SOURCE_DIR}/lit/lit.cfg.py)
 
 set(CRANELIFT_MLIR_TEST_DEPENDS
-    FileCheck
-    count
-    not
     CraneliftDialect
     cranelift-mlir-opt
     tamagoyaki-opt)
+
+# FileCheck, count, and not come from the prebuilt LLVM. They are only
+# exported as CMake imported targets when LLVM is built with
+# LLVM_INSTALL_UTILS=ON; the slimmed flake build omits them. The binaries
+# themselves still live in ${LLVM_TOOLS_BINARY_DIR} and are found by lit
+# via config.llvm_tools_dir, so we only add them as DEPENDS when the
+# targets actually exist.
+foreach(_tool FileCheck count not)
+  if(TARGET ${_tool})
+    list(APPEND CRANELIFT_MLIR_TEST_DEPENDS ${_tool})
+  endif()
+endforeach()
 
 add_lit_testsuite(check-cranelift-mlir
   "Running cranelift-mlir tests"

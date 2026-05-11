@@ -31,3 +31,10 @@ add_dependencies(herbie-mlir-opt
   buildRival
 )
 mlir_check_all_link_libraries(herbie-mlir-opt)
+
+# ============================================================================
+# Install Rules
+# ============================================================================
+install(TARGETS herbie-mlir-opt
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)

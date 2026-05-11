@@ -29,10 +29,14 @@ add_mlir_library(herbieMLIR
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRPass
+  MLIRParser
   MLIRTransforms
   MLIRFuncDialect
   MLIRArithDialect
+  MLIRMathDialect
   MLIRAnalysis
+  MLIREquivalence
+  MLIREmatch
   Rival
   TamagoyakiTiming
 )
@@ -50,3 +54,12 @@ endif()
 if(TARGET mpfr_external)
   add_dependencies(obj.herbieMLIR mpfr_external)
 endif()
+
+# ============================================================================
+# Install Rules
+# ============================================================================
+install(TARGETS herbieMLIR
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+)
