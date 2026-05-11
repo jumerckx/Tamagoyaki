@@ -11,7 +11,18 @@
     };
 
     # Provides prebuilt LLVM + MLIR (matching the CIRCT pin).
-    circt-nix.url = "github:dtzSiFive/circt-nix";
+    circt-nix = {
+      url = "github:dtzSiFive/circt-nix";
+      inputs.circt-src.url = "github:llvm/circt/firtool-1.146.0";
+      inputs.llvm-submodule-src = {
+        type = "github";
+        owner = "llvm";
+        repo = "llvm-project";
+        rev = "90c90a41bed5ba2e4c7b724ecfd533f6f3f7d204";
+        flake = false;
+      };
+    };
+
   };
 
   outputs =
@@ -97,6 +108,11 @@
           enableAssertions = false;
           withVerilator = false;
         }).overrideAttrs (old: {
+          patches =
+            (lib.filter
+              (p: !lib.hasInfix "circt-mlir-tblgen-path" (toString p))
+              (old.patches or []))
+            ++ [ ./nix/patches/circt-mlir-tblgen-path.patch ];
           cmakeFlags = (old.cmakeFlags or []) ++ [
             "-DCIRCT_INCLUDE_TESTS=OFF"
           ];
