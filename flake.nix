@@ -39,15 +39,47 @@
         lib = pkgs.lib;
 
         # ---------- LLVM / MLIR / CIRCT (from circt-nix) ----------
-        mlir = circt-nix.packages.${system}.mlir;
-        libllvm = circt-nix.packages.${system}.libllvm;
-        circt = circt-nix.packages.${system}.circt.override {
-          enableSlang = false;
-          enableLLHD = false;
-          enableOrTools = false;
-          enableDocs = false;
-          withVerilator = false;
-        };
+        llvmSizeFlags = [
+          # "-DLLVM_BUILD_LLVM_DYLIB=ON"
+          "-DLLVM_LINK_LLVM_DYLIB=ON"
+          "-DLLVM_TARGETS_TO_BUILD=host"
+          "-DLLVM_INCLUDE_TESTS=OFF"
+          "-DLLVM_INCLUDE_EXAMPLES=OFF"
+          "-DLLVM_INCLUDE_BENCHMARKS=OFF"
+          "-DLLVM_INCLUDE_DOCS=OFF"
+          "-DLLVM_BUILD_DOCS=OFF"
+          "-DLLVM_ENABLE_ASSERTIONS=OFF"
+          "-DCMAKE_BUILD_TYPE=Release"
+        ];
+        
+        mlirSizeFlags = llvmSizeFlags ++ [
+          # "-DMLIR_BUILD_MLIR_C_DYLIB=ON"
+          "-DMLIR_INCLUDE_TESTS=OFF"
+          "-DMLIR_INCLUDE_INTEGRATION_TESTS=OFF"
+        ];
+        
+        libllvm = (circt-nix.packages.${system}.libllvm).overrideAttrs (old: {
+          cmakeFlags = (old.cmakeFlags or []) ++ llvmSizeFlags;
+        });
+        
+        mlir = (circt-nix.packages.${system}.mlir).overrideAttrs (old: {
+          cmakeFlags = (old.cmakeFlags or []) ++ mlirSizeFlags;
+        });
+        
+        circt = ((circt-nix.packages.${system}.circt.override {
+          enableSlang     = false;
+          enableLLHD      = false;
+          enableOrTools   = false;
+          enableDocs      = false;
+          withVerilator   = false;
+          mlir = mlir;
+          llvm = libllvm;
+        }).overrideAttrs (old: {
+          cmakeFlags = (old.cmakeFlags or []) ++ [
+            # "-DCIRCT_LINK_CIRCT_DYLIB=ON"
+            "-DCMAKE_BUILD_TYPE=Release"
+          ];
+        }));
 
         # ---------- Rival (Rust) ----------
         rustToolchain = pkgs.rust-bin.stable."1.91.0".default;
