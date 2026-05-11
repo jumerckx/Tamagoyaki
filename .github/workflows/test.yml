@@ -37,9 +37,10 @@ jobs:
 
     defaults:
       run:
-        # Run every step inside the project's `nix develop` shell so that
-        # commands see the exact same toolchain/env as a local checkout.
-        shell: nix develop --command bash -e {0}
+        # Run every step inside the project's CI nix shell — the
+        # minimum env needed to configure and run `check-all`. No
+        # Rust, Racket, or Herbie graphics deps.
+        shell: nix develop .#ci --command bash -e {0}
 
     steps:
       - name: Checkout
@@ -47,18 +48,6 @@ jobs:
 
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
-        with:
-          # Add the dtz-circt substituter to the system nix.conf as a
-          # *trusted* substituter. This both (a) lets CI fetch prebuilt
-          # LLVM/MLIR/CIRCT instead of rebuilding them, and (b) silences
-          # the "ignoring untrusted flake configuration setting" warning
-          # we'd otherwise get from the flake's own `nixConfig`, since
-          # the substituter is now accepted at the system level rather
-          # than only via the (untrusted) flake.
-          extra-conf: |
-            extra-substituters = https://dtz-circt.cachix.org
-            extra-trusted-public-keys = dtz-circt.cachix.org-1:PHe0okMASm5d9SD+UE0I0wptCy58IK8uNF9P3K7f+IU=
-            accept-flake-config = true
 
       - name: Magic Nix Cache
         uses: DeterminateSystems/magic-nix-cache-action@main

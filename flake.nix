@@ -22,7 +22,6 @@
         flake = false;
       };
     };
-
   };
 
   outputs =
@@ -96,7 +95,7 @@
             "-DMLIR_INCLUDE_INTEGRATION_TESTS=OFF"
           ];
         });
-        
+
         circt = (circt-nix.packages.${system}.circt.override {
           # Rebuild circt against our slimmed libllvm/mlir so the
           # closure doesn't end up with two copies of LLVM/MLIR.
@@ -118,7 +117,7 @@
           ];
           doCheck = false;
         });
-        
+
         # ---------- Rival (Rust) ----------
         rustToolchain = pkgs.rust-bin.stable."1.91.0".minimal;
 
@@ -202,14 +201,14 @@
 
           buildInputs = [
             mlir.dev
-            libllvm.dev      # ← put it back
+            libllvm.dev
             circt.dev
             circt.lib
           ] ++ (with pkgs; [ gmp mpfr libmpc ]);
-          
+
           cmakeFlags = [
             "-DMLIR_DIR=${mlir.dev}/lib/cmake/mlir"
-            "-DLLVM_DIR=${libllvm.dev}/lib/cmake/llvm"   # ← real path now
+            "-DLLVM_DIR=${libllvm.dev}/lib/cmake/llvm"
             "-DCIRCT_DIR=${circt.dev}/lib/cmake/circt"
             "-DLLVM_EXTERNAL_LIT=${pkgs.lit}/bin/lit"
             "-DRIVAL_PREBUILT_LIB=${rival-ffi}/lib/librival3_ffi.a"
@@ -223,11 +222,9 @@
           };
         };
 
-        # ---------- Shell-agnostic configure wrapper ----------
-        # A real script on PATH (works from bash / zsh / fish / nushell
-        # / etc.). All nix store paths are baked in at build time, so
-        # the script does not depend on env vars set by shellHook.
+        # ---------- Shared bits for the configure wrapper ----------
         sharedLibExt = pkgs.stdenv.hostPlatform.extensions.sharedLibrary;
+
         cmakePrefixPath = lib.concatStringsSep ";" [
           "${mlir.dev}"
           "${libllvm.dev}"
@@ -235,16 +232,22 @@
           "${pkgs.gmp.dev}"
           "${pkgs.mpfr.dev}"
         ];
+
         # circt-nix's prebuilt LLVM was compiled with macOS deployment
         # target 14.0. Linking it with the nixpkgs default (11.3 on
         # 25.05) produces a flood of "object file ... was built for
         # newer macOS version (14.0) than being linked (11.3)" warnings,
         # so we pin our own target to match.
         darwinDeploymentTarget = "14.0";
+
         deploymentTargetFlag =
           lib.optionalString pkgs.stdenv.isDarwin
             "-DCMAKE_OSX_DEPLOYMENT_TARGET=${darwinDeploymentTarget}";
 
+        # ---------- Shell-agnostic configure wrapper ----------
+        # A real script on PATH (works from bash / zsh / fish / nushell
+        # / etc.). All nix store paths are baked in at build time, so
+        # the script does not depend on env vars set by shellHook.
         tamagoyaki-configure = pkgs.writeShellApplication {
           name = "tamagoyaki-configure";
           runtimeInputs = with pkgs; [
@@ -302,97 +305,121 @@
           inherit tamagoyaki rival-ffi mlir circt tamagoyaki-configure;
         };
 
-        devShells.default = pkgs.mkShell {
-          name = "tamagoyaki-eval";
-          inputsFrom = [ tamagoyaki ];
+        devShells = {
+          # ---------- CI shell ----------
+          # The minimum needed to configure and run `ninja check-all`
+          # against the prebuilt LLVM/MLIR/CIRCT/rival-ffi from the
+          # binary cache. No Rust toolchain, no Racket, no Herbie
+          # graphics deps — those are only needed for development, not
+          # for running the test suite. This is what
+          # `.github/workflows/test.yml` uses.
+          #
+          # cmake/ninja/lit/pkg-config and the LLVM/MLIR/CIRCT/gmp/mpfr
+          # closure all come in via `inputsFrom = [ tamagoyaki ]` and
+          # so don't need to be listed explicitly.
+          ci = pkgs.mkShell {
+            name = "tamagoyaki-ci";
+            inputsFrom = [ tamagoyaki ];
+            packages = [ tamagoyaki-configure ];
 
-          # Expose the prebuilt CIRCT/MLIR/LLVM packages so they're
-          # readily available for ad-hoc commands inside the shell.
-          inherit circt mlir;
+            shellHook = ''
+              # Lit is python; don't let the system PYTHONPATH leak in.
+              unset PYTHONPATH
+            '' + lib.optionalString pkgs.stdenv.isDarwin ''
+              export MACOSX_DEPLOYMENT_TARGET="${darwinDeploymentTarget}"
+            '';
+          };
 
-          packages = (with pkgs; [
-            rustToolchain
-            racket-minimal
-            flex
-            bison
-            gmp
-            mpfr
-            fontconfig
-            cairo
-            pango
-            libjpeg
-            libpng
-            zlib
-            uv
-            lit
-            cmake
-            ninja
-            pkg-config
-          ]) ++ [
-            # Shell-agnostic configure helper (works from bash/zsh/fish/…).
-            tamagoyaki-configure
-          ];
+          # ---------- Full developer shell ----------
+          # Everything in `ci` plus: Rust toolchain (for iterating on
+          # rival-ffi), Racket + graphics libs (for Herbie), uv (for
+          # Python eval scripts), and ad-hoc env vars convenient for
+          # poking at the build from inside the shell.
+          default = pkgs.mkShell {
+            name = "tamagoyaki-dev";
+            inputsFrom = [ tamagoyaki ];
 
-          # Exposed for ad-hoc use; the configure wrapper below is the
-          # supported entry point because CMake does not honour most of
-          # these as environment variables (only CMAKE_PREFIX_PATH).
-          MLIR_DIR  = "${mlir.dev}/lib/cmake/mlir";
-          LLVM_DIR  = "${libllvm.dev}/lib/cmake/llvm";
-          CIRCT_DIR = "${circt.dev}/lib/cmake/circt";
-          GMP_PREFIX = "${pkgs.gmp}";
-          GMP_DEV    = "${pkgs.gmp.dev}";
-          MPFR_PREFIX = "${pkgs.mpfr}";
-          MPFR_DEV    = "${pkgs.mpfr.dev}";
-          RIVAL_PREBUILT_LIB = "${rival-ffi}/lib/librival3_ffi.a";
-          RIVAL_PREBUILT_INCLUDE = "${rival-ffi}/include";
+            # Expose the prebuilt CIRCT/MLIR/LLVM packages so they're
+            # readily available for ad-hoc commands inside the shell.
+            inherit circt mlir;
 
-          RACKET_FFI_LIB_PATH = lib.makeLibraryPath (
-            with pkgs;
-            [
-              stdenv.cc.cc.lib
-              gmp
-              mpfr
+            packages = (with pkgs; [
+              rustToolchain
+              racket-minimal
+              flex
+              bison
               fontconfig
               cairo
               pango
-              glib
-              freetype
-              fribidi
-              pixman
-              expat
               libjpeg
               libpng
               zlib
-            ]
-          );
+              uv
+            ]) ++ [
+              tamagoyaki-configure
+            ];
 
-          shellHook = ''
-            case "$(uname)" in
-              Darwin)
-                export DYLD_FALLBACK_LIBRARY_PATH="$RACKET_FFI_LIB_PATH''${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
-                export MACOSX_DEPLOYMENT_TARGET="${darwinDeploymentTarget}"
-                ;;
-              *)
-                export LD_LIBRARY_PATH="$RACKET_FFI_LIB_PATH''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-                ;;
-            esac
+            # Exposed for ad-hoc use; the configure wrapper is the
+            # supported entry point because CMake does not honour most
+            # of these as environment variables (only CMAKE_PREFIX_PATH).
+            MLIR_DIR  = "${mlir.dev}/lib/cmake/mlir";
+            LLVM_DIR  = "${libllvm.dev}/lib/cmake/llvm";
+            CIRCT_DIR = "${circt.dev}/lib/cmake/circt";
+            GMP_PREFIX  = "${pkgs.gmp}";
+            GMP_DEV     = "${pkgs.gmp.dev}";
+            MPFR_PREFIX = "${pkgs.mpfr}";
+            MPFR_DEV    = "${pkgs.mpfr.dev}";
+            RIVAL_PREBUILT_LIB     = "${rival-ffi}/lib/librival3_ffi.a";
+            RIVAL_PREBUILT_INCLUDE = "${rival-ffi}/include";
 
-            # Don't let the system Python interfere with uv-managed envs.
-            unset PYTHONPATH
+            RACKET_FFI_LIB_PATH = lib.makeLibraryPath (
+              with pkgs;
+              [
+                stdenv.cc.cc.lib
+                gmp
+                mpfr
+                fontconfig
+                cairo
+                pango
+                glib
+                freetype
+                fribidi
+                pixman
+                expat
+                libjpeg
+                libpng
+                zlib
+              ]
+            );
 
-            echo "tamagoyaki eval shell ready"
-            echo "  uv     : $(uv --version)"
-            echo "  cargo  : $(cargo --version)"
-            echo "  cmake  : $(cmake --version | head -1)"
-            echo "  lit    : $(command -v lit)"
-            echo "  MLIR   : $MLIR_DIR"
-            echo "  LLVM   : $LLVM_DIR"
-            echo "  CIRCT  : $CIRCT_DIR  (required by rover-mlir)"
-            echo ""
-            echo "Configure & build with:"
-            echo "  tamagoyaki-configure"
-            echo "  ninja -C build check-all      # build & run all test suites"
-          '';
+            shellHook = ''
+              case "$(uname)" in
+                Darwin)
+                  export DYLD_FALLBACK_LIBRARY_PATH="$RACKET_FFI_LIB_PATH''${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
+                  export MACOSX_DEPLOYMENT_TARGET="${darwinDeploymentTarget}"
+                  ;;
+                *)
+                  export LD_LIBRARY_PATH="$RACKET_FFI_LIB_PATH''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+                  ;;
+              esac
+
+              # Don't let the system Python interfere with uv-managed envs.
+              unset PYTHONPATH
+
+              echo "tamagoyaki dev shell ready"
+              echo "  uv     : $(uv --version)"
+              echo "  cargo  : $(cargo --version)"
+              echo "  cmake  : $(cmake --version | head -1)"
+              echo "  lit    : $(command -v lit)"
+              echo "  MLIR   : $MLIR_DIR"
+              echo "  LLVM   : $LLVM_DIR"
+              echo "  CIRCT  : $CIRCT_DIR  (required by rover-mlir)"
+              echo ""
+              echo "Configure & build with:"
+              echo "  tamagoyaki-configure"
+              echo "  ninja -C build check-all      # build & run all test suites"
+            '';
+          };
         };
       }
     );
