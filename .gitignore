@@ -12,6 +12,12 @@ CMakeScripts
 Testing
 **/Makefile
 !/Makefile
+!/docs/Makefile
+
+# Sphinx / Doxygen build artifacts
+/docs/_build/
+/docs/doxygen/
+/docs/api/_autosummary/
 cmake_install.cmake
 install_manifest.txt
 compile_commands.json

@@ -1,0 +1,62 @@
+# Minimal Doxyfile to feed Breathe with XML for C++ API reference.
+# Run from the docs/ directory: `doxygen Doxyfile`.
+
+PROJECT_NAME           = "Tamagoyaki"
+PROJECT_NUMBER         = "0.1.0"
+PROJECT_BRIEF          = "MLIR-based equality saturation framework"
+
+OUTPUT_DIRECTORY       = doxygen
+CREATE_SUBDIRS         = NO
+ALLOW_UNICODE_NAMES    = YES
+OUTPUT_LANGUAGE        = English
+
+# We only consume XML in Sphinx via Breathe.
+GENERATE_HTML          = NO
+GENERATE_LATEX         = NO
+GENERATE_XML           = YES
+XML_OUTPUT             = xml
+XML_PROGRAMLISTING     = YES
+
+# Source layout.
+INPUT                  = ../include \
+                         ../src \
+                         ../herbie_mlir/include \
+                         ../herbie_mlir/src \
+                         ../herbie_mlir/tools \
+                         ../rover-mlir/include \
+                         ../rover-mlir/src \
+                         ../rover-mlir/tools \
+                         ../cranelift-mlir/include \
+                         ../cranelift-mlir/src \
+                         ../cranelift-mlir/tools
+RECURSIVE              = YES
+FILE_PATTERNS          = *.h *.hpp *.hxx *.cpp *.cc *.cxx *.c
+EXCLUDE_PATTERNS       = */build/* */vendor/* */test/* */tests/*
+
+# Parsing.
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = YES
+EXTRACT_LOCAL_CLASSES  = YES
+HIDE_UNDOC_MEMBERS     = NO
+HIDE_UNDOC_CLASSES     = NO
+INHERIT_DOCS           = YES
+INLINE_INFO            = YES
+SORT_MEMBER_DOCS       = YES
+
+JAVADOC_AUTOBRIEF      = YES
+QT_AUTOBRIEF           = YES
+MULTILINE_CPP_IS_BRIEF = NO
+MARKDOWN_SUPPORT       = YES
+AUTOLINK_SUPPORT       = YES
+BUILTIN_STL_SUPPORT    = YES
+
+# We don't need full call graphs in XML.
+HAVE_DOT               = NO
+CLASS_DIAGRAMS         = NO
+
+QUIET                  = YES
+WARNINGS               = YES
+WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_DOC_ERROR      = YES
+WARN_NO_PARAMDOC       = NO
