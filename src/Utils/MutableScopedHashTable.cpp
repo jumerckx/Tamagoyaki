@@ -9,9 +9,11 @@
 namespace mlir::ematch {
 
 // Explicit instantiations
-using AllocatorTy = ::llvm::RecyclingAllocator<
-    ::llvm::BumpPtrAllocator,
-    MutableScopedHashTableVal<::mlir::Operation *, ::mlir::Operation *>>;
+// \cond
+using AllocatorTy = llvm::RecyclingAllocator<
+    llvm::BumpPtrAllocator,
+    MutableScopedHashTableVal<mlir::Operation *, mlir::Operation *>>;
+// \endcond
 
 template class MutableScopedHashTableVal<::mlir::Operation *,
                                           ::mlir::Operation *>;
