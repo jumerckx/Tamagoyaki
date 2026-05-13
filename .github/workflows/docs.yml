@@ -1,0 +1,88 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build docs
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Magic Nix Cache
+        uses: DeterminateSystems/magic-nix-cache-action@main
+        with:
+          use-flakehub: false
+
+      - name: Install Doxygen
+        run: sudo apt-get update && sudo apt-get install -y doxygen
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: docs/requirements.txt
+
+      - name: Install Sphinx and docs dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install --upgrade pip
+          .venv/bin/pip install -r docs/requirements.txt
+
+      # `make -C docs` needs a configured build directory: conf.py invokes
+      # `cmake --build build --target <tablegen>` to generate the .h.inc
+      # headers that Doxygen scans. A configure pass is enough; the tablegen
+      # targets are built on demand from conf.py.
+      - name: Configure
+        run: nix develop .#ci --command tamagoyaki-configure build
+
+      # Run inside the CI nix shell so cmake / tblgen are on PATH. Doxygen
+      # comes from apt (/usr/bin is preserved by `nix develop`). SPHINXBUILD
+      # points at the venv so its dependencies are picked up. `-W` promotes
+      # warnings to errors; `--keep-going -n` matches the Makefile default.
+      - name: Build docs
+        run: |
+          nix develop .#ci --command make -C docs html \
+            SPHINXBUILD="$PWD/.venv/bin/sphinx-build" \
+            SPHINXOPTS="--keep-going -n -W"
+
+      - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_build/html
+
+  deploy:
+    name: Deploy to GitHub Pages
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-22.04
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
