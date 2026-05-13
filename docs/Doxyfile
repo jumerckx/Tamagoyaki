@@ -17,6 +17,8 @@ GENERATE_XML           = YES
 XML_OUTPUT             = xml
 XML_PROGRAMLISTING     = YES
 
+EXTENSION_MAPPING      = inc=C++
+
 # Source layout.
 INPUT                  = ../include \
                          ../src \
@@ -28,10 +30,19 @@ INPUT                  = ../include \
                          ../rover-mlir/tools \
                          ../cranelift-mlir/include \
                          ../cranelift-mlir/src \
-                         ../cranelift-mlir/tools
+                         ../cranelift-mlir/tools \
+                         @TAMAGOYAKI_BUILD_DIR@/include \
+                         @TAMAGOYAKI_BUILD_DIR@/herbie_mlir/include \
+                         @TAMAGOYAKI_BUILD_DIR@/rover-mlir/include \
+                         @TAMAGOYAKI_BUILD_DIR@/cranelift-mlir/include
 RECURSIVE              = YES
-FILE_PATTERNS          = *.h *.hpp *.hxx *.cpp *.cc *.cxx *.c
-EXCLUDE_PATTERNS       = */build/* */vendor/* */test/* */tests/*
+FILE_PATTERNS          = *.h *.hpp *.hxx *.cpp *.cc *.cxx *.c *.inc
+INCLUDE_FILE_PATTERNS  = *.h *.hpp *.hxx *.inc
+INCLUDE_PATH           = @TAMAGOYAKI_BUILD_DIR@/include \
+                         @TAMAGOYAKI_BUILD_DIR@/herbie_mlir/include \
+                         @TAMAGOYAKI_BUILD_DIR@/cranelift-mlir/include \
+                         @TAMAGOYAKI_BUILD_DIR@/rover-mlir/include
+EXCLUDE_PATTERNS       = */vendor/* */test/* */tests/*
 
 # Parsing.
 EXTRACT_ALL            = YES
@@ -53,10 +64,26 @@ BUILTIN_STL_SUPPORT    = YES
 
 # We don't need full call graphs in XML.
 HAVE_DOT               = NO
-CLASS_DIAGRAMS         = NO
 
 QUIET                  = YES
 WARNINGS               = YES
 WARN_IF_UNDOCUMENTED   = NO
 WARN_IF_DOC_ERROR      = YES
 WARN_NO_PARAMDOC       = NO
+
+# Predefine TableGen guard macros so that Doxygen sees the class declarations
+# inside `#ifdef GET_OP_CLASSES`, `#ifdef GET_TYPEDEF_CLASSES`, etc., in the
+# generated *.h.inc files. Without this, out-of-line definitions of methods
+# such as Op::verify() in *.cpp files cannot be matched to a declaration and
+# Doxygen emits "documented symbol ... was not declared or defined" warnings.
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = YES
+EXPAND_ONLY_PREDEF     = YES
+PREDEFINED             = GET_OP_CLASSES \
+                         GET_OP_LIST \
+                         GET_TYPEDEF_CLASSES \
+                         GET_TYPEDEF_LIST \
+                         GET_ATTRDEF_CLASSES \
+                         GET_ATTRDEF_LIST \
+                         GEN_PASS_DECL \
+                         GEN_PASS_REGISTRATION

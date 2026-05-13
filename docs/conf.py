@@ -70,6 +70,8 @@ intersphinx_mapping = {
 
 # -- Breathe (Doxygen integration) -------------------------------------------
 
+os.environ.setdefault("TAMAGOYAKI_BUILD_DIR", str(REPO_ROOT / "build"))
+
 breathe_projects = {
     "tamagoyaki": str(DOCS_DIR / "doxygen" / "xml"),
 }
@@ -77,6 +79,47 @@ breathe_default_project = "tamagoyaki"
 breathe_default_members = ("members", "undoc-members")
 
 # -- Run Doxygen on Read the Docs / CI ---------------------------------------
+
+
+def _maybe_run_tablegen() -> None:
+    """Generate TableGen headers if a configured build directory exists."""
+    build_dir = Path(os.environ.get("TAMAGOYAKI_BUILD_DIR", REPO_ROOT / "build"))
+    if not (build_dir / "CMakeCache.txt").exists():
+        print(
+            "warning: TableGen outputs not found (no CMakeCache.txt). "
+            "Set TAMAGOYAKI_BUILD_DIR to your configured build directory.",
+            file=sys.stderr,
+        )
+        return
+
+    targets = [
+        "MLIREquivalenceIncGen",
+        "MLIREmatchIncGen",
+        "MLIRHerbieMLIRIncGen",
+        "MLIRCraneliftIncGen",
+        "MLIRRoverIncGen",
+    ]
+    try:
+        subprocess.run(
+            ["cmake", "--build", str(build_dir), "--target", *targets],
+            check=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+        print(f"warning: failed to run TableGen targets: {exc}", file=sys.stderr)
+        return
+
+    expected = [
+        build_dir / "include" / "EmatchDialect.h.inc",
+        build_dir / "include" / "EquivalenceDialect.h.inc",
+    ]
+    if not all(path.exists() for path in expected):
+        missing = ", ".join(str(path) for path in expected if not path.exists())
+        print(
+            "warning: missing TableGen headers: "
+            f"{missing}. Docs may warn about missing declarations.",
+            file=sys.stderr,
+        )
+
 
 def _ensure_breathe_stub() -> None:
     """Write a minimal Doxygen XML index so Breathe never crashes.
@@ -97,6 +140,19 @@ def _ensure_breathe_stub() -> None:
     )
 
 
+def _resolved_doxyfile() -> Path:
+    """Create a Doxygen config with the build dir baked in."""
+    doxyfile = DOCS_DIR / "Doxyfile"
+    content = doxyfile.read_text()
+    build_dir = Path(os.environ.get("TAMAGOYAKI_BUILD_DIR", REPO_ROOT / "build"))
+    content = content.replace("@TAMAGOYAKI_BUILD_DIR@", str(build_dir))
+
+    resolved = DOCS_DIR / "_build" / "Doxyfile"
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    resolved.write_text(content)
+    return resolved
+
+
 def _run_doxygen() -> None:
     """Run Doxygen to generate the XML consumed by Breathe."""
     doxyfile = DOCS_DIR / "Doxyfile"
@@ -104,7 +160,7 @@ def _run_doxygen() -> None:
         return
     try:
         subprocess.run(
-            ["doxygen", str(doxyfile)],
+            ["doxygen", str(_resolved_doxyfile())],
             cwd=DOCS_DIR,
             check=True,
         )
@@ -115,6 +171,7 @@ def _run_doxygen() -> None:
 # Always (re)generate Doxygen XML when building. This keeps GitHub Actions
 # and local builds in sync without an extra build step.
 if os.environ.get("SKIP_DOXYGEN") != "1":
+    _maybe_run_tablegen()
     _run_doxygen()
 _ensure_breathe_stub()
 
@@ -158,15 +215,15 @@ html_theme_options = {
             "html": (
                 '<svg stroke="currentColor" fill="currentColor" stroke-width="0" '
                 'viewBox="0 0 16 16"><path fill-rule="evenodd" d="M8 0C3.58 0 0 '
-                '3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 '
-                '0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94'
-                '-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 '
-                '1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 '
-                '0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 '
-                '2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 '
-                '2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 '
-                '0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 '
-                '1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42'
+                "3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 "
+                "0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94"
+                "-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 "
+                "1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 "
+                "0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 "
+                "2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 "
+                "2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 "
+                "0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 "
+                "1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42"
                 '-3.58-8-8-8z"></path></svg>'
             ),
             "class": "",
