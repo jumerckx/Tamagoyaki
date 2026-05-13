@@ -47,7 +47,7 @@ using namespace mlir::equivalence;
 // Equivalence dialect.
 //===----------------------------------------------------------------------===//
 
-void EquivalenceDialect::initialize() {
+void mlir::equivalence::EquivalenceDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
 #include "EquivalenceOps.cpp.inc"
@@ -65,10 +65,12 @@ void EquivalenceDialect::initialize() {
 #include "EquivalenceOps.cpp.inc"
 
 namespace mlir::equivalence {
-RegionKind GraphOp::getRegionKind(unsigned index) { return RegionKind::Graph; }
+mlir::RegionKind GraphOp::getRegionKind(unsigned index) {
+  return mlir::RegionKind::Graph;
+}
 } // namespace mlir::equivalence
 
-LogicalResult ClassOp::verify() {
+mlir::LogicalResult mlir::equivalence::ClassOp::verify() {
   if (getInputs().empty()) {
     return emitOpError("must have at least one operand");
   }
@@ -102,7 +104,7 @@ LogicalResult ClassOp::verify() {
   return success();
 }
 
-LogicalResult GraphOp::verify() {
+mlir::LogicalResult mlir::equivalence::GraphOp::verify() {
   auto walkResult = getBody().walk([&](Operation *op) -> WalkResult {
     if (isa<YieldOp>(op))
       return WalkResult::advance();
@@ -284,7 +286,7 @@ public:
 #define GET_ATTRDEF_CLASSES
 #include "EquivalenceAttrs.cpp.inc"
 
-void EquivalenceDialect::registerTypes() {
+void mlir::equivalence::EquivalenceDialect::registerTypes() {
   addTypes<
 #define GET_TYPEDEF_LIST
 #include "EquivalenceTypes.cpp.inc"
@@ -292,7 +294,7 @@ void EquivalenceDialect::registerTypes() {
       >();
 }
 
-void EquivalenceDialect::registerAttributes() {
+void mlir::equivalence::EquivalenceDialect::registerAttributes() {
   addAttributes<
 #define GET_ATTRDEF_LIST
 #include "EquivalenceAttrs.cpp.inc"

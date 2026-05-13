@@ -288,7 +288,8 @@ struct FuncRivalCompile
 // Registration
 // ============================================================================
 
-void herbie::registerRivalExternalModels(DialectRegistry &registry) {
+void herbie::registerRivalExternalModels(
+    mlir::DialectRegistry &registry) {
   registry.addExtension(+[](MLIRContext *ctx, arith::ArithDialect *dialect) {
     arith::AddFOp::attachInterface<ArithAddFRivalCompile>(*ctx);
     arith::SubFOp::attachInterface<ArithSubFRivalCompile>(*ctx);

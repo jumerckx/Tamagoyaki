@@ -15,7 +15,7 @@ using namespace herbie;
 #define GET_OP_CLASSES
 #include "HerbieMLIROps.cpp.inc"
 
-void HerbieMLIRDialect::initialize() {
+void herbie::HerbieMLIRDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
 #include "HerbieMLIROps.cpp.inc"

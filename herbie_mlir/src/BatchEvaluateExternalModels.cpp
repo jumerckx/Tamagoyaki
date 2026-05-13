@@ -256,7 +256,8 @@ struct MathRsqrtBatch
 // Registration
 // ============================================================================
 
-void herbie::registerBatchEvaluateExternalModels(DialectRegistry &registry) {
+void herbie::registerBatchEvaluateExternalModels(
+    mlir::DialectRegistry &registry) {
   registry.addExtension(+[](MLIRContext *ctx, arith::ArithDialect *dialect) {
     arith::AddFOp::attachInterface<ArithAddFBatch>(*ctx);
     arith::SubFOp::attachInterface<ArithSubFBatch>(*ctx);

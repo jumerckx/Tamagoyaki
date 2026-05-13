@@ -33,8 +33,8 @@
 using namespace mlir;
 using namespace mlir::ematch;
 
-SmallVector<Value> mlir::ematch::getClassVals(PatternRewriter &rewriter,
-                                              Value val) {
+SmallVector<mlir::Value> mlir::ematch::getClassVals(
+    mlir::PatternRewriter &rewriter, mlir::Value val) {
   Operation *defOp = val.getDefiningOp();
   if (defOp == nullptr) {
     return {val};
@@ -44,8 +44,8 @@ SmallVector<Value> mlir::ematch::getClassVals(PatternRewriter &rewriter,
   return {val};
 }
 
-Value mlir::ematch::getClassRepresentative(PatternRewriter &rewriter,
-                                           Value val) {
+mlir::Value mlir::ematch::getClassRepresentative(
+    mlir::PatternRewriter &rewriter, mlir::Value val) {
   return getClassVals(rewriter, val)[0];
 }
 
@@ -67,7 +67,8 @@ mlir::ematch::getCanonicalLeader(equivalence::ClassOp classOp) {
   return root;
 }
 
-Value mlir::ematch::getClassResult(PatternRewriter &rewriter, Value val) {
+mlir::Value mlir::ematch::getClassResult(
+    mlir::PatternRewriter &rewriter, mlir::Value val) {
   if (val == nullptr) {
     return val;
   }
@@ -79,8 +80,8 @@ Value mlir::ematch::getClassResult(PatternRewriter &rewriter, Value val) {
   return val;
 }
 
-SmallVector<Value> mlir::ematch::getClassResults(PatternRewriter &rewriter,
-                                                 ValueRange vals) {
+SmallVector<mlir::Value> mlir::ematch::getClassResults(
+    mlir::PatternRewriter &rewriter, mlir::ValueRange vals) {
   SmallVector<Value> results;
   results.reserve(vals.size());
 
@@ -103,8 +104,8 @@ equivalence::ClassOp getClassOpIfExists(Value val) {
   return nullptr;
 }
 
-equivalence::ClassOp mlir::ematch::getClassOp(PatternRewriter &rewriter,
-                                              Value val) {
+equivalence::ClassOp mlir::ematch::getClassOp(
+    mlir::PatternRewriter &rewriter, mlir::Value val) {
 
   if (auto classOp = getClassOpIfExists(val)) {
     return classOp;
@@ -123,7 +124,8 @@ equivalence::ClassOp mlir::ematch::getClassOp(PatternRewriter &rewriter,
   return classOp;
 }
 
-void ClassOpUnionFind::classUnion(PatternRewriter &rewriter, Value a, Value b) {
+void ClassOpUnionFind::classUnion(mlir::PatternRewriter &rewriter,
+                                  mlir::Value a, mlir::Value b) {
   if (a == b) {
     return;
   }
@@ -147,33 +149,37 @@ void ClassOpUnionFind::classUnion(PatternRewriter &rewriter, Value a, Value b) {
   worklist.push_back(other);
 }
 
-void ClassOpUnionFind::classUnion(PatternRewriter &rewriter, Operation *op,
-                                  ValueRange vals) {
+void ClassOpUnionFind::classUnion(mlir::PatternRewriter &rewriter,
+                                  mlir::Operation *op,
+                                  mlir::ValueRange vals) {
   assert(op->getNumResults() == vals.size() &&
          "Operation result count must match value range size");
   for (auto [result, val] : llvm::zip(op->getResults(), vals))
     classUnion(rewriter, result, val);
 }
 
-void ClassOpUnionFind::classUnion(PatternRewriter &rewriter, ValueRange a,
-                                  ValueRange b) {
+void ClassOpUnionFind::classUnion(mlir::PatternRewriter &rewriter,
+                                  mlir::ValueRange a,
+                                  mlir::ValueRange b) {
   assert(a.size() == b.size() && "Value ranges must have equal size");
   for (auto [va, vb] : llvm::zip(a, b))
     classUnion(rewriter, va, vb);
 }
 
-void ClassOpUnionFind::queueClassUnion(Value a, Value b) {
+void ClassOpUnionFind::queueClassUnion(mlir::Value a, mlir::Value b) {
   pendingClassUnions.emplace_back(a, b);
 }
 
-void ClassOpUnionFind::queueClassUnion(Operation *op, ValueRange vals) {
+void ClassOpUnionFind::queueClassUnion(mlir::Operation *op,
+                                       mlir::ValueRange vals) {
   assert(op->getNumResults() == vals.size() &&
          "Operation result count must match value range size");
   for (auto [result, val] : llvm::zip(op->getResults(), vals))
     queueClassUnion(result, val);
 }
 
-void ClassOpUnionFind::queueClassUnion(ValueRange a, ValueRange b) {
+void ClassOpUnionFind::queueClassUnion(mlir::ValueRange a,
+                                       mlir::ValueRange b) {
   assert(a.size() == b.size() && "Value ranges must have equal size");
   for (auto [va, vb] : llvm::zip(a, b))
     queueClassUnion(va, vb);

@@ -51,7 +51,7 @@ using namespace mlir::ematch;
 // Ematch dialect.
 //===----------------------------------------------------------------------===//
 
-void EmatchDialect::initialize() {
+void mlir::ematch::EmatchDialect::initialize() {
   addOperations<
 #define GET_OP_LIST
 #include "EmatchOps.cpp.inc"
@@ -59,14 +59,16 @@ void EmatchDialect::initialize() {
       >();
 }
 
-Type EmatchDialect::parseType(DialectAsmParser &parser) const {
+mlir::Type mlir::ematch::EmatchDialect::parseType(
+    mlir::DialectAsmParser &parser) const {
   StringRef typeName;
   if (parser.parseKeyword(&typeName))
     return Type();
   return {};
 }
 
-void EmatchDialect::printType(Type type, DialectAsmPrinter &os) const {
+void mlir::ematch::EmatchDialect::printType(
+    mlir::Type type, mlir::DialectAsmPrinter &os) const {
   os << "unknown";
 }
 
