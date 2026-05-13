@@ -55,8 +55,6 @@ cmake -G Ninja \
 ninja -C build check-tamagoyaki
 ```
 
-See [Getting started](guides/getting-started.md) for the full walkthrough.
-
 ```{toctree}
 :hidden:
 :maxdepth: 2
