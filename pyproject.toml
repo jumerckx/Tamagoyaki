@@ -6,7 +6,6 @@ dependencies = [
     "cmake-format>=0.6.13",
     "lit>=18.1.8",
     "matplotlib>=3.10.8",
-    "mlir-wheel==20260405",
     "numpy>=2.4.3",
     "pandas>=3.0.1",
     "pre-commit>=4.5.1",
