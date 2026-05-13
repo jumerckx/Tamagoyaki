@@ -24,6 +24,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Debug.h"
 #include <cassert>
+#include <cstddef>
 #include <functional>
 #include <utility>
 
@@ -41,51 +42,123 @@ public:
   using impl::CraneliftOptimizePassBase<
       CraneliftOptimizePass>::CraneliftOptimizePassBase;
 
-  /// Process a region recursively for SoN conversion: traverse blocks in
+  /// Process a region iteratively for SoN conversion: traverse blocks in
   /// domtree pre-order, visit inner regions first, then move speculatable
   /// non-terminator operations to the graph block and hash-cons them.
   static void processRegion(mlir::Region &region, mlir::Block *graphBlock,
                             mlir::ematch::HashConsPatternRewriter &rewriter) {
     if (region.empty())
       return;
-
-    // Helper lambda to safely process all operations inside a single block.
-    auto processBlock = [&](mlir::Block *block) {
-      // make_early_inc_range safely pre-increments the iterator. This allows
-      // us to freely move or erase `op` without invalidating the traversal.
-      for (mlir::Operation &op : llvm::make_early_inc_range(*block)) {
-
-        // Traverse nested regions first so that inner operations are processed
-        // and moved out *before* the parent operation is evaluated and moved.
-        for (mlir::Region &nested : op.getRegions()) {
-          processRegion(nested, graphBlock, rewriter);
-        }
-
-        if (mlir::isSpeculatable(&op) &&
-            !op.hasTrait<mlir::OpTrait::IsTerminator>()) {
-          op.moveBefore(graphBlock, graphBlock->end());
-
-          // Hash-cons exactly as we traverse.
-          if (mlir::Operation *existing = rewriter.lookup(&op)) {
-            op.replaceAllUsesWith(existing);
-            op.erase();
-          } else {
-            (void)rewriter.insert(&op);
-          }
+  
+    // Each frame represents one region currently being processed; the stack
+    // replaces the C call stack of the original recursive implementation.
+    struct Frame {
+      llvm::SmallVector<mlir::Block *, 4> blocks; // blocks in traversal order
+      size_t blockIdx;                            // index of the current block
+      mlir::Block::iterator opIter;               // next op in that block
+      mlir::Operation *pendingOp;                 // op to revisit after its
+                                                  // nested regions are done
+    };
+  
+    // Compute the order in which to visit blocks of a region: domtree pre-order
+    // for multi-block regions, or just the single block. This matches the
+    // original code, which avoided DominanceInfo for single-block regions to
+    // dodge an assertion.
+    auto computeBlockOrder =
+        [](mlir::Region &r) -> llvm::SmallVector<mlir::Block *, 4> {
+      llvm::SmallVector<mlir::Block *, 4> blocks;
+      if (r.hasOneBlock()) {
+        blocks.push_back(&r.front());
+      } else {
+        mlir::DominanceInfo domInfo(r.getParentOp());
+        for (auto *domNode : llvm::depth_first(domInfo.getRootNode(&r)))
+          blocks.push_back(domNode->getBlock());
+      }
+      return blocks;
+    };
+  
+    // Build a frame for a non-empty region. Caller must ensure !r.empty().
+    auto makeFrame = [&](mlir::Region &r) -> Frame {
+      Frame f;
+      f.blocks = computeBlockOrder(r);
+      f.blockIdx = 0;
+      f.opIter = f.blocks.front()->begin();
+      f.pendingOp = nullptr;
+      return f;
+    };
+  
+    // Move + hash-cons step from the original inner conditional.
+    auto tryCanonicalize = [&](mlir::Operation *op) {
+      if (mlir::isSpeculatable(op) &&
+          !op->hasTrait<mlir::OpTrait::IsTerminator>()) {
+        op->moveBefore(graphBlock, graphBlock->end());
+        if (mlir::Operation *existing = rewriter.lookup(op)) {
+          op->replaceAllUsesWith(existing);
+          op->erase();
+        } else {
+          (void)rewriter.insert(op);
         }
       }
     };
-
-    // Traverse blocks directly without collecting them into a SmallVector
-    // first. Handles single-block regions directly, avoiding DominanceInfo's
-    // assertion.
-    if (region.hasOneBlock()) {
-      processBlock(&region.front());
-    } else {
-      mlir::DominanceInfo domInfo(region.getParentOp());
-      for (auto *domNode : llvm::depth_first(domInfo.getRootNode(&region))) {
-        processBlock(domNode->getBlock());
+  
+    llvm::SmallVector<Frame, 8> stack;
+    stack.push_back(makeFrame(region));
+  
+    while (!stack.empty()) {
+      Frame &top = stack.back();
+  
+      // We came back to this frame after finishing the nested regions of
+      // `pendingOp`; now process the op itself, matching the original ordering
+      // (inner regions first, then the parent op).
+      if (top.pendingOp) {
+        mlir::Operation *op = top.pendingOp;
+        top.pendingOp = nullptr;
+        tryCanonicalize(op);
+        continue;
       }
+  
+      // Done with this region's blocks: pop.
+      if (top.blockIdx >= top.blocks.size()) {
+        stack.pop_back();
+        continue;
+      }
+  
+      // Advance past the end of the current block to the next one.
+      mlir::Block *block = top.blocks[top.blockIdx];
+      if (top.opIter == block->end()) {
+        ++top.blockIdx;
+        if (top.blockIdx < top.blocks.size())
+          top.opIter = top.blocks[top.blockIdx]->begin();
+        continue;
+      }
+  
+      // Iterative equivalent of make_early_inc_range: capture the op and
+      // step the iterator before doing anything that might move or erase it.
+      mlir::Operation *op = &*top.opIter;
+      ++top.opIter;
+  
+      // If any nested region is non-empty, recurse into them first. Push in
+      // reverse so the stack pops them in source order (region 0, then 1, ...).
+      bool hasNested = false;
+      for (mlir::Region &nested : op->getRegions()) {
+        if (!nested.empty()) {
+          hasNested = true;
+          break;
+        }
+      }
+      if (hasNested) {
+        top.pendingOp = op;
+        for (mlir::Region &nested : llvm::reverse(op->getRegions())) {
+          if (!nested.empty())
+            stack.push_back(makeFrame(nested));
+        }
+        // `top` may now dangle due to vector reallocation; we don't touch it
+        // again this iteration.
+        continue;
+      }
+  
+      // Leaf op: no nested regions to descend into.
+      tryCanonicalize(op);
     }
   }
 
