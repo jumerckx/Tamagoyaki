@@ -13,9 +13,11 @@ permissions:
   # Required for actions/deploy-pages to authenticate with GitHub Pages
   id-token: write
 
+# Serialize builds per ref so a new push to the same branch/PR cancels the
+# older in-flight build.
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -84,6 +86,13 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-22.04
+
+    # Only the actual Pages deployment is globally serialized. We never
+    # cancel an in-progress deploy because a half-finished one can leave
+    # the site in a bad state.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
 
     environment:
       name: github-pages
