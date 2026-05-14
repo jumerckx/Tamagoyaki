@@ -10,6 +10,7 @@ on:
 permissions:
   contents: read
   pages: write
+  # Required for actions/deploy-pages to authenticate with GitHub Pages
   id-token: write
 
 concurrency:
@@ -28,10 +29,16 @@ jobs:
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
 
-      - name: Magic Nix Cache
-        uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: Restore Nix store
+        uses: nix-community/cache-nix-action@v7
         with:
-          use-flakehub: false
+          # Uses the exact same cache key format as your Linux Test workflow.
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+
+          # NEVER save the cache in this workflow.
+          # The Test workflow is responsible for populating the cache on the main branch.
+          save: false
 
       - name: Install Doxygen
         run: sudo apt-get update && sudo apt-get install -y doxygen

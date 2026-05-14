@@ -23,10 +23,9 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     permissions:
-      # Required by magic-nix-cache-action to talk to the GitHub
-      # Actions cache service.
-      id-token: write
       contents: read
+      # If you ever decide to use the `purge` inputs to delete old caches,
+      # you will need to add `actions: write` here.
 
     strategy:
       fail-fast: false
@@ -49,10 +48,19 @@ jobs:
       - name: Install Nix
         uses: DeterminateSystems/nix-installer-action@main
 
-      - name: Magic Nix Cache
-        uses: DeterminateSystems/magic-nix-cache-action@main
+      - name: Restore and save Nix store
+        uses: nix-community/cache-nix-action@v7
         with:
-          use-flakehub: false
+          # Invalidate the cache when your Nix dependencies change
+          primary-key: nix-${{ runner.os }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+
+          # If the lockfile changes, fall back to the most recent cache for this OS
+          restore-prefixes-first-match: nix-${{ runner.os }}-
+
+          # Only save the cache if we are on the main branch.
+          # This prevents PRs from writing unchanged (or newly bloated) caches
+          # that evict your main branch's cache from the 10GB limit.
+          save: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Configure
         run: tamagoyaki-configure build
