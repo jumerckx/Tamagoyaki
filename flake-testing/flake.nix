@@ -18,7 +18,13 @@
     };
   };
 
-  outputs = { self, nixpkgs, llvm-project-src, circt-src }:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      llvm-project-src,
+      circt-src,
+    }:
     let
       system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
@@ -47,8 +53,15 @@
         src = llvm-project-src;
         sourceRoot = "source/llvm";
 
-        nativeBuildInputs = with pkgs; [ cmake ninja python3 ];
-        buildInputs       = with pkgs; [ zlib libffi ];
+        nativeBuildInputs = with pkgs; [
+          cmake
+          ninja
+          python3
+        ];
+        buildInputs = with pkgs; [
+          zlib
+          libffi
+        ];
 
         cmakeBuildType = "Release";
 
@@ -66,19 +79,22 @@
           "-DLLVM_INCLUDE_BENCHMARKS=OFF"
           "-DLLVM_INCLUDE_DOCS=OFF"
           "-DLLVM_BUILD_DOCS=OFF"
-          "-DLLVM_INCLUDE_UTILS=ON"   # tblgen lives here, downstream needs it
+          "-DLLVM_INCLUDE_UTILS=ON" # tblgen lives here, downstream needs it
           "-DLLVM_INSTALL_UTILS=OFF"
           "-DMLIR_INCLUDE_TESTS=OFF"
           "-DMLIR_INCLUDE_INTEGRATION_TESTS=OFF"
           "-DMLIR_BUILD_MLIR_C_DYLIB=OFF"
         ];
 
-        hardeningDisable = [ "trivialautovarinit" "shadowstack" ];
+        hardeningDisable = [
+          "trivialautovarinit"
+          "shadowstack"
+        ];
 
         meta = with pkgs.lib; {
           description = "LLVM + MLIR (libraries only, for downstream cmake)";
-          homepage    = "https://mlir.llvm.org/";
-          platforms   = platforms.unix;
+          homepage = "https://mlir.llvm.org/";
+          platforms = platforms.unix;
         };
       };
 
@@ -90,11 +106,21 @@
         # CIRCT's repo root has its own CMakeLists.txt for the standalone
         # build flow — no sourceRoot tweaking needed.
 
-        nativeBuildInputs = with pkgs; [ cmake ninja python3 ];
+        nativeBuildInputs =
+          with pkgs;
+          [
+            cmake
+            ninja
+            python3
+          ]
+          ++ lib.optionals stdenv.hostPlatform.isLinux [ autoPatchelfHook ];
         # propagate llvm-mlir so downstream `nix build .#circt` users
         # automatically pull MLIR/LLVM into their closure.
         propagatedBuildInputs = [ llvm-mlir ];
-        buildInputs           = with pkgs; [ zlib libffi ];
+        buildInputs = with pkgs; [
+          zlib
+          libffi
+        ];
 
         cmakeBuildType = "Release";
 
@@ -109,16 +135,20 @@
           "-DCIRCT_SLANG_FRONTEND_ENABLED=OFF"
         ];
 
-        hardeningDisable = [ "trivialautovarinit" "shadowstack" ];
+        hardeningDisable = [
+          "trivialautovarinit"
+          "shadowstack"
+        ];
 
         meta = with pkgs.lib; {
           description = "CIRCT built against an external LLVM/MLIR";
-          homepage    = "https://circt.llvm.org/";
-          platforms   = platforms.unix;
+          homepage = "https://circt.llvm.org/";
+          platforms = platforms.unix;
         };
       };
 
-    in {
+    in
+    {
       packages.${system} = {
         inherit llvm-mlir circt;
         default = circt;
@@ -127,12 +157,16 @@
       # `nix develop` gives you cmake + ninja with every *_DIR your
       # project needs already exported.
       devShells.${system}.default = pkgs.mkShell {
-        packages = with pkgs; [ cmake ninja ];
+        packages = with pkgs; [
+          cmake
+          ninja
+        ];
 
-        LLVM_DIR          = "${llvm-mlir}/lib/cmake/llvm";
-        MLIR_DIR          = "${llvm-mlir}/lib/cmake/mlir";
-        CIRCT_DIR         = "${circt}/lib/cmake/circt";
+        LLVM_DIR = "${llvm-mlir}/lib/cmake/llvm";
+        MLIR_DIR = "${llvm-mlir}/lib/cmake/mlir";
+        CIRCT_DIR = "${circt}/lib/cmake/circt";
         CMAKE_PREFIX_PATH = "${llvm-mlir}:${circt}";
+        LD_LIBRARY_PATH = "${llvm-mlir}/lib:${circt}/lib";
       };
     };
 }
