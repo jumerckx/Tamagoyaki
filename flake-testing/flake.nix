@@ -1,76 +1,138 @@
 {
-  description = "Custom LLVM build using Clang";
+  description = "Minimal LLVM+MLIR+CIRCT build for a downstream consumer";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    # 1. SPECIFY YOUR COMMIT HERE
-    # Change the URL to target the specific commit hash you want.
     llvm-project-src = {
       url = "github:llvm/llvm-project/a47d3636f953870d96fb6cc68817365fdad2f9fe";
       flake = false;
     };
+
+    # IMPORTANT: pick a CIRCT commit whose `llvm` submodule points at the
+    # llvm-project commit above (or close enough that the APIs match).
+    # Otherwise you'll hit header/ABI breakage at CIRCT compile time.
+    circt-src = {
+      url = "github:llvm/circt/96997a18c388f8c7a05344f3f39805bd7856236a";
+      flake = false;
+    };
   };
 
-  outputs = { self, nixpkgs, llvm-project-src }: 
+  outputs = { self, nixpkgs, llvm-project-src, circt-src }:
     let
-      system = "x86_64-linux"; # Change to aarch64-linux or aarch64-darwin if needed
+      system = "x86_64-linux";
       pkgs = import nixpkgs { inherit system; };
 
-      # 2. USE CLANG TO BUILD
-      # We use the latest LLVM stdenv available in Nixpkgs so the 
-      # compiler doing the building is a modern Clang.
+      # Build with a modern Clang from nixpkgs.
       stdenv = pkgs.llvmPackages_latest.stdenv;
 
-    in {
-      packages.${system}.default = stdenv.mkDerivation {
-        pname = "llvm-custom";
-        version = "custom-commit";
+      # Flags shared by both derivations so LLVM and CIRCT agree on ABI
+      # (assertions especially — mismatched assertion settings change struct
+      # layouts and corrupt linkage silently).
+      commonCmakeFlags = [
+        "-DLLVM_ENABLE_ASSERTIONS=OFF"
+        "-DLLVM_ENABLE_RTTI=ON"
+        "-DLLVM_ENABLE_TERMINFO=OFF"
+        "-DLLVM_ENABLE_ZSTD=OFF"
+        "-DLLVM_TARGETS_TO_BUILD=Native"
+        # Link against a single libLLVM.so instead of dozens of static libs.
+        # Shrinks the closure dramatically.
+        "-DLLVM_LINK_LLVM_DYLIB=ON"
+      ];
+
+      llvm-mlir = stdenv.mkDerivation {
+        pname = "llvm-mlir";
+        version = "custom";
 
         src = llvm-project-src;
-
-        # The LLVM monorepo contains many projects. 
-        # If you only want libLLVM (like the snippet you provided):
         sourceRoot = "source/llvm";
-        
-        # If you want to build the whole toolchain (clang, lld, etc) from the root, 
-        # comment out the sourceRoot above, and uncomment this:
-        # cmakeFlags = [ "-S" "../source/llvm" ];
 
-        nativeBuildInputs = with pkgs; [ 
-          cmake 
-          ninja 
-          python3 
-        ];
+        nativeBuildInputs = with pkgs; [ cmake ninja python3 ];
+        buildInputs       = with pkgs; [ zlib libffi ];
 
-        buildInputs = with pkgs; [ 
-          libxml2 
-          zlib 
-          libffi 
-          ncurses 
-        ];
-
-        # Standard optimizations
         cmakeBuildType = "Release";
 
-        cmakeFlags = [
+        cmakeFlags = commonCmakeFlags ++ [
+          "-DLLVM_ENABLE_PROJECTS=mlir"
+
+          # Actually produce the shared libLLVM.so the flag above links to.
+          "-DLLVM_BUILD_LLVM_DYLIB=ON"
+
+          # Strip everything we don't need.
           "-DLLVM_INCLUDE_TESTS=OFF"
           "-DLLVM_BUILD_TESTS=OFF"
-          "-DLLVM_ENABLE_RTTI=ON"
-          "-DLLVM_ENABLE_TERMINFO=OFF"
-          
-          # If you decided to build the whole toolchain above, specify projects here:
-          # "-DLLVM_ENABLE_PROJECTS=clang;lld;polly"
+          "-DLLVM_INCLUDE_EXAMPLES=OFF"
+          "-DLLVM_BUILD_EXAMPLES=OFF"
+          "-DLLVM_INCLUDE_BENCHMARKS=OFF"
+          "-DLLVM_INCLUDE_DOCS=OFF"
+          "-DLLVM_BUILD_DOCS=OFF"
+          "-DLLVM_INCLUDE_UTILS=ON"   # tblgen lives here, downstream needs it
+          "-DLLVM_INSTALL_UTILS=OFF"
+          "-DMLIR_INCLUDE_TESTS=OFF"
+          "-DMLIR_INCLUDE_INTEGRATION_TESTS=OFF"
+          "-DMLIR_BUILD_MLIR_C_DYLIB=OFF"
         ];
 
-        # Same hardening disables used in Nixpkgs to prevent build failures
         hardeningDisable = [ "trivialautovarinit" "shadowstack" ];
 
         meta = with pkgs.lib; {
-          description = "Custom LLVM build";
-          homepage = "https://llvm.org/";
-          platforms = platforms.all;
+          description = "LLVM + MLIR (libraries only, for downstream cmake)";
+          homepage    = "https://mlir.llvm.org/";
+          platforms   = platforms.unix;
         };
+      };
+
+      circt = stdenv.mkDerivation {
+        pname = "circt";
+        version = "custom";
+
+        src = circt-src;
+        # CIRCT's repo root has its own CMakeLists.txt for the standalone
+        # build flow — no sourceRoot tweaking needed.
+
+        nativeBuildInputs = with pkgs; [ cmake ninja python3 ];
+        # propagate llvm-mlir so downstream `nix build .#circt` users
+        # automatically pull MLIR/LLVM into their closure.
+        propagatedBuildInputs = [ llvm-mlir ];
+        buildInputs           = with pkgs; [ zlib libffi ];
+
+        cmakeBuildType = "Release";
+
+        cmakeFlags = commonCmakeFlags ++ [
+          "-DMLIR_DIR=${llvm-mlir}/lib/cmake/mlir"
+          "-DLLVM_DIR=${llvm-mlir}/lib/cmake/llvm"
+
+          "-DCIRCT_INCLUDE_TESTS=OFF"
+          "-DCIRCT_INCLUDE_INTEGRATION_TESTS=OFF"
+          "-DCIRCT_BINDINGS_PYTHON_ENABLED=OFF"
+          # Flip to ON if you ever want circt-verilog. Pulls in slang.
+          "-DCIRCT_SLANG_FRONTEND_ENABLED=OFF"
+        ];
+
+        hardeningDisable = [ "trivialautovarinit" "shadowstack" ];
+
+        meta = with pkgs.lib; {
+          description = "CIRCT built against an external LLVM/MLIR";
+          homepage    = "https://circt.llvm.org/";
+          platforms   = platforms.unix;
+        };
+      };
+
+    in {
+      packages.${system} = {
+        inherit llvm-mlir circt;
+        default = circt;
+      };
+
+      # `nix develop` gives you cmake + ninja with every *_DIR your
+      # project needs already exported.
+      devShells.${system}.default = pkgs.mkShell {
+        packages = with pkgs; [ cmake ninja ];
+
+        LLVM_DIR          = "${llvm-mlir}/lib/cmake/llvm";
+        MLIR_DIR          = "${llvm-mlir}/lib/cmake/mlir";
+        CIRCT_DIR         = "${circt}/lib/cmake/circt";
+        CMAKE_PREFIX_PATH = "${llvm-mlir}:${circt}";
       };
     };
 }

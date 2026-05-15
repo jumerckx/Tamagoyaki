@@ -1,5 +1,22 @@
 {
   "nodes": {
+    "circt-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1778616762,
+        "narHash": "sha256-0Di1jP4HNSODbpYHjVJArBnnOXmXr8WrVGT4UI/8wBw=",
+        "owner": "llvm",
+        "repo": "circt",
+        "rev": "96997a18c388f8c7a05344f3f39805bd7856236a",
+        "type": "github"
+      },
+      "original": {
+        "owner": "llvm",
+        "repo": "circt",
+        "rev": "96997a18c388f8c7a05344f3f39805bd7856236a",
+        "type": "github"
+      }
+    },
     "llvm-project-src": {
       "flake": false,
       "locked": {
@@ -35,6 +52,7 @@
     },
     "root": {
       "inputs": {
+        "circt-src": "circt-src",
         "llvm-project-src": "llvm-project-src",
         "nixpkgs": "nixpkgs"
       }
