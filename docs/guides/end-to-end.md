@@ -8,7 +8,7 @@ This expression can be translated to MLIR IR:
 func.func @example(%a: i32) -> (i32) {
   %two = arith.constant 2 : i32
   %mul = arith.muli %a, %two : i32
-  %div = arith.divui %mul, %two : i32
+  %div = arith.divsi %mul, %two : i32
   return %div : i32
 }
 ```
@@ -36,7 +36,7 @@ func.func @example(%arg0: i32) -> i32 {
   %0 = equivalence.graph -> (i32) {
     %c2_i32 = arith.constant 2 : i32
     %1 = arith.muli %arg0, %c2_i32 : i32
-    %2 = arith.divui %1, %c2_i32 : i32
+    %2 = arith.divsi %1, %c2_i32 : i32
     equivalence.yield %2 : i32
   }
   return %0 : i32
@@ -103,7 +103,7 @@ func.func @example(%arg0: i32) -> i32 {
     %1 = arith.shli %arg0, %c1_i32 : i32
     %2 = arith.muli %arg0, %c2_i32 : i32
     %3 = equivalence.class %2, %1 : i32
-    %4 = arith.divui %3, %c2_i32 : i32
+    %4 = arith.divsi %3, %c2_i32 : i32
     equivalence.yield %4 : i32
   }
   return %0 : i32
@@ -127,7 +127,7 @@ func.func @example(%arg0: i32) -> i32 {
     %1 = arith.shli %arg0, %c1_i32 : i32
     %2 = arith.muli %arg0, %c2_i32 : i32
     %3 = equivalence.class %2, %1 (min_cost_index = 0) : i32
-    %4 = arith.divui %3, %c2_i32 : i32
+    %4 = arith.divsi %3, %c2_i32 : i32
     equivalence.yield %4 : i32
   }
   return %0 : i32
@@ -159,7 +159,7 @@ module {
     %c2_i32 = arith.constant 2 : i32
     %c1_i32 = arith.constant 1 : i32
     %0 = arith.muli %arg0, %c2_i32 : i32
-    %1 = arith.divui %0, %c2_i32 : i32
+    %1 = arith.divsi %0, %c2_i32 : i32
     return %1 : i32
   }
 }
