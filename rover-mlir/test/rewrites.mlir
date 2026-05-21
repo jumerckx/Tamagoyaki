@@ -192,7 +192,7 @@ pdl.pattern @SelAddLeft : benefit(1) {
 
   pdl.rewrite %mux {
     %zero = pdl.apply_native_rewrite "BuildZero"
-             (%mux: !pdl.operation, 0 : i32)
+             (%mux: !pdl.operation)
              : !pdl.operation
     %zeroRes = pdl.result 0 of %zero
     %mux_b = pdl.operation "comb.mux"(%s, %b, %zeroRes : !pdl.value, !pdl.value, !pdl.value) 
