@@ -8,4 +8,4 @@ if(ROVER_MLIR_BUILD_TOOLS)
     add_subdirectory(tools)
 endif()
 
-# add_subdirectory(test)
+add_subdirectory(test)

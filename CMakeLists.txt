@@ -74,8 +74,8 @@ if(BUILD_CRANELIFT_MLIR)
 endif()
 
 # check-all: run all test suites that are enabled. Subprojects without a
-# lit suite (currently rover-mlir) are still pulled in as build deps so CI
-# fails on a compile break instead of silently skipping them.
+# lit suite are still pulled in as build deps so CI fails on a compile
+# break instead of silently skipping them.
 set(CHECK_ALL_DEPENDS check-tamagoyaki)
 if(BUILD_HERBIE_MLIR)
   list(APPEND CHECK_ALL_DEPENDS check-herbie-mlir)
@@ -84,9 +84,10 @@ if(BUILD_CRANELIFT_MLIR)
   list(APPEND CHECK_ALL_DEPENDS check-cranelift-mlir)
 endif()
 if(BUILD_ROVER_MLIR)
-  list(APPEND CHECK_ALL_DEPENDS RoverDialect)
   if(ROVER_MLIR_BUILD_TOOLS)
-    list(APPEND CHECK_ALL_DEPENDS rover-mlir-opt)
+    list(APPEND CHECK_ALL_DEPENDS check-rover-mlir)
+  else()
+    list(APPEND CHECK_ALL_DEPENDS RoverDialect)
   endif()
 endif()
 add_custom_target(check-all DEPENDS ${CHECK_ALL_DEPENDS})
