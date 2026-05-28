@@ -307,16 +307,6 @@
 
         devShells = {
           # ---------- CI shell ----------
-          # The minimum needed to configure and run `ninja check-all`
-          # against the prebuilt LLVM/MLIR/CIRCT/rival-ffi from the
-          # binary cache. No Rust toolchain, no Racket, no Herbie
-          # graphics deps — those are only needed for development, not
-          # for running the test suite. This is what
-          # `.github/workflows/test.yml` uses.
-          #
-          # cmake/ninja/lit/pkg-config and the LLVM/MLIR/CIRCT/gmp/mpfr
-          # closure all come in via `inputsFrom = [ tamagoyaki ]` and
-          # so don't need to be listed explicitly.
           ci = pkgs.mkShell {
             name = "tamagoyaki-ci";
             inputsFrom = [ tamagoyaki ];
@@ -346,15 +336,6 @@
             packages = (with pkgs; [
               rustToolchain
               racket-minimal
-              flex
-              bison
-              fontconfig
-              cairo
-              pango
-              libjpeg
-              libpng
-              zlib
-              uv
             ]) ++ [
               tamagoyaki-configure
             ];
@@ -372,40 +353,8 @@
             RIVAL_PREBUILT_LIB     = "${rival-ffi}/lib/librival3_ffi.a";
             RIVAL_PREBUILT_INCLUDE = "${rival-ffi}/include";
 
-            RACKET_FFI_LIB_PATH = lib.makeLibraryPath (
-              with pkgs;
-              [
-                stdenv.cc.cc.lib
-                gmp
-                mpfr
-                fontconfig
-                cairo
-                pango
-                glib
-                freetype
-                fribidi
-                pixman
-                expat
-                libjpeg
-                libpng
-                zlib
-              ]
-            );
 
             shellHook = ''
-              case "$(uname)" in
-                Darwin)
-                  export DYLD_FALLBACK_LIBRARY_PATH="$RACKET_FFI_LIB_PATH''${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}"
-                  export MACOSX_DEPLOYMENT_TARGET="${darwinDeploymentTarget}"
-                  ;;
-                *)
-                  export LD_LIBRARY_PATH="$RACKET_FFI_LIB_PATH''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-                  ;;
-              esac
-
-              # Don't let the system Python interfere with uv-managed envs.
-              unset PYTHONPATH
-
               echo "tamagoyaki dev shell ready"
               echo "  uv     : $(uv --version)"
               echo "  cargo  : $(cargo --version)"
