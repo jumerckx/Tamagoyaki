@@ -116,7 +116,16 @@
                     "-DMLIR_BUILD_MLIR_C_DYLIB=OFF"
                   ];
                   meta.platforms = lib.platforms.unix;
-                  env.NIX_CFLAGS_COMPILE = lib.optionalString isDebug "-ffile-prefix-map=/build/source=${llvm-project-src}";
+                  preConfigure = lib.optionalString isDebug ''
+                    export NIX_CFLAGS_COMPILE="''${NIX_CFLAGS_COMPILE:-} -ffile-prefix-map=$NIX_BUILD_TOP/source=${llvm-project-src}"
+                  '';
+                  postInstall = lib.optionalString (isDebug && stdenv.hostPlatform.isDarwin) ''
+                    for f in $out/lib/lib*.dylib $out/bin/*; do
+                      [ -f "$f" ] && [ ! -L "$f" ] || continue
+                      file "$f" | grep -q "Mach-O" || continue
+                      dsymutil "$f" || true
+                    done
+                  '';
                 }
               );
 
@@ -151,7 +160,16 @@
 
                   ];
                   meta.platforms = lib.platforms.unix;
-                  env.NIX_CFLAGS_COMPILE = lib.optionalString isDebug "-ffile-prefix-map=/build/source=${circt-src}";
+                  preConfigure = lib.optionalString isDebug ''
+                    export NIX_CFLAGS_COMPILE="''${NIX_CFLAGS_COMPILE:-} -ffile-prefix-map=$NIX_BUILD_TOP/source=${circt-src}"
+                  '';
+                  postInstall = lib.optionalString (isDebug && stdenv.hostPlatform.isDarwin) ''
+                    for f in $out/lib/lib*.dylib $out/bin/*; do
+                      [ -f "$f" ] && [ ! -L "$f" ] || continue
+                      file "$f" | grep -q "Mach-O" || continue
+                      dsymutil "$f" || true
+                    done
+                  '';
                 }
               );
 
