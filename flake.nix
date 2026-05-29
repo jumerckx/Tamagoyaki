@@ -215,10 +215,12 @@
                     lit
                     git
                     m4
+                    pkg-config
                   ];
                   buildInputs = [
                     llvm-mlir
                     circt
+                    rival-ffi
                   ]
                   ++ (with pkgs; [
                     gmp
@@ -262,16 +264,31 @@
                   ])
                   ++ debuggers;
 
-                # CMake picks up MLIR/LLVM/CIRCT via CMAKE_PREFIX_PATH.
-                CMAKE_PREFIX_PATH = "${llvm-mlir}:${circt}";
+                # CMake picks up MLIR/LLVM/CIRCT (and gmp/mpfr/libmpc, since
+                # they are in buildInputs) via CMAKE_PREFIX_PATH.
+                CMAKE_PREFIX_PATH = lib.concatStringsSep ":" [
+                  "${llvm-mlir}"
+                  "${circt}"
+                  "${pkgs.gmp.dev}"
+                  "${pkgs.mpfr.dev}"
+                  "${pkgs.libmpc}"
+                ];
                 CMAKE_BUILD_TYPE = buildType;
                 LLVM_EXTERNAL_LIT = "${pkgs.lit}/bin/lit";
+
+                # Use the prebuilt rival-ffi (linked against the bundled
+                # gmp/mpfr) instead of letting CMake fetch + cargo build it.
+                RIVAL_PREBUILT_LIB = "${rival-ffi}/lib/librival3_ffi.a";
+                RIVAL_PREBUILT_INCLUDE = "${rival-ffi}/include";
 
                 shellHook = ''
                   # Don't let the host PYTHONPATH leak into lit's python.
                   unset PYTHONPATH
                   echo "tamagoyaki ${variant} shell ready"
-                  echo "  configure: cmake -G Ninja -B build -S . -DLLVM_EXTERNAL_LIT=$LLVM_EXTERNAL_LIT"
+                  echo "  configure: cmake -G Ninja -B build -S . \\"
+                  echo "               -DLLVM_EXTERNAL_LIT=$LLVM_EXTERNAL_LIT \\"
+                  echo "               -DRIVAL_PREBUILT_LIB=$RIVAL_PREBUILT_LIB \\"
+                  echo "               -DRIVAL_PREBUILT_INCLUDE=$RIVAL_PREBUILT_INCLUDE"
                   echo "  build:     ninja -C build check-all"
                 '';
               };
