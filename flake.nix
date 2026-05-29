@@ -338,6 +338,8 @@
               racket-minimal
             ]) ++ [
               tamagoyaki-configure
+              mlir
+              libllvm
             ];
 
             # Exposed for ad-hoc use; the configure wrapper is the

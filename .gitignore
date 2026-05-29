@@ -65,3 +65,6 @@ CMakeFiles
 *.exe
 *.out
 *.app
+
+# nix-direnv cache (per-machine; do not commit)
+.direnv/
