@@ -305,6 +305,18 @@
                   # Don't let the host PYTHONPATH leak into lit's python.
                   unset PYTHONPATH
 
+                  # Racket's math/bigfloat loads libmpfr/libgmp at runtime via
+                  # FFI dlopen (not at link time), so Herbie/rival's `raco`
+                  # install needs them on the loader path. CMAKE_PREFIX_PATH
+                  # only covers the build-time C/C++ discovery. Without this,
+                  # mpfr_* calls raise "implementation not found".
+                  ${
+                    if isDarwin then
+                      ''export DYLD_LIBRARY_PATH="${lib.makeLibraryPath [ pkgs.gmp pkgs.mpfr pkgs.libmpc ]}''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"''
+                    else
+                      ''export LD_LIBRARY_PATH="${lib.makeLibraryPath [ pkgs.gmp pkgs.mpfr pkgs.libmpc ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"''
+                  }
+
                   echo "tamagoyaki ${variant} shell ready"
                   echo "  configure: cmake -G Ninja -B build -S . \\"
                   echo "               -DLLVM_EXTERNAL_LIT=$LLVM_EXTERNAL_LIT \\"
