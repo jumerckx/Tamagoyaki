@@ -4,6 +4,11 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
 
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     llvm-project-src = {
       url = "github:llvm/llvm-project/a47d3636f953870d96fb6cc68817365fdad2f9fe";
       flake = false;
@@ -22,6 +27,7 @@
     {
       self,
       nixpkgs,
+      rust-overlay,
       llvm-project-src,
       circt-src,
       rival3-src,
@@ -38,10 +44,22 @@
       perSystem =
         system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ rust-overlay.overlays.default ];
+          };
           lib = pkgs.lib;
           stdenv = pkgs.llvmPackages_latest.stdenv;
           isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
+
+          # rival3-ffi uses `let` chains in `if`, stabilised in 1.88, so
+          # we pin a recent stable rather than rely on whatever rustc the
+          # current nixpkgs channel ships.
+          rustToolchain = pkgs.rust-bin.stable."1.91.0".minimal;
+          rustPlatform = pkgs.makeRustPlatform {
+            cargo = rustToolchain;
+            rustc = rustToolchain;
+          };
 
           # gdb is broken / unsupported on Darwin in nixpkgs.
           debuggers =
@@ -57,7 +75,7 @@
           # rival3-ffi static C-API library. We pre-build it via Nix so
           # `nix build` works offline. The dev shell ships cargo so the
           # CMake build can fall back to FetchContent + cargo if needed.
-          rival-ffi = pkgs.rustPlatform.buildRustPackage {
+          rival-ffi = rustPlatform.buildRustPackage {
             pname = "rival3-ffi";
             version = "unstable-2026-04-28";
             src = rival3-src;
@@ -255,14 +273,14 @@
 
                 inputsFrom = [ tamagoyaki ];
 
-                packages =
-                  (with pkgs; [
-                    cargo
-                    rustc
-                    racket-minimal
-                    uv
-                  ])
-                  ++ debuggers;
+                packages = [
+                  rustToolchain
+                ]
+                ++ (with pkgs; [
+                  racket-minimal
+                  uv
+                ])
+                ++ debuggers;
 
                 # CMake picks up MLIR/LLVM/CIRCT (and gmp/mpfr/libmpc, since
                 # they are in buildInputs) via CMAKE_PREFIX_PATH.
