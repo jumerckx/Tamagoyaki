@@ -264,10 +264,12 @@
 
               # ---------- Dev shell ----------
               # Everything needed to configure and build tamagoyaki by hand.
-              # Notably: cargo (so CMake's FetchContent path can build rival
-              # against the network), racket-minimal (so the user can install
-              # Herbie later via `raco pkg install ...`), and uv (for the
-              # Python eval scripts in herbie_mlir/).
+              # Notably: rustToolchain (so CMake's FetchContent path can build
+              # rival against the network), racket (so the user can install
+              # Herbie later via `raco pkg install ...` -- we use the full
+              # racket so Herbie's draw-lib/plot-lib deps find Cairo, Pango,
+              # fontconfig etc. via FFI), and uv (for the Python eval scripts
+              # in herbie_mlir/).
               shell = (pkgs.mkShell.override { inherit stdenv; }) {
                 name = "tamagoyaki${suffix}";
 
@@ -277,7 +279,7 @@
                   rustToolchain
                 ]
                 ++ (with pkgs; [
-                  racket-minimal
+                  racket
                   uv
                 ])
                 ++ debuggers;
@@ -302,6 +304,7 @@
                 shellHook = ''
                   # Don't let the host PYTHONPATH leak into lit's python.
                   unset PYTHONPATH
+
                   echo "tamagoyaki ${variant} shell ready"
                   echo "  configure: cmake -G Ninja -B build -S . \\"
                   echo "               -DLLVM_EXTERNAL_LIT=$LLVM_EXTERNAL_LIT \\"
