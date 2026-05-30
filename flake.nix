@@ -52,16 +52,14 @@
           stdenv = pkgs.llvmPackages_latest.stdenv;
           isDarwin = pkgs.stdenv.hostPlatform.isDarwin;
 
-          # rival3-ffi uses `let` chains in `if`, stabilised in 1.88, so
-          # we pin a recent stable rather than rely on whatever rustc the
-          # current nixpkgs channel ships.
+          # rival3-ffi needs `let` chains in `if` (stable since 1.88).
           rustToolchain = pkgs.rust-bin.stable."1.91.0".minimal;
           rustPlatform = pkgs.makeRustPlatform {
             cargo = rustToolchain;
             rustc = rustToolchain;
           };
 
-          # gdb is broken / unsupported on Darwin in nixpkgs.
+          # gdb is unsupported on Darwin in nixpkgs.
           debuggers =
             if isDarwin then
               [ pkgs.lldb ]
@@ -71,10 +69,7 @@
                 pkgs.lldb
               ];
 
-          # ---------- Rival (Rust) ----------
-          # rival3-ffi static C-API library. We pre-build it via Nix so
-          # `nix build` works offline. The dev shell ships cargo so the
-          # CMake build can fall back to FetchContent + cargo if needed.
+          # Prebuilt rival3-ffi static C-API library, so `nix build` is offline.
           rival-ffi = rustPlatform.buildRustPackage {
             pname = "rival3-ffi";
             version = "unstable-2026-04-28";
@@ -85,7 +80,7 @@
             cargoHash = "sha256-0KD5zCJotpWKooKLvLZF3sVkPJBVec5lQ4L8CNQzrJo=";
             doCheck = false;
 
-            # Use system GMP/MPFR instead of letting gmp-mpfr-sys vendor them.
+            # Use system GMP/MPFR instead of vendoring them.
             cargoBuildFlags = [
               "--features"
               "gmp-mpfr-sys/use-system-libs"
@@ -112,7 +107,6 @@
             '';
           };
 
-          # ---------- LLVM/MLIR + CIRCT, with debug & release variants ----------
           mkVariant =
             { variant }:
             let
@@ -163,7 +157,6 @@
                   cmakeFlags = commonCmakeFlags ++ [
                     "-DLLVM_ENABLE_PROJECTS=mlir"
                     "-DLLVM_BUILD_LLVM_DYLIB=ON"
-                    # Strip everything we don't need.
                     "-DLLVM_INCLUDE_TESTS=OFF"
                     "-DLLVM_BUILD_TESTS=OFF"
                     "-DLLVM_INCLUDE_EXAMPLES=OFF"
@@ -174,8 +167,8 @@
                     "-DMLIR_INCLUDE_TESTS=OFF"
                     "-DMLIR_INCLUDE_INTEGRATION_TESTS=OFF"
                     "-DMLIR_BUILD_MLIR_C_DYLIB=OFF"
-                    # Keep LLVM_INSTALL_UTILS at default ON so FileCheck,
-                    # count and not end up in $out/bin for our lit suites.
+                    # LLVM_INSTALL_UTILS stays ON so FileCheck/count/not land
+                    # in $out/bin for our lit suites.
                   ];
                   meta.platforms = lib.platforms.unix;
                   preConfigure = lib.optionalString isDebug ''
@@ -218,7 +211,6 @@
                 }
               );
 
-              # ---------- Tamagoyaki (the project itself) ----------
               tamagoyaki = stdenv.mkDerivation (
                 variantAttrs
                 // {
@@ -262,11 +254,8 @@
                 }
               );
 
-              # ---------- Configure helper ----------
-              # `tamagoyaki-configure [build-dir] [extra cmake args...]`
-              # runs the CMake configure step that both the dev shell and CI
-              # rely on. It reads the env vars exported by the shells below
-              # (CMAKE_PREFIX_PATH locates MLIR/LLVM/CIRCT + gmp/mpfr/libmpc).
+              # `tamagoyaki-configure [build-dir] [extra cmake args...]`, using
+              # the env the shells below export (CMAKE_PREFIX_PATH, etc.).
               tamagoyaki-configure = pkgs.writeShellScriptBin "tamagoyaki-configure" ''
                 set -euo pipefail
                 builddir="''${1:-build}"
@@ -280,24 +269,10 @@
                   "$@"
               '';
 
-              # ---------- Shells ----------
-              # `mkTamaShell { ci }` builds a shell that can configure, build,
-              # and run tamagoyaki's tests. `inputsFrom = [ tamagoyaki ]`
-              # pulls in cmake/ninja/python/lit/git/m4/pkg-config plus all the
-              # C/C++ build & runtime deps (llvm-mlir, circt, rival-ffi,
-              # gmp/mpfr/libmpc, ...).
-              #
-              # The dev shell (ci = false) adds the extras a human needs that
-              # CI does not: rustToolchain (so CMake's FetchContent path can
-              # build rival against the network), racket (so the user can
-              # install Herbie via `raco pkg install ...` -- the full racket
-              # so Herbie's draw-lib/plot-lib deps find Cairo, Pango,
-              # fontconfig etc. via FFI), uv (for the Python eval scripts in
-              # herbie_mlir/), and debuggers.
-              #
-              # The CI shell (ci = true) is the minimum to run `check-all`:
-              # rival is prebuilt (RIVAL_PREBUILT_*), so no Rust; no Racket,
-              # uv, or debuggers.
+              # inputsFrom = [ tamagoyaki ] supplies the build tooling and
+              # C/C++ deps. The dev shell (ci = false) adds Rust (rival's
+              # FetchContent fallback), full racket (Herbie via raco), uv, and
+              # debuggers; the CI shell is the minimum to run `check-all`.
               mkTamaShell =
                 { ci }:
                 (pkgs.mkShell.override { inherit stdenv; }) {
@@ -317,8 +292,7 @@
                     ++ debuggers
                   );
 
-                  # CMake picks up MLIR/LLVM/CIRCT (and gmp/mpfr/libmpc, since
-                  # they are in buildInputs) via CMAKE_PREFIX_PATH.
+                  # CMake locates MLIR/LLVM/CIRCT + gmp/mpfr/libmpc here.
                   CMAKE_PREFIX_PATH = lib.concatStringsSep ":" [
                     "${llvm-mlir}"
                     "${circt}"
@@ -329,19 +303,16 @@
                   CMAKE_BUILD_TYPE = buildType;
                   LLVM_EXTERNAL_LIT = "${pkgs.lit}/bin/lit";
 
-                  # Use the prebuilt rival-ffi (linked against the bundled
-                  # gmp/mpfr) instead of letting CMake fetch + cargo build it.
+                  # Use the prebuilt rival-ffi instead of fetch + cargo build.
                   RIVAL_PREBUILT_LIB = "${rival-ffi}/lib/librival3_ffi.a";
                   RIVAL_PREBUILT_INCLUDE = "${rival-ffi}/include";
 
                   shellHook = ''
-                    # Don't let the host PYTHONPATH leak into lit's python.
+                    # Keep the host PYTHONPATH out of lit's python.
                     unset PYTHONPATH
 
-                    # gmp/mpfr/libmpc are loaded at runtime (rival's FFI, and
-                    # racket's math/bigfloat via dlopen) rather than only at
-                    # link time, so they must be on the loader path. Without
-                    # this, mpfr_* calls raise "implementation not found".
+                    # gmp/mpfr/libmpc are dlopen'd at runtime, so they need to
+                    # be on the loader path, not just discoverable at link time.
                     ${
                       if isDarwin then
                         ''export DYLD_LIBRARY_PATH="${lib.makeLibraryPath [ pkgs.gmp pkgs.mpfr pkgs.libmpc ]}''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"''
