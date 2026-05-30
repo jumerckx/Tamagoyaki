@@ -248,7 +248,6 @@
                     "-DLLVM_EXTERNAL_LIT=${pkgs.lit}/bin/lit"
                     "-DRIVAL_PREBUILT_LIB=${rival-ffi}/lib/librival3_ffi.a"
                     "-DRIVAL_PREBUILT_INCLUDE=${rival-ffi}/include"
-                    "-DBUILD_SHARED_LIBS=ON"
                   ];
 
                   meta.platforms = lib.platforms.unix;
@@ -266,7 +265,6 @@
                   -DLLVM_EXTERNAL_LIT="''${LLVM_EXTERNAL_LIT}" \
                   -DRIVAL_PREBUILT_LIB="''${RIVAL_PREBUILT_LIB}" \
                   -DRIVAL_PREBUILT_INCLUDE="''${RIVAL_PREBUILT_INCLUDE}" \
-                  -DBUILD_SHARED_LIBS=ON \
                   "$@"
               '';
 
