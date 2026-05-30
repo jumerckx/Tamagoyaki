@@ -316,9 +316,21 @@
                     # be on the loader path, not just discoverable at link time.
                     ${
                       if isDarwin then
-                        ''export DYLD_LIBRARY_PATH="${lib.makeLibraryPath [ pkgs.gmp pkgs.mpfr pkgs.libmpc ]}''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"''
+                        ''export DYLD_LIBRARY_PATH="${
+                          lib.makeLibraryPath [
+                            pkgs.gmp
+                            pkgs.mpfr
+                            pkgs.libmpc
+                          ]
+                        }''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"''
                       else
-                        ''export LD_LIBRARY_PATH="${lib.makeLibraryPath [ pkgs.gmp pkgs.mpfr pkgs.libmpc ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"''
+                        ''export LD_LIBRARY_PATH="${
+                          lib.makeLibraryPath [
+                            pkgs.gmp
+                            pkgs.mpfr
+                            pkgs.libmpc
+                          ]
+                        }''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"''
                     }
 
                     echo "tamagoyaki ${variant}${lib.optionalString ci " (ci)"} shell ready"
