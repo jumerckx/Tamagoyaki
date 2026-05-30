@@ -167,8 +167,9 @@
                     "-DMLIR_INCLUDE_TESTS=OFF"
                     "-DMLIR_INCLUDE_INTEGRATION_TESTS=OFF"
                     "-DMLIR_BUILD_MLIR_C_DYLIB=OFF"
-                    # LLVM_INSTALL_UTILS stays ON so FileCheck/count/not land
-                    # in $out/bin for our lit suites.
+                    # Install FileCheck/count/not into $out/bin for our lit
+                    # suites. Defaults to OFF, so it must be set explicitly.
+                    "-DLLVM_INSTALL_UTILS=ON"
                   ];
                   meta.platforms = lib.platforms.unix;
                   preConfigure = lib.optionalString isDebug ''
