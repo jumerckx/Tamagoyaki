@@ -8,8 +8,6 @@ if(CMAKE_EXPORT_COMPILE_COMMANDS)
 endif()
 
 
-set(CMAKE_BUILD_WITH_INSTALL_NAME_DIR ON)
-
 set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard to conform to")
 
 include(GNUInstallDirs)
