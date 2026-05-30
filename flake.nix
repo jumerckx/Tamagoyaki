@@ -262,76 +262,110 @@
                 }
               );
 
-              # ---------- Dev shell ----------
-              # Everything needed to configure and build tamagoyaki by hand.
-              # Notably: rustToolchain (so CMake's FetchContent path can build
-              # rival against the network), racket (so the user can install
-              # Herbie later via `raco pkg install ...` -- we use the full
-              # racket so Herbie's draw-lib/plot-lib deps find Cairo, Pango,
-              # fontconfig etc. via FFI), and uv (for the Python eval scripts
-              # in herbie_mlir/).
-              shell = (pkgs.mkShell.override { inherit stdenv; }) {
-                name = "tamagoyaki${suffix}";
+              # ---------- Configure helper ----------
+              # `tamagoyaki-configure [build-dir] [extra cmake args...]`
+              # runs the CMake configure step that both the dev shell and CI
+              # rely on. It reads the env vars exported by the shells below
+              # (CMAKE_PREFIX_PATH locates MLIR/LLVM/CIRCT + gmp/mpfr/libmpc).
+              tamagoyaki-configure = pkgs.writeShellScriptBin "tamagoyaki-configure" ''
+                set -euo pipefail
+                builddir="''${1:-build}"
+                shift || true
+                exec cmake -G Ninja -B "$builddir" -S . \
+                  -DCMAKE_BUILD_TYPE="''${CMAKE_BUILD_TYPE:-${buildType}}" \
+                  -DLLVM_EXTERNAL_LIT="''${LLVM_EXTERNAL_LIT}" \
+                  -DRIVAL_PREBUILT_LIB="''${RIVAL_PREBUILT_LIB}" \
+                  -DRIVAL_PREBUILT_INCLUDE="''${RIVAL_PREBUILT_INCLUDE}" \
+                  -DBUILD_SHARED_LIBS=ON \
+                  "$@"
+              '';
 
-                inputsFrom = [ tamagoyaki ];
+              # ---------- Shells ----------
+              # `mkTamaShell { ci }` builds a shell that can configure, build,
+              # and run tamagoyaki's tests. `inputsFrom = [ tamagoyaki ]`
+              # pulls in cmake/ninja/python/lit/git/m4/pkg-config plus all the
+              # C/C++ build & runtime deps (llvm-mlir, circt, rival-ffi,
+              # gmp/mpfr/libmpc, ...).
+              #
+              # The dev shell (ci = false) adds the extras a human needs that
+              # CI does not: rustToolchain (so CMake's FetchContent path can
+              # build rival against the network), racket (so the user can
+              # install Herbie via `raco pkg install ...` -- the full racket
+              # so Herbie's draw-lib/plot-lib deps find Cairo, Pango,
+              # fontconfig etc. via FFI), uv (for the Python eval scripts in
+              # herbie_mlir/), and debuggers.
+              #
+              # The CI shell (ci = true) is the minimum to run `check-all`:
+              # rival is prebuilt (RIVAL_PREBUILT_*), so no Rust; no Racket,
+              # uv, or debuggers.
+              mkTamaShell =
+                { ci }:
+                (pkgs.mkShell.override { inherit stdenv; }) {
+                  name = "tamagoyaki${suffix}${lib.optionalString ci "-ci"}";
 
-                packages = [
-                  rustToolchain
-                ]
-                ++ (with pkgs; [
-                  racket
-                  uv
-                ])
-                ++ debuggers;
+                  inputsFrom = [ tamagoyaki ];
 
-                # CMake picks up MLIR/LLVM/CIRCT (and gmp/mpfr/libmpc, since
-                # they are in buildInputs) via CMAKE_PREFIX_PATH.
-                CMAKE_PREFIX_PATH = lib.concatStringsSep ":" [
-                  "${llvm-mlir}"
-                  "${circt}"
-                  "${pkgs.gmp.dev}"
-                  "${pkgs.mpfr.dev}"
-                  "${pkgs.libmpc}"
-                ];
-                CMAKE_BUILD_TYPE = buildType;
-                LLVM_EXTERNAL_LIT = "${pkgs.lit}/bin/lit";
+                  packages = [
+                    tamagoyaki-configure
+                  ]
+                  ++ lib.optionals (!ci) (
+                    [ rustToolchain ]
+                    ++ (with pkgs; [
+                      racket
+                      uv
+                    ])
+                    ++ debuggers
+                  );
 
-                # Use the prebuilt rival-ffi (linked against the bundled
-                # gmp/mpfr) instead of letting CMake fetch + cargo build it.
-                RIVAL_PREBUILT_LIB = "${rival-ffi}/lib/librival3_ffi.a";
-                RIVAL_PREBUILT_INCLUDE = "${rival-ffi}/include";
+                  # CMake picks up MLIR/LLVM/CIRCT (and gmp/mpfr/libmpc, since
+                  # they are in buildInputs) via CMAKE_PREFIX_PATH.
+                  CMAKE_PREFIX_PATH = lib.concatStringsSep ":" [
+                    "${llvm-mlir}"
+                    "${circt}"
+                    "${pkgs.gmp.dev}"
+                    "${pkgs.mpfr.dev}"
+                    "${pkgs.libmpc}"
+                  ];
+                  CMAKE_BUILD_TYPE = buildType;
+                  LLVM_EXTERNAL_LIT = "${pkgs.lit}/bin/lit";
 
-                shellHook = ''
-                  # Don't let the host PYTHONPATH leak into lit's python.
-                  unset PYTHONPATH
+                  # Use the prebuilt rival-ffi (linked against the bundled
+                  # gmp/mpfr) instead of letting CMake fetch + cargo build it.
+                  RIVAL_PREBUILT_LIB = "${rival-ffi}/lib/librival3_ffi.a";
+                  RIVAL_PREBUILT_INCLUDE = "${rival-ffi}/include";
 
-                  # Racket's math/bigfloat loads libmpfr/libgmp at runtime via
-                  # FFI dlopen (not at link time), so Herbie/rival's `raco`
-                  # install needs them on the loader path. CMAKE_PREFIX_PATH
-                  # only covers the build-time C/C++ discovery. Without this,
-                  # mpfr_* calls raise "implementation not found".
-                  ${
-                    if isDarwin then
-                      ''export DYLD_LIBRARY_PATH="${lib.makeLibraryPath [ pkgs.gmp pkgs.mpfr pkgs.libmpc ]}''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"''
-                    else
-                      ''export LD_LIBRARY_PATH="${lib.makeLibraryPath [ pkgs.gmp pkgs.mpfr pkgs.libmpc ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"''
-                  }
+                  shellHook = ''
+                    # Don't let the host PYTHONPATH leak into lit's python.
+                    unset PYTHONPATH
 
-                  echo "tamagoyaki ${variant} shell ready"
-                  echo "  configure: cmake -G Ninja -B build -S . \\"
-                  echo "               -DLLVM_EXTERNAL_LIT=$LLVM_EXTERNAL_LIT \\"
-                  echo "               -DRIVAL_PREBUILT_LIB=$RIVAL_PREBUILT_LIB \\"
-                  echo "               -DRIVAL_PREBUILT_INCLUDE=$RIVAL_PREBUILT_INCLUDE"
-                  echo "  build:     ninja -C build check-all"
-                '';
-              };
+                    # gmp/mpfr/libmpc are loaded at runtime (rival's FFI, and
+                    # racket's math/bigfloat via dlopen) rather than only at
+                    # link time, so they must be on the loader path. Without
+                    # this, mpfr_* calls raise "implementation not found".
+                    ${
+                      if isDarwin then
+                        ''export DYLD_LIBRARY_PATH="${lib.makeLibraryPath [ pkgs.gmp pkgs.mpfr pkgs.libmpc ]}''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"''
+                      else
+                        ''export LD_LIBRARY_PATH="${lib.makeLibraryPath [ pkgs.gmp pkgs.mpfr pkgs.libmpc ]}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"''
+                    }
+
+                    echo "tamagoyaki ${variant}${lib.optionalString ci " (ci)"} shell ready"
+                    echo "  configure: tamagoyaki-configure build"
+                    echo "  build:     ninja -C build check-all"
+                  '';
+                };
+
+              shell = mkTamaShell { ci = false; };
+              ciShell = mkTamaShell { ci = true; };
             in
             {
               inherit
                 llvm-mlir
                 circt
                 tamagoyaki
+                tamagoyaki-configure
                 shell
+                ciShell
                 ;
             };
 
@@ -352,6 +386,7 @@
           devShells = {
             default = release.shell;
             debug = debug.shell;
+            ci = release.ciShell;
           };
         };
 
