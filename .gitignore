@@ -18,6 +18,10 @@ Testing
 /docs/_build/
 /docs/doxygen/
 /docs/api/_autosummary/
+# Dialect reference pages assembled from mlir-tblgen output at build time.
+# Only the hand-written index is committed.
+/docs/dialects/*.md
+!/docs/dialects/index.md
 cmake_install.cmake
 install_manifest.txt
 compile_commands.json

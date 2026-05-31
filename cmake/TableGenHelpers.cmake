@@ -11,13 +11,22 @@
 #     NAMESPACE equivalence               # Dialect namespace
 #     TD_FILE EquivalenceDialect.td       # Input .td file
 #     COMPONENTS Ops Types Attrs Dialect Passes  # Which components to generate
+#     [NO_DOCS]                           # Skip markdown documentation generation
 #   )
 #
 # This creates:
 #   - TableGen target: MLIR${NAME}IncGen
 #
+# Documentation: unless NO_DOCS is given, markdown docs are generated through
+# MLIR's add_mlir_doc() infrastructure and attached to the `mlir-doc` target:
+#   - a `Dialect` component => `-gen-dialect-doc` (ops, types, attributes)
+#     -> ${MLIR_BINARY_DIR}/docs/Dialects/${NAME}Dialect.md
+#   - a `Passes` component  => `-gen-pass-doc`
+#     -> ${MLIR_BINARY_DIR}/docs/Dialects/${NAME}Passes.md
+# Build them with:  cmake --build <build-dir> --target mlir-doc
+#
 function(add_dialect_tablegen)
-  cmake_parse_arguments(ARG "" "NAME;NAMESPACE;TD_FILE" "COMPONENTS" ${ARGN})
+  cmake_parse_arguments(ARG "NO_DOCS" "NAME;NAMESPACE;TD_FILE" "COMPONENTS" ${ARGN})
 
   if(NOT ARG_NAME OR NOT ARG_NAMESPACE OR NOT ARG_TD_FILE OR NOT ARG_COMPONENTS)
     message(FATAL_ERROR "add_dialect_tablegen requires NAME, NAMESPACE, TD_FILE, and COMPONENTS")
@@ -61,4 +70,28 @@ function(add_dialect_tablegen)
   add_public_tablegen_target(MLIR${ARG_NAME}IncGen)
 
   set(${ARG_NAME}_TABLEGEN_TARGET MLIR${ARG_NAME}IncGen PARENT_SCOPE)
+
+  # --------------------------------------------------------------------------
+  # Documentation generation (MLIR's add_mlir_doc infrastructure).
+  # --------------------------------------------------------------------------
+  if(ARG_NO_DOCS)
+    return()
+  endif()
+
+  # add_mlir_doc() expects the .td base name (it appends ".td" itself).
+  get_filename_component(_doc_basename ${ARG_TD_FILE} NAME_WE)
+
+  list(FIND ARG_COMPONENTS "Dialect" _has_dialect)
+  if(NOT _has_dialect EQUAL -1)
+    # -gen-dialect-doc emits a single page covering the dialect's operations,
+    # types and attributes.
+    add_mlir_doc(${_doc_basename} ${ARG_NAME}Dialect Dialects/
+      -gen-dialect-doc -dialect=${ARG_NAMESPACE})
+  endif()
+
+  list(FIND ARG_COMPONENTS "Passes" _has_passes)
+  if(NOT _has_passes EQUAL -1)
+    add_mlir_doc(${_doc_basename} ${ARG_NAME}Passes Dialects/
+      -gen-pass-doc)
+  endif()
 endfunction()

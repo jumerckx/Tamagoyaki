@@ -121,6 +121,88 @@ def _maybe_run_tablegen() -> None:
         )
 
 
+# -- Generated dialect reference ---------------------------------------------
+
+# Each entry maps a dialect to the markdown files produced by mlir-tblgen via
+# add_mlir_doc() (see cmake/TableGenHelpers.cmake). `dialect_doc` is the
+# -gen-dialect-doc output (ops/types/attrs) or None for passes-only dialects;
+# `pass_doc` is the -gen-pass-doc output. The assembled page is written to
+# docs/dialects/<slug>.md and listed in docs/dialects/index.md.
+DIALECT_DOCS = [
+    ("equivalence", "Equivalence dialect", "EquivalenceDialect.md", "EquivalencePasses.md"),
+    ("ematch", "Ematch dialect", "EmatchDialect.md", "EmatchPasses.md"),
+    ("herbie", "HerbieMLIR dialect", "HerbieMLIRDialect.md", "HerbieMLIRPasses.md"),
+    ("cranelift", "Cranelift passes", None, "CraneliftPasses.md"),
+    ("rover", "Rover passes", None, "RoverPasses.md"),
+]
+
+
+def _read_generated(docs_src: Path, name: str | None) -> str | None:
+    """Read a mlir-tblgen markdown file, dropping the Hugo-only `[TOC]` marker."""
+    if name is None:
+        return None
+    path = docs_src / name
+    if not path.exists():
+        return None
+    lines = [line for line in path.read_text().splitlines() if line.strip() != "[TOC]"]
+    return "\n".join(lines).strip()
+
+
+def _generate_dialect_docs() -> None:
+    """Build the `mlir-doc` target and assemble per-dialect reference pages.
+
+    Writes one page per dialect into docs/dialects/. When the generated
+    markdown is unavailable (no build dir, Doxygen-only run, etc.) a stub page
+    is written so the toctree in docs/dialects/index.md never breaks the build.
+    """
+    out_dir = DOCS_DIR / "dialects"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    build_dir = Path(os.environ.get("TAMAGOYAKI_BUILD_DIR", REPO_ROOT / "build"))
+    docs_src = build_dir / "docs" / "Dialects"
+    if (build_dir / "CMakeCache.txt").exists():
+        try:
+            subprocess.run(
+                ["cmake", "--build", str(build_dir), "--target", "mlir-doc"],
+                check=True,
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            print(f"warning: failed to build mlir-doc target: {exc}", file=sys.stderr)
+    else:
+        print(
+            "warning: dialect docs not generated (no CMakeCache.txt). "
+            "Set TAMAGOYAKI_BUILD_DIR to a configured build directory.",
+            file=sys.stderr,
+        )
+
+    for slug, title, dialect_doc, pass_doc in DIALECT_DOCS:
+        dialect_md = _read_generated(docs_src, dialect_doc)
+        pass_md = _read_generated(docs_src, pass_doc)
+
+        if dialect_md is None and pass_md is None:
+            (out_dir / f"{slug}.md").write_text(
+                f"# {title}\n\n"
+                "```{warning}\n"
+                "The generated reference for this dialect is unavailable. Build it "
+                "with `cmake --build <build-dir> --target mlir-doc`.\n"
+                "```\n"
+            )
+            continue
+
+        # When -gen-dialect-doc output is present it already carries the page's
+        # H1 (`# '<name>' Dialect`); otherwise synthesise one for passes-only
+        # dialects so the page has a title for the toctree.
+        sections: list[str] = []
+        if dialect_md is not None:
+            sections.append(dialect_md)
+        else:
+            sections.append(f"# {title}")
+        if pass_md is not None:
+            sections.append("## Passes\n\n" + pass_md)
+
+        (out_dir / f"{slug}.md").write_text("\n\n".join(sections) + "\n")
+
+
 def _ensure_breathe_stub() -> None:
     """Write a minimal Doxygen XML index so Breathe never crashes.
 
@@ -173,6 +255,7 @@ def _run_doxygen() -> None:
 if os.environ.get("SKIP_DOXYGEN") != "1":
     _maybe_run_tablegen()
     _run_doxygen()
+_generate_dialect_docs()
 _ensure_breathe_stub()
 
 # -- Pygments lexers ---------------------------------------------------------

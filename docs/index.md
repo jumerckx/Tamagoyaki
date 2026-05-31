@@ -30,6 +30,14 @@ guides/index
 ```{toctree}
 :hidden:
 :maxdepth: 2
+:caption: Dialects
+
+dialects/index
+```
+
+```{toctree}
+:hidden:
+:maxdepth: 2
 :caption: Reference
 
 api/index

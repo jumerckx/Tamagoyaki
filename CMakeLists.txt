@@ -37,6 +37,16 @@ include(HandleLLVMOptions)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
+# Aggregate target for generated dialect/op/pass documentation. MLIR's
+# add_mlir_doc() attaches each generated markdown file to this target. The
+# in-tree MLIR build defines `mlir-doc` itself; in a standalone build we have
+# to create it before any add_mlir_doc() call (see cmake/TableGenHelpers.cmake).
+# Build the docs with:  cmake --build <build-dir> --target mlir-doc
+if(NOT TARGET mlir-doc)
+  add_custom_target(mlir-doc)
+  set_target_properties(mlir-doc PROPERTIES FOLDER "Docs")
+endif()
+
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 include_directories(${LLVM_INCLUDE_DIRS})
 include_directories(${MLIR_INCLUDE_DIRS})
