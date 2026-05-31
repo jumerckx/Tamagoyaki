@@ -42,37 +42,20 @@ jobs:
           # The Test workflow is responsible for populating the cache on the main branch.
           save: false
 
-      - name: Install Doxygen
-        run: sudo apt-get update && sudo apt-get install -y doxygen
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: docs/requirements.txt
-
-      - name: Install Sphinx and docs dependencies
-        run: |
-          python -m venv .venv
-          .venv/bin/pip install --upgrade pip
-          .venv/bin/pip install -r docs/requirements.txt
-
       # `make -C docs` needs a configured build directory: conf.py invokes
       # `cmake --build build --target <tablegen>` to generate the .h.inc
       # headers that Doxygen scans. A configure pass is enough; the tablegen
       # targets are built on demand from conf.py.
       - name: Configure
-        run: nix develop .#ci --command tamagoyaki-configure build
+        run: nix develop .#docs --command tamagoyaki-configure build
 
-      # Run inside the CI nix shell so cmake / tblgen are on PATH. Doxygen
-      # comes from apt (/usr/bin is preserved by `nix develop`). SPHINXBUILD
-      # points at the venv so its dependencies are picked up. `-W` promotes
-      # warnings to errors; `--keep-going -n` matches the Makefile default.
+      # The `.#docs` shell provides everything: cmake/tblgen for tablegen,
+      # Doxygen for the XML Breathe consumes, and the Sphinx toolchain itself.
+      # `-W` promotes warnings to errors; `--keep-going -n` matches the
+      # Makefile default.
       - name: Build docs
         run: |
-          nix develop .#ci --command make -C docs html \
-            SPHINXBUILD="$PWD/.venv/bin/sphinx-build" \
+          nix develop .#docs --command make -C docs html \
             SPHINXOPTS="--keep-going -n -W"
 
       - name: Upload Pages artifact
