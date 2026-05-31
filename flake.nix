@@ -135,6 +135,11 @@
                 ++ lib.optionals isDebug [
                   "fortify"
                   "fortify3"
+                  # LLVM defines _LIBCPP_HARDENING_MODE_EXTENSIVE via its
+                  # exported CMake flags when assertions are on (debug). Drop
+                  # nix's default libcxxhardeningfast so the two don't both
+                  # define _LIBCPP_HARDENING_MODE (-Wmacro-redefined).
+                  "libcxxhardeningfast"
                 ];
               };
 
