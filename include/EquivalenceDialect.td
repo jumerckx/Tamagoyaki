@@ -151,6 +151,8 @@ def Equivalence_ClassOp : Equivalence_Op<"class", [
         $inputs (`leader` $leader^)? (` ` `(` `min_cost_index` `=` $min_cost_index^ `)` )? attr-dict `:` type($result)
     }];
 
+    let hasFolder = 1;
+    
     // Verify the following:
     // 1. At least one operand.
     // 2. Operands cannot be result of other ClassOp.

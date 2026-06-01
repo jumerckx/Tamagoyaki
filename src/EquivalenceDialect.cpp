@@ -35,6 +35,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <llvm/ADT/SmallVector.h>
+#include <mlir/IR/OpDefinition.h>
 #include <string>
 #include <utility>
 
@@ -102,6 +104,42 @@ mlir::LogicalResult mlir::equivalence::ClassOp::verify() {
   }
 
   return success();
+}
+
+mlir::OpFoldResult mlir::equivalence::ClassOp::fold(FoldAdaptor adaptor) {
+  // Classes that participate in leader linkage are left untouched.
+  if (getLeader())
+    return {};
+
+  for (auto [idx, input] : llvm::enumerate(getInputs())) {
+    auto innerClass = input.getDefiningOp<ClassOp>();
+    if (!innerClass)
+      continue;
+    if (innerClass == getOperation()) {
+        getInputsMutable().erase(static_cast<unsigned>(idx));
+        return getResult();
+    }
+
+    SmallVector<Value> merged = llvm::to_vector(innerClass.getInputs());
+    SmallPtrSet<Value, 8> seen(merged.begin(), merged.end());
+    for (auto [j, other] : llvm::enumerate(getInputs())) {
+      if (j == idx)
+        continue;
+      if (seen.insert(other).second)
+        merged.push_back(other);
+    }
+
+    // Operand indices change, so any precomputed selection is stale.
+    innerClass->removeAttr("min_cost_index");
+    innerClass.getInputsMutable().assign(merged);
+    return innerClass.getResult();
+  }
+
+  // A trivial e-class — a single input — is interchangeable with that input.
+  if (getInputs().size() == 1)
+    return getInputs().front();
+
+  return {};
 }
 
 mlir::LogicalResult mlir::equivalence::GraphOp::verify() {
