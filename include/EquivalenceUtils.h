@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <functional>
+#include <mlir/IR/Operation.h>
 
 namespace mlir::equivalence {
 
@@ -81,6 +82,12 @@ selectGreedy(GraphOp graphOp, int64_t defaultCost,
       graphOp, [defaultCost](Operation *) { return defaultCost; },
       costAttributeName, reductionFn);
 }
+
+/// Run constant-driven selection on a single GraphOp. For each ClassOp that
+/// does not already have a min_cost_index and that has a constant operand,
+/// selects that constant by setting min_cost_index. Classes without a constant
+/// operand or that already have a selection are left untouched.
+void selectConstants(GraphOp graphOp);
 
 /// Clear all selection state from a GraphOp: remove min_cost_index from
 /// ClassOps and the cost attribute from all other operations.

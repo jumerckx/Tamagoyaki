@@ -18,6 +18,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/DialectImplementation.h"
 #include "mlir/IR/Location.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/RegionKindInterface.h"
 #include "mlir/IR/TypeRange.h"
@@ -128,6 +129,7 @@ namespace mlir::equivalence {
 #define GEN_PASS_DEF_EQUIVALENCEINSERTGRAPH
 #define GEN_PASS_DEF_EQUIVALENCESWITCHBARFOO
 #define GEN_PASS_DEF_EQUIVALENCESELECTGREEDY
+#define GEN_PASS_DEF_EQUIVALENCESELECTCONSTANTS
 #define GEN_PASS_DEF_EQUIVALENCEEXTRACT
 #include "EquivalencePasses.h.inc"
 
@@ -248,6 +250,17 @@ public:
     module.walk([&](GraphOp graphOp) {
       selectGreedy(graphOp, defaultCostVal, costAttributeName);
     });
+  }
+};
+
+class EquivalenceSelectConstants
+    : public impl::EquivalenceSelectConstantsBase<EquivalenceSelectConstants> {
+public:
+  using impl::EquivalenceSelectConstantsBase<
+      EquivalenceSelectConstants>::EquivalenceSelectConstantsBase;
+  void runOnOperation() final {
+    ModuleOp module = getOperation();
+    module.walk([&](GraphOp graphOp) { selectConstants(graphOp); });
   }
 };
 
@@ -457,6 +470,25 @@ void selectGreedy(GraphOp graphOp, const NodeCostFn &nodeCostFn,
       if (currentMinIndex != minIndex) {
         OpBuilder builder(classOp);
         classOp->setAttr("min_cost_index", builder.getI64IntegerAttr(minIndex));
+      }
+    }
+  });
+}
+
+void selectConstants(GraphOp graphOp) {
+  TAMAGOYAKI_SCOPED_TIMER("selectConstants");
+
+  graphOp.walk([&](ClassOp classOp) {
+    // Leave classes that already have a selection alone.
+    if (classOp->hasAttr("min_cost_index"))
+      return;
+
+    // Select the first constant operand, if any.
+    for (size_t i = 0; i < classOp.getInputs().size(); ++i) {
+      if (matchPattern(classOp.getInputs()[i], m_Constant())) {
+        OpBuilder builder(classOp);
+        classOp.setMinCostIndex(i);
+        break;
       }
     }
   });

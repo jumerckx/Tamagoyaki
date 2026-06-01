@@ -219,6 +219,17 @@ def EquivalenceSelectGreedy: Pass<"equivalence-select-greedy", "::mlir::ModuleOp
   let dependentDialects = ["::mlir::equivalence::EquivalenceDialect"];
 }
 
+def EquivalenceSelectConstants: Pass<"equivalence-select-constants", "::mlir::ModuleOp"> {
+  let summary = "Selects constant operands in equivalence classes.";
+  let description = [{
+    Walks each e-class (ClassOp) in the graph and inspects its operands. For
+    classes that contain an operand produced by a constant operation, selects
+    that operand. Classes that already carry a `min_cost_index`, or that contain
+    no constant operand, are left untouched.
+  }];
+  let dependentDialects = ["::mlir::equivalence::EquivalenceDialect"];
+}
+
 //===----------------------------------------------------------------------===//
 // Equivalence Attributes
 //===----------------------------------------------------------------------===//
