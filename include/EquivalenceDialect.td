@@ -232,6 +232,16 @@ def EquivalenceSelectConstants: Pass<"equivalence-select-constants", "::mlir::Mo
   let dependentDialects = ["::mlir::equivalence::EquivalenceDialect"];
 }
 
+def EquivalenceGraphSize: Pass<"equivalence-graph-size", "::mlir::ModuleOp"> {
+  let summary = "Prints the size of each equivalence graph in the module.";
+  let description = [{
+    Walks each `equivalence.graph` in the module and prints the number of
+    e-classes and e-nodes it contains. This is the same metric reported during
+    equality saturation debug output.
+  }];
+  let dependentDialects = ["::mlir::equivalence::EquivalenceDialect"];
+}
+
 //===----------------------------------------------------------------------===//
 // Equivalence Attributes
 //===----------------------------------------------------------------------===//

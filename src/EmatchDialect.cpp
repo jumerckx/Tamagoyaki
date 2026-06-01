@@ -11,6 +11,7 @@
 #include "TamagoyakiTiming.h"
 
 #include "EquivalenceDialect.h"
+#include "EquivalenceUtils.h"
 #include "Utils/ClassOpUnionFind.h"
 #include "Utils/HashConsPatternRewriter.h"
 #include "Utils/MutableScopedHashTable.h"
@@ -226,23 +227,10 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
     TAMAGOYAKI_SCOPED_TIMER("iteration " + std::to_string(nIters + 1));
     LLVM_DEBUG({
       irModule.walk([&](equivalence::GraphOp graph) {
-        int classes = 0;
-        int nodes = 0;
-        graph.walk([&](Operation *op) {
-          if (dyn_cast<equivalence::ClassOp>(op)) {
-            classes += 1;
-          } else {
-            nodes += op->getNumResults();
-            for (auto result : op->getResults()) {
-              if (!(result.hasOneUse() &&
-                    dyn_cast<equivalence::ClassOp>(*result.user_begin()))) {
-                classes += 1;
-              }
-            }
-          }
-        });
-        llvm::dbgs() << "Graph has " << classes << " e-classes and " << nodes
-                     << " e-nodes (iteration " << nIters << ").\n";
+        equivalence::GraphSize size = equivalence::computeGraphSize(graph);
+        llvm::dbgs() << "Graph has " << size.classes << " e-classes and "
+                     << size.nodes << " e-nodes (iteration " << nIters
+                     << ").\n";
       });
     });
 

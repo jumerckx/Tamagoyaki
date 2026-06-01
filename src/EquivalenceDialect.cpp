@@ -136,6 +136,19 @@ mlir::OpFoldResult mlir::equivalence::ClassOp::fold(FoldAdaptor adaptor) {
     return innerClass.getResult();
   }
 
+  // Drop duplicate operands. A value appearing more than once adds nothing to
+  // the equivalence set, and the verifier requires operands to be unique.
+  SmallPtrSet<Value, 8> seen;
+  for (auto [idx, input] : llvm::enumerate(getInputs())) {
+    if (!seen.insert(input).second) {
+      getInputsMutable().erase(static_cast<unsigned>(idx));
+      // A precomputed selection refers to operands by index, so it is now
+      // stale.
+      (*this)->removeAttr("min_cost_index");
+      return getResult();
+    }
+  }
+
   // A trivial e-class — a single input — is interchangeable with that input.
   if (getInputs().size() == 1)
     return getInputs().front();
@@ -169,6 +182,7 @@ namespace mlir::equivalence {
 #define GEN_PASS_DEF_EQUIVALENCESELECTGREEDY
 #define GEN_PASS_DEF_EQUIVALENCESELECTCONSTANTS
 #define GEN_PASS_DEF_EQUIVALENCEEXTRACT
+#define GEN_PASS_DEF_EQUIVALENCEGRAPHSIZE
 #include "EquivalencePasses.h.inc"
 
 namespace {
@@ -324,6 +338,21 @@ public:
   }
 };
 
+class EquivalenceGraphSize
+    : public impl::EquivalenceGraphSizeBase<EquivalenceGraphSize> {
+public:
+  using impl::EquivalenceGraphSizeBase<
+      EquivalenceGraphSize>::EquivalenceGraphSizeBase;
+  void runOnOperation() final {
+    ModuleOp module = getOperation();
+    module.walk([&](GraphOp graphOp) {
+      GraphSize size = computeGraphSize(graphOp);
+      llvm::outs() << "Graph has " << size.classes << " e-classes and "
+                   << size.nodes << " e-nodes.\n";
+    });
+  }
+};
+
 } // namespace
 } // namespace mlir::equivalence
 
@@ -354,6 +383,24 @@ void mlir::equivalence::EquivalenceDialect::registerAttributes() {
 }
 
 namespace mlir::equivalence {
+
+GraphSize computeGraphSize(GraphOp graphOp) {
+  GraphSize size;
+  graphOp.walk([&](Operation *op) {
+    if (dyn_cast<ClassOp>(op)) {
+      size.classes += 1;
+    } else {
+      size.nodes += op->getNumResults();
+      for (auto result : op->getResults()) {
+        if (!(result.hasOneUse() &&
+              dyn_cast<ClassOp>(*result.user_begin()))) {
+          size.classes += 1;
+        }
+      }
+    }
+  });
+  return size;
+}
 
 static int64_t getNodeBaseCost(Operation *op, const NodeCostFn &nodeCostFn,
                                llvm::StringRef costAttributeName) {

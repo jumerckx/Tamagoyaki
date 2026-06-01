@@ -20,6 +20,18 @@ namespace mlir::equivalence {
 LogicalResult insertGraphInFunction(func::FuncOp funcOp,
                                     bool insertSingleElementEqs);
 
+/// The size of a GraphOp, expressed as the number of e-classes and e-nodes it
+/// contains.
+struct GraphSize {
+  int classes = 0;
+  int nodes = 0;
+};
+
+/// Compute the number of e-classes and e-nodes in a GraphOp. Each ClassOp is an
+/// e-class. Each result of a non-ClassOp is an e-node; results that are not
+/// already wrapped in a (single-use) ClassOp count as an implicit e-class too.
+GraphSize computeGraphSize(GraphOp graphOp);
+
 /// A NodeCostFn takes an Operation* and returns its base cost.
 /// Return -1 to indicate "unresolvable / infinitely expensive".
 using NodeCostFn = std::function<int64_t(Operation *)>;
