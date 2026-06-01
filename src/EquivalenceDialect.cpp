@@ -156,6 +156,29 @@ mlir::OpFoldResult mlir::equivalence::ClassOp::fold(FoldAdaptor adaptor) {
   return {};
 }
 
+mlir::LogicalResult
+mlir::equivalence::ClassOp::canonicalize(ClassOp op,
+                                         PatternRewriter &rewriter) {
+  Value result = op.getResult();
+  bool changed = false;
+
+  // Every operand of an e-class is, by definition, equivalent to the class
+  // itself. Any other operation that still refers to the operand directly
+  // should instead route through the class result. Rewriting these uses
+  // establishes the invariant the verifier enforces: a class's operands are
+  // used only by the class operation.
+  for (Value input : op.getInputs()) {
+    rewriter.replaceUsesWithIf(input, result, [&](OpOperand &use) {
+      if (use.getOwner() == op.getOperation())
+        return false;
+      changed = true;
+      return true;
+    });
+  }
+
+  return success(changed);
+}
+
 mlir::LogicalResult mlir::equivalence::GraphOp::verify() {
   auto walkResult = getBody().walk([&](Operation *op) -> WalkResult {
     if (isa<YieldOp>(op))

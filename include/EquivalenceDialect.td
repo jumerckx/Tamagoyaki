@@ -152,12 +152,18 @@ def Equivalence_ClassOp : Equivalence_Op<"class", [
     }];
 
     let hasFolder = 1;
-    
+
+    // For each operand, redirect any *other* op that still refers to the
+    // operand directly so that it refers to the class result instead. This
+    // establishes the invariant the verifier checks: a class's operands are
+    // only used by the class operation.
+    let hasCanonicalizeMethod = 1;
+
     // Verify the following:
     // 1. At least one operand.
     // 2. Operands cannot be result of other ClassOp.
     // 3. Operands must be used only by this ClassOp.
-    let hasVerifier = 1; 
+    let hasVerifier = 1;
 }
 
 //===----------------------------------------------------------------------===//
