@@ -387,6 +387,9 @@ namespace mlir::equivalence {
 GraphSize computeGraphSize(GraphOp graphOp) {
   GraphSize size;
   graphOp.walk([&](Operation *op) {
+    if (op == graphOp) {
+        return;
+    }
     if (dyn_cast<ClassOp>(op)) {
       size.classes += 1;
     } else {
