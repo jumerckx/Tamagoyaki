@@ -5,6 +5,7 @@ config.mlir_obj_dir = "@MLIR_BINARY_DIR@"
 config.tamagoyaki_obj_root = "@TAMAGOYAKI_BINARY_DIR@"
 config.tamagoyaki_src_root = "@TAMAGOYAKI_SOURCE_DIR@"
 config.llvm_shlib_ext = "@SHLIBEXT@"
+config.tamagoyaki_include_tests = @TAMAGOYAKI_INCLUDE_TESTS@
 
 import lit.llvm
 lit.llvm.initialize(lit_config, config)
