@@ -23,10 +23,12 @@ using namespace mlir::ematch;
 // only available when the build is configured with TAMAGOYAKI_INCLUDE_TESTS.
 namespace mlir::test {
 void registerTestEquivalenceUtilsPasses();
+void registerTestSaturationCanonicalizePasses();
 } // namespace mlir::test
 
 static void registerTestPasses() {
   mlir::test::registerTestEquivalenceUtilsPasses();
+  mlir::test::registerTestSaturationCanonicalizePasses();
 }
 #endif
 

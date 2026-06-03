@@ -6,15 +6,22 @@
 # src/tamagoyaki-opt.cpp behind #ifdef TAMAGOYAKI_INCLUDE_TESTS.
 add_mlir_library(TamagoyakiTestPasses
   TestEquivalenceUtils.cpp
+  TestSaturationCanonicalize.cpp
 
   ADDITIONAL_HEADER_DIRS
   ${PROJECT_SOURCE_DIR}/include
 
   DEPENDS
   MLIREquivalenceIncGen
+  MLIREmatchIncGen
 
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRPass
+  MLIRTransforms
+  MLIRArithDialect
+  MLIRFuncDialect
+  MLIRPDLInterpDialect
   MLIREquivalence
+  MLIREmatch
 )
