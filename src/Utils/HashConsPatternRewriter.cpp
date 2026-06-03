@@ -84,7 +84,7 @@ LogicalResult HashConsPatternRewriter::insert(Operation *op) {
   assert(scope && "insert: no scope registered for region");
 
   // Check if an equivalent operation already exists in the scope
-  if (Operation *existing = scope->lookupOrDefault(op)) {
+  if (auto existing = scope->lookup(op); existing.has_value()) {
     LLVM_DEBUG(llvm::dbgs()
                << "insert: equivalent operation already exists: " << *existing
                << ", skipping insert of: " << *op << "\n");
@@ -105,7 +105,10 @@ Operation *HashConsPatternRewriter::lookup(Operation *op) {
   ScopedMapTy::ScopeTy *scope = getScope(region);
   assert(scope && "lookup: no scope registered for region");
 
-  return scope->lookupOrDefault(op);
+  auto opt = scope->lookup(op);
+  if (opt.has_value())
+    return *opt;
+  return nullptr;
 }
 
 ScopedMapTy::ScopeTy *HashConsPatternRewriter::createRootScope(Region *region) {
