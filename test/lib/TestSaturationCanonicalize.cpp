@@ -10,12 +10,14 @@
 // saturation with canonicalization, versus running saturation on its own.
 //
 //   * test-generate-equivalence-expr generates a function whose body is a
-//     telescoping product of variables and their multiplicative inverses, e.g.
-//     for two variables (a, b):  ((1/b) * (a * (1/a))) * b.  Such an expression
+//     product of variables and their multiplicative inverses, e.g. for two
+//     variables (a, b):  ((1/b) * (a * (1/a))) * b.  Such an expression
 //     algebraically reduces to the constant 1 once associativity,
 //     commutativity, the multiplicative inverse rule and `x * 1 -> x` are
 //     applied.  The number of variables is configurable so the input program
-//     can be scaled up.  This mirrors test/lit/canonicalize/basic2.mlir.
+//     can be scaled up, and the `ordering` option selects how the variables and
+//     inverses are interleaved (telescoping vs. grouped).  This mirrors
+//     test/lit/canonicalize/basic2.mlir.
 //
 //   * test-saturation-canonicalize takes such a program and runs two flows on
 //     it, reporting the e-graph size after every iteration:
@@ -71,11 +73,24 @@ namespace {
 // test-generate-equivalence-expr
 //===----------------------------------------------------------------------===//
 
+/// The shape of the generated telescoping product. All orderings are
+/// algebraically equal to 1; they differ only in how the variables and their
+/// inverses are interleaved, which exercises different saturation paths.
+enum class ExprOrdering {
+  /// inner = v0 * (1/v0); for i in 1..N-1: cur = (1/vi) * cur; cur = cur * vi.
+  /// For N == 2 this is exactly ((1/b) * (a * (1/a))) * b.
+  Telescoping,
+  /// All variables first, then all inverses (left-associated):
+  ///   v0 * v1 * ... * v_{N-1} * (1/v0) * ... * (1/v_{N-1}).
+  Grouped,
+  /// Recursively nest each variable's inverse around the running product:
+  ///   g = v0 * (1/v0); for i in 1..N-1: g = vi * (1 / (vi * g)).
+  Recursive,
+};
+
 /// Generate `func.func @expr(%v0, ..., %vN-1 : f64) -> f64` whose body is a
-/// telescoping product that reduces to 1. For N variables the body is built as
-///   inner = v0 * (1/v0)
-///   for i in 1..N-1:  cur = (1/vi) * cur;  cur = cur * vi
-/// which for N == 2 is exactly ((1/b) * (a * (1/a))) * b.
+/// product of variables and their inverses that reduces to 1. The exact shape
+/// of the product is selected by the `ordering` option (see ExprOrdering).
 struct TestGenerateEquivalenceExprPass
     : public PassWrapper<TestGenerateEquivalenceExprPass,
                          OperationPass<ModuleOp>> {
@@ -89,7 +104,7 @@ struct TestGenerateEquivalenceExprPass
     return "test-generate-equivalence-expr";
   }
   StringRef getDescription() const final {
-    return "Generate a telescoping product of `num-vars` variables and their "
+    return "Generate a product of `num-vars` variables and their "
            "inverses that reduces to 1 (test only)";
   }
 
@@ -101,6 +116,21 @@ struct TestGenerateEquivalenceExprPass
                       llvm::cl::desc("Number of variables in the generated "
                                      "expression (>= 1)"),
                       llvm::cl::init(2)};
+
+  Option<ExprOrdering> ordering{
+      *this, "ordering",
+      llvm::cl::desc("Shape of the generated telescoping product"),
+      llvm::cl::init(ExprOrdering::Telescoping),
+      llvm::cl::values(
+          clEnumValN(ExprOrdering::Telescoping, "telescoping",
+                     "Nested ((1/vi) * cur) * vi wrapping, inverses interleaved "
+                     "with their variables"),
+          clEnumValN(ExprOrdering::Grouped, "grouped",
+                     "All variables, then all inverses: "
+                     "v0*...*v_{N-1}*(1/v0)*...*(1/v_{N-1})"),
+          clEnumValN(ExprOrdering::Recursive, "recursive",
+                     "Recursively nest each variable's inverse around the "
+                     "running product: g = vi * (1 / (vi * g))"))};
 
   void runOnOperation() override {
     ModuleOp module = getOperation();
@@ -129,20 +159,47 @@ struct TestGenerateEquivalenceExprPass
     Value one = arith::ConstantOp::create(builder, loc, f64,
                                           builder.getF64FloatAttr(1.0));
 
-    // inv[i] = 1.0 / vi
-    SmallVector<Value> inv;
-    for (int i = 0; i < n; ++i)
-      inv.push_back(
-          arith::DivFOp::create(builder, loc, one, entry->getArgument(i)));
+    auto inverse = [&](Value v) {
+      return arith::DivFOp::create(builder, loc, one, v);
+    };
 
-    // cur = v0 * (1/v0)
-    Value cur =
-        arith::MulFOp::create(builder, loc, entry->getArgument(0), inv[0]);
-    // Wrap each remaining variable's inverse on the left and the variable on
-    // the right: cur = ((1/vi) * cur) * vi.
-    for (int i = 1; i < n; ++i) {
-      cur = arith::MulFOp::create(builder, loc, inv[i], cur);
-      cur = arith::MulFOp::create(builder, loc, cur, entry->getArgument(i));
+    Value cur;
+    switch (ordering) {
+    case ExprOrdering::Telescoping: {
+      // cur = v0 * (1/v0)
+      cur = arith::MulFOp::create(builder, loc, entry->getArgument(0),
+                                  inverse(entry->getArgument(0)));
+      // Wrap each remaining variable's inverse on the left and the variable on
+      // the right: cur = ((1/vi) * cur) * vi.
+      for (int i = 1; i < n; ++i) {
+        cur = arith::MulFOp::create(builder, loc, inverse(entry->getArgument(i)),
+                                    cur);
+        cur = arith::MulFOp::create(builder, loc, cur, entry->getArgument(i));
+      }
+      break;
+    }
+    case ExprOrdering::Grouped: {
+      // cur = v0 * v1 * ... * v_{N-1} * (1/v0) * ... * (1/v_{N-1}), built as a
+      // left-associated product.
+      cur = entry->getArgument(0);
+      for (int i = 1; i < n; ++i)
+        cur = arith::MulFOp::create(builder, loc, cur, entry->getArgument(i));
+      for (int i = 0; i < n; ++i)
+        cur = arith::MulFOp::create(builder, loc, cur,
+                                    inverse(entry->getArgument(i)));
+      break;
+    }
+    case ExprOrdering::Recursive: {
+      // g = v0 * (1/v0); for i in 1..N-1: g = vi * (1 / (vi * g)).
+      cur = arith::MulFOp::create(builder, loc, entry->getArgument(0),
+                                  inverse(entry->getArgument(0)));
+      for (int i = 1; i < n; ++i) {
+        Value vi = entry->getArgument(i);
+        Value prod = arith::MulFOp::create(builder, loc, vi, cur);
+        cur = arith::MulFOp::create(builder, loc, vi, inverse(prod));
+      }
+      break;
+    }
     }
 
     func::ReturnOp::create(builder, loc, cur);
@@ -181,6 +238,16 @@ static bool isReducedToOne(ModuleOp module) {
   return reduced;
 }
 
+/// Which flow(s) test-saturation-canonicalize should run.
+enum class Flow {
+  /// Run both flows and report the round-count comparison.
+  Both,
+  /// Flow A only: intertwine saturation with canonicalization.
+  A,
+  /// Flow B only: saturation only, probing after each round.
+  B,
+};
+
 struct TestSaturationCanonicalizePass
     : public PassWrapper<TestSaturationCanonicalizePass,
                          OperationPass<ModuleOp>> {
@@ -209,6 +276,15 @@ struct TestSaturationCanonicalizePass
       *this, "max-rounds",
       llvm::cl::desc("Safety cap on the number of saturation rounds per flow"),
       llvm::cl::init(32)};
+  Option<Flow> flow{
+      *this, "flow",
+      llvm::cl::desc("Which flow(s) to run"), llvm::cl::init(Flow::Both),
+      llvm::cl::values(
+          clEnumValN(Flow::Both, "both",
+                     "Run both flows and report the comparison"),
+          clEnumValN(Flow::A, "a",
+                     "Run only flow A (saturation + canonicalization)"),
+          clEnumValN(Flow::B, "b", "Run only flow B (saturation only)"))};
 
   /// Run a single pass on `module`, returning success/failure.
   LogicalResult runPass(ModuleOp module, std::unique_ptr<Pass> pass) {
@@ -255,10 +331,13 @@ struct TestSaturationCanonicalizePass
 
     GraphSize start = moduleGraphSize(base.get());
 
+    bool runA = flow == Flow::Both || flow == Flow::A;
+    bool runB = flow == Flow::Both || flow == Flow::B;
+
     // --- Flow A: intertwine saturation and canonicalization. ---
     SmallVector<GraphSize> flowA;
     int roundsA = -1;
-    {
+    if (runA) {
       OwningOpRef<ModuleOp> work(base->clone());
       for (int round = 1; round <= maxRounds; ++round) {
         if (failed(runPass(work.get(), saturateOnce()))) {
@@ -282,7 +361,7 @@ struct TestSaturationCanonicalizePass
     // --- Flow B: saturation only, probing after each round. ---
     SmallVector<GraphSize> flowB;
     int roundsB = -1;
-    {
+    if (runB) {
       OwningOpRef<ModuleOp> work(base->clone());
       for (int round = 1; round <= maxRounds; ++round) {
         if (failed(runPass(work.get(), saturateOnce()))) {
@@ -322,10 +401,12 @@ struct TestSaturationCanonicalizePass
       llvm::outs() << "\n";
     };
 
-    report("flow A (saturation + canonicalization)", flowA, roundsA);
-    report("flow B (saturation only)", flowB, roundsB);
+    if (runA)
+      report("flow A (saturation + canonicalization)", flowA, roundsA);
+    if (runB)
+      report("flow B (saturation only)", flowB, roundsB);
 
-    if (roundsA > 0 && roundsB > 0)
+    if (runA && runB && roundsA > 0 && roundsB > 0)
       llvm::outs() << "summary: intertwining canonicalization took " << roundsA
                    << " round(s) vs. " << roundsB
                    << " round(s) for saturation only\n";
