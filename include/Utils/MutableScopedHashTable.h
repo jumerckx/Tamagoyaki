@@ -17,7 +17,6 @@ template <typename K, typename V, typename KInfo = llvm::DenseMapInfo<K>,
 class MutableScopedHashTable;
 
 template <typename K, typename V> class MutableScopedHashTableVal {
-  MutableScopedHashTableVal *NextInScope;
   K Key;
   V Val;
 
@@ -30,8 +29,6 @@ public:
   const K &getKey() const { return Key; }
   const V &getValue() const { return Val; }
   V &getValue() { return Val; }
-
-  MutableScopedHashTableVal *getNextInScope() { return NextInScope; }
 
   template <typename AllocatorTy>
   static MutableScopedHashTableVal *Create(const K &key, const V &val,
