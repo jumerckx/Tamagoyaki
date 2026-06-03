@@ -101,6 +101,21 @@ mlir::ematch::getClassResults(mlir::PatternRewriter &rewriter,
   return results;
 }
 
+// Erase the first occurrence of target from classOp input list.
+// Instead of using erase directly, it first swaps with the last element to make erase O(1).
+static void swappedErase(equivalence::ClassOp classOp, Value target) {
+  auto inputs = classOp.getInputs();
+  unsigned last = inputs.size() - 1; // inclusive
+  for (unsigned i = 0; i <= last; ++i) {
+    if (inputs[i] == target) {
+      if (i != last)
+        classOp->setOperand(i, inputs[last]);
+      classOp.getInputsMutable().erase(last);
+      return;
+    }
+  }
+}
+
 equivalence::ClassOp getClassOpIfExists(Value val) {
   if (auto *defOp = val.getDefiningOp()) {
     if (auto classOp = dyn_cast<equivalence::ClassOp>(*defOp))
@@ -424,29 +439,12 @@ void ClassOpUnionFind::mergeResults(HashConsPatternRewriter &rewriter,
       // membership invariant.  Remove the stale occurrence from
       // classOther so that resKeep only belongs to classKeep.
       if (classKeep != classOther) {
-        auto otherInputs = classOther.getInputsMutable();
-        SmallVector<Value> filtered;
-        for (Value v : classOther.getInputs()) {
-          if (v != resKeep)
-            filtered.push_back(v);
-        }
-        if (filtered.size() != otherInputs.size())
-          otherInputs.assign(filtered);
+        swappedErase(classOther, resKeep);
         classUnion(rewriter, classKeep.getResult(), classOther.getResult());
       } else {
         // resOther and resKeep were both inputs of the same class, and resOther was replaced by resKeep.
         // Therefore, there is only one duplicate of resKeep.
-        SmallVector<Value> deduped;
-        deduped.reserve(classKeep.getInputs().size() - 1);
-        bool droppedDuplicate = false;
-        for (Value v : classKeep.getInputs()) {
-          if (!droppedDuplicate && v == resKeep) {
-            droppedDuplicate = true;
-            continue;
-          }
-          deduped.push_back(v);
-        }
-        classKeep.getInputsMutable().assign(deduped);
+        swappedErase(classKeep, resKeep);
       }
     } else if (classKeep) {
       // Case 2: only keep has a class — redirect other's results to the
