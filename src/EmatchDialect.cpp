@@ -42,6 +42,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include <cassert>
 #include <chrono>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -410,20 +411,20 @@ struct LowerIsArgPattern : public OpRewritePattern<IsArgOp> {
 /// constraint is named "record_match_<pattern>" and receives the matcher root
 /// operation followed by the original record_match inputs. Both successors
 /// branch to the original destination so matching keeps discovering further
-/// matches. Each constraint name is mapped to its pattern (leaf rewriter
-/// symbol) in `nameToPattern`.
+/// matches. Each pattern (leaf rewriter symbol) that appears is collected in
+/// `patterns`.
 struct ReplaceRecordMatchPattern
     : public OpRewritePattern<pdl_interp::RecordMatchOp> {
   ReplaceRecordMatchPattern(MLIRContext *context,
-                            std::map<std::string, std::string> &nameToPattern)
+                            std::set<std::string> &patterns)
       : OpRewritePattern<pdl_interp::RecordMatchOp>(context),
-        nameToPattern(nameToPattern) {}
+        patterns(patterns) {}
 
   LogicalResult matchAndRewrite(pdl_interp::RecordMatchOp op,
                                 PatternRewriter &rewriter) const final {
     std::string pattern = op.getRewriter().getLeafReference().getValue().str();
     std::string name = "record_match_" + pattern;
-    nameToPattern[name] = pattern;
+    patterns.insert(pattern);
 
     auto matcher = op->getParentOfType<pdl_interp::FuncOp>();
     assert(matcher && matcher.getBody().front().getNumArguments() >= 1 &&
@@ -440,7 +441,7 @@ struct ReplaceRecordMatchPattern
     return success();
   }
 
-  std::map<std::string, std::string> &nameToPattern;
+  std::set<std::string> &patterns;
 };
 
 /// Lower every `ematch.is_arg` in the module to a `pdl_interp.apply_constraint`
@@ -460,18 +461,18 @@ static void lowerIsArgOps(ModuleOp module,
 /// Replace every `pdl_interp.record_match` in the module with a
 /// `pdl_interp.apply_constraint` that records the match for the
 /// equivalence-graph-contains pass.
-/// Returns a map from constraint name to the pattern (leaf rewriter symbol).
-static std::map<std::string, std::string>
-replaceRecordMatches(ModuleOp module) {
+/// Returns the set of patterns (leaf rewriter symbols) that were recorded.
+static std::set<std::string> replaceRecordMatches(ModuleOp module) {
   TAMAGOYAKI_SCOPED_TIMER("replaceRecordMatches");
-  std::map<std::string, std::string> nameToPattern;
+  std::set<std::string> recordedPatterns;
   RewritePatternSet patterns(module.getContext());
-  patterns.add<ReplaceRecordMatchPattern>(module.getContext(), nameToPattern);
+  patterns.add<ReplaceRecordMatchPattern>(module.getContext(),
+                                          recordedPatterns);
   GreedyRewriteConfig config;
   config.enableConstantCSE(false);
   config.enableFolding(false);
   (void)applyPatternsGreedily(module, std::move(patterns), config);
-  return nameToPattern;
+  return recordedPatterns;
 }
 
 namespace {
@@ -640,7 +641,7 @@ struct EquivalenceGraphContainsPass
     // with constraints that register matches against the e-graph.
     llvm::DenseSet<uint32_t> argIndices;
     lowerIsArgOps(patternsModule, argIndices);
-    std::map<std::string, std::string> recordNameToPattern =
+    std::set<std::string> recordedPatterns =
         replaceRecordMatches(patternsModule);
 
     // We only match, never rewrite. The PDL bytecode generator still requires a
@@ -669,8 +670,8 @@ struct EquivalenceGraphContainsPass
     // Containment results, keyed by pattern. Pre-populate so patterns that are
     // never matched are still reported.
     std::map<std::string, PatternResult> results;
-    for (auto &entry : recordNameToPattern)
-      results[entry.second];
+    for (const std::string &pattern : recordedPatterns)
+      results[pattern];
 
     patternsModule.getOperation()->remove();
     PDLPatternModule pdlPattern(patternsModule);
@@ -698,10 +699,10 @@ struct EquivalenceGraphContainsPass
 
     // record_match_<pattern>: register the match and check whether its root is
     // equivalent to a yielded value.
-    for (auto &entry : recordNameToPattern) {
-      std::string pattern = entry.second;
+    for (const std::string &pattern : recordedPatterns) {
+      std::string name = "record_match_" + pattern;
       pdlPattern.registerConstraintFunction(
-          entry.first,
+          name,
           [&results, &yieldClasses, pattern](
               PatternRewriter &rw, PDLResultList &,
               ArrayRef<PDLValue> args) -> LogicalResult {
