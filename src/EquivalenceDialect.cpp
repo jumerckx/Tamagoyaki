@@ -76,20 +76,14 @@ mlir::RegionKind GraphOp::getRegionKind(unsigned index) {
 mlir::LogicalResult mlir::equivalence::ClassOp::verify() {
   // verify() only enforces the structural invariants that must always hold for
   // a class op to be meaningful. The stronger normal-form properties — a class
-  // result is never an operand of another class, and a class's operands are
-  // used only by the class — are *not* checked here: they are transiently
-  // broken by other ops' canonicalizations (e.g. `c1 + 0 -> c1` floats a class
-  // result into a class operand) and are the responsibility of the
+  // result is never an operand of another class, a class's operands are used
+  // only by the class, and operands are unique — are *not* checked here: they
+  // are transiently broken by other ops' canonicalizations (e.g. `c1 + 0 -> c1`
+  // floats a class result into a class operand, and rerouting external uses can
+  // collapse two operands to the same value) and are the responsibility of the
   // `equivalence-restore-invariants` normalization pass, not of well-formedness.
   if (getInputs().empty()) {
     return emitOpError("must have at least one operand");
-  }
-
-  SmallPtrSet<Value, 8> seen;
-  for (Value operand : getInputs()) {
-    if (!seen.insert(operand).second) {
-      return emitOpError("operands must be unique");
-    }
   }
 
   if (Value leader = getLeader()) {

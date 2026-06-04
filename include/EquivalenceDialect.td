@@ -161,11 +161,11 @@ def Equivalence_ClassOp : Equivalence_Op<"class", [
 
     // Verify only the always-true structural invariants:
     // 1. At least one operand.
-    // 2. Operands are unique.
-    // 3. If present, the leader is the result of a ClassOp.
+    // 2. If present, the leader is the result of a ClassOp.
     // The normal-form properties (a class result is never an operand of another
-    // class; operands are used only by the class) are established by the
-    // `equivalence-restore-invariants` pass, not enforced here.
+    // class; operands are used only by the class; operands are unique) are
+    // established by the `equivalence-restore-invariants` pass, not enforced
+    // here.
     let hasVerifier = 1;
 }
 
