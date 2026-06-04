@@ -334,38 +334,43 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
 // equivalence-graph-contains support
 //===----------------------------------------------------------------------===//
 
-/// Lower every `ematch.is_arg` in the module to a `pdl_interp.apply_constraint`
-/// invoking a constraint named "is_arg_<index>". The set of indices that appear
-/// is collected so the pass can register one constraint per index.
-static void lowerIsArgOps(ModuleOp module,
-                          llvm::DenseSet<uint32_t> &indices) {
-  SmallVector<IsArgOp> isArgs;
-  module.walk([&](IsArgOp op) { isArgs.push_back(op); });
-  for (IsArgOp op : isArgs) {
+/// Lower an `ematch.is_arg` to a `pdl_interp.apply_constraint` invoking a
+/// constraint named "is_arg_<index>". Each index that appears is recorded in
+/// `indices` so the pass can register one constraint per index.
+struct LowerIsArgPattern : public OpRewritePattern<IsArgOp> {
+  LowerIsArgPattern(MLIRContext *context, llvm::DenseSet<uint32_t> &indices)
+      : OpRewritePattern<IsArgOp>(context), indices(indices) {}
+
+  LogicalResult matchAndRewrite(IsArgOp op,
+                                PatternRewriter &rewriter) const final {
     uint32_t index = op.getIndex();
     indices.insert(index);
-    OpBuilder builder(op);
     std::string name = ("is_arg_" + Twine(index)).str();
-    builder.create<pdl_interp::ApplyConstraintOp>(
-        op.getLoc(), /*results=*/TypeRange{}, name, ValueRange{op.getValue()},
+    rewriter.replaceOpWithNewOp<pdl_interp::ApplyConstraintOp>(
+        op, /*results=*/TypeRange{}, name, ValueRange{op.getValue()},
         /*isNegated=*/false, op.getTrueDest(), op.getFalseDest());
-    op.erase();
+    return success();
   }
-}
 
-/// Replace every `pdl_interp.record_match` in the module with a
-/// `pdl_interp.apply_constraint` that records the match for the
-/// equivalence-graph-contains pass. The constraint is named
-/// "record_match_<pattern>" and receives the matcher root operation followed by
-/// the original record_match inputs. Both successors branch to the original
-/// destination so matching keeps discovering further matches.
-/// Returns a map from constraint name to the pattern (leaf rewriter symbol).
-static std::map<std::string, std::string>
-replaceRecordMatches(ModuleOp module) {
-  std::map<std::string, std::string> nameToPattern;
-  SmallVector<pdl_interp::RecordMatchOp> matches;
-  module.walk([&](pdl_interp::RecordMatchOp op) { matches.push_back(op); });
-  for (pdl_interp::RecordMatchOp op : matches) {
+  llvm::DenseSet<uint32_t> &indices;
+};
+
+/// Replace a `pdl_interp.record_match` with a `pdl_interp.apply_constraint`
+/// that records the match for the equivalence-graph-contains pass. The
+/// constraint is named "record_match_<pattern>" and receives the matcher root
+/// operation followed by the original record_match inputs. Both successors
+/// branch to the original destination so matching keeps discovering further
+/// matches. Each constraint name is mapped to its pattern (leaf rewriter
+/// symbol) in `nameToPattern`.
+struct ReplaceRecordMatchPattern
+    : public OpRewritePattern<pdl_interp::RecordMatchOp> {
+  ReplaceRecordMatchPattern(MLIRContext *context,
+                            std::map<std::string, std::string> &nameToPattern)
+      : OpRewritePattern<pdl_interp::RecordMatchOp>(context),
+        nameToPattern(nameToPattern) {}
+
+  LogicalResult matchAndRewrite(pdl_interp::RecordMatchOp op,
+                                PatternRewriter &rewriter) const final {
     std::string pattern = op.getRewriter().getLeafReference().getValue().str();
     std::string name = "record_match_" + pattern;
     nameToPattern[name] = pattern;
@@ -379,12 +384,43 @@ replaceRecordMatches(ModuleOp module) {
     args.push_back(root);
     llvm::append_range(args, op.getInputs());
 
-    OpBuilder builder(op);
-    builder.create<pdl_interp::ApplyConstraintOp>(
-        op.getLoc(), /*results=*/TypeRange{}, name, args,
+    rewriter.replaceOpWithNewOp<pdl_interp::ApplyConstraintOp>(
+        op, /*results=*/TypeRange{}, name, args,
         /*isNegated=*/false, op.getDest(), op.getDest());
-    op.erase();
+    return success();
   }
+
+  std::map<std::string, std::string> &nameToPattern;
+};
+
+/// Lower every `ematch.is_arg` in the module to a `pdl_interp.apply_constraint`
+/// invoking a constraint named "is_arg_<index>". The set of indices that appear
+/// is collected so the pass can register one constraint per index.
+static void lowerIsArgOps(ModuleOp module,
+                          llvm::DenseSet<uint32_t> &indices) {
+  TAMAGOYAKI_SCOPED_TIMER("lowerIsArgOps");
+  RewritePatternSet patterns(module.getContext());
+  patterns.add<LowerIsArgPattern>(module.getContext(), indices);
+  GreedyRewriteConfig config;
+  config.enableConstantCSE(false);
+  config.enableFolding(false);
+  (void)applyPatternsGreedily(module, std::move(patterns), config);
+}
+
+/// Replace every `pdl_interp.record_match` in the module with a
+/// `pdl_interp.apply_constraint` that records the match for the
+/// equivalence-graph-contains pass.
+/// Returns a map from constraint name to the pattern (leaf rewriter symbol).
+static std::map<std::string, std::string>
+replaceRecordMatches(ModuleOp module) {
+  TAMAGOYAKI_SCOPED_TIMER("replaceRecordMatches");
+  std::map<std::string, std::string> nameToPattern;
+  RewritePatternSet patterns(module.getContext());
+  patterns.add<ReplaceRecordMatchPattern>(module.getContext(), nameToPattern);
+  GreedyRewriteConfig config;
+  config.enableConstantCSE(false);
+  config.enableFolding(false);
+  (void)applyPatternsGreedily(module, std::move(patterns), config);
   return nameToPattern;
 }
 
