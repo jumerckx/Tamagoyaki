@@ -142,6 +142,39 @@ def Ematch_UnionOp : Ematch_Op<"union"> {
     let assemblyFormat = "$lhs `:` type($lhs) `,` $rhs `:` type($rhs) attr-dict";
 }
 
+def Ematch_IsArgOp : Ematch_Op<"is_arg", [Terminator]> {
+    let summary = "Constrain a matched value to a specific block argument.";
+    let description = [{
+        The `ematch.is_arg` operation constrains a `!pdl.value` captured during
+        matching to be (equivalent to) the block argument at a given index of the
+        function containing the e-graph. It behaves like a `pdl_interp` predicate:
+        on success control branches to the true destination, otherwise to the
+        false destination.
+
+        It is intended to be used inside `pdl_interp` matchers handed to the
+        `equivalence-graph-contains` pass, so that a pattern's operands can be
+        pinned to concrete block arguments (fully grounding the pattern) instead
+        of matching arbitrary values.
+
+        This operation is lowered to a `pdl_interp.apply_constraint` invoking a
+        constraint registered by the `equivalence-graph-contains` pass.
+
+        Example:
+
+        ```mlir
+        // Require %v to be in the e-class of block argument 0.
+        ematch.is_arg %v, 0 -> ^success, ^failure
+        ```
+    }];
+
+    let arguments = (ins PDL_Value:$value, I32Attr:$index);
+    let successors = (successor AnySuccessor:$trueDest, AnySuccessor:$falseDest);
+
+    let assemblyFormat = [{
+        $value `,` $index attr-dict `->` $trueDest `,` $falseDest
+    }];
+}
+
 def Ematch_DedupOp : Ematch_Op<"dedup"> {
     let summary = "Deduplicate an operation against the hashcons.";
     let description = [{
@@ -211,6 +244,35 @@ def ApplyPDLInterpPass : Pass<"ematch-apply-pdl-interp", "::mlir::ModuleOp"> {
         MLIR's greedy pattern rewrite driver, similar to TestPDLByteCode in MLIR.
     }];
     let dependentDialects = ["::mlir::pdl_interp::PDLInterpDialect"];
+}
+
+def EquivalenceGraphContainsPass : Pass<"equivalence-graph-contains", "::mlir::ModuleOp"> {
+    let summary = "Report which patterns are contained in the e-graph rooted at the yielded value.";
+    let description = [{
+        Given a `pdl_interp` patterns module (via the `patterns-file` option or
+        nested `@patterns`/`@ir` submodules) and an input module containing
+        `equivalence.graph` operations, this pass reports, for each pattern,
+        whether it matches the e-graph with its root equivalent to a value
+        returned by an `equivalence.yield`.
+
+        Rather than running equality saturation, the pass replaces every
+        `pdl_interp.record_match` in the matcher with a custom
+        `pdl_interp.apply_constraint` that records the match together with its
+        operands. The matcher is then run once over the e-graph. Patterns may use
+        `ematch.is_arg` to pin operands to concrete block arguments, fully
+        grounding the query. For each pattern the pass prints whether some
+        recorded match has its root in the e-class of a yielded value.
+    }];
+    let dependentDialects = [
+        "::mlir::ematch::EmatchDialect",
+        "::mlir::equivalence::EquivalenceDialect",
+        "::mlir::pdl_interp::PDLInterpDialect",
+    ];
+    let options = [
+        Option<"patternsFile", "patterns-file", "std::string", /*default=*/"\"\"",
+               "Path to an MLIR file containing the pdl_interp patterns module. "
+               "When set, the input module is treated as the IR module directly.">
+    ];
 }
 
 def ConvertEmatchToPDLInterpPass : Pass<"convert-ematch-to-pdl-interp", "::mlir::ModuleOp"> {

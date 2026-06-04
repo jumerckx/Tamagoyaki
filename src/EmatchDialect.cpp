@@ -33,8 +33,12 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "vendor/mlir/Bytecode.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/Twine.h"
 #include "llvm/Support/Debug.h"
+#include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <cassert>
 #include <chrono>
@@ -90,6 +94,7 @@ namespace mlir::ematch {
 #define GEN_PASS_DEF_EMATCHSATURATEBENCHMARKPASS
 #define GEN_PASS_DEF_CONVERTEMATCHTOPDLINTERPPASS
 #define GEN_PASS_DEF_APPLYPDLINTERPPASS
+#define GEN_PASS_DEF_EQUIVALENCEGRAPHCONTAINSPASS
 #include "EmatchPasses.h.inc"
 
 namespace {
@@ -325,6 +330,64 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
   return true;
 }
 
+//===----------------------------------------------------------------------===//
+// equivalence-graph-contains support
+//===----------------------------------------------------------------------===//
+
+/// Lower every `ematch.is_arg` in the module to a `pdl_interp.apply_constraint`
+/// invoking a constraint named "is_arg_<index>". The set of indices that appear
+/// is collected so the pass can register one constraint per index.
+static void lowerIsArgOps(ModuleOp module,
+                          llvm::DenseSet<uint32_t> &indices) {
+  SmallVector<IsArgOp> isArgs;
+  module.walk([&](IsArgOp op) { isArgs.push_back(op); });
+  for (IsArgOp op : isArgs) {
+    uint32_t index = op.getIndex();
+    indices.insert(index);
+    OpBuilder builder(op);
+    std::string name = ("is_arg_" + Twine(index)).str();
+    builder.create<pdl_interp::ApplyConstraintOp>(
+        op.getLoc(), /*results=*/TypeRange{}, name, ValueRange{op.getValue()},
+        /*isNegated=*/false, op.getTrueDest(), op.getFalseDest());
+    op.erase();
+  }
+}
+
+/// Replace every `pdl_interp.record_match` in the module with a
+/// `pdl_interp.apply_constraint` that records the match for the
+/// equivalence-graph-contains pass. The constraint is named
+/// "record_match_<pattern>" and receives the matcher root operation followed by
+/// the original record_match inputs. Both successors branch to the original
+/// destination so matching keeps discovering further matches.
+/// Returns a map from constraint name to the pattern (leaf rewriter symbol).
+static std::map<std::string, std::string>
+replaceRecordMatches(ModuleOp module) {
+  std::map<std::string, std::string> nameToPattern;
+  SmallVector<pdl_interp::RecordMatchOp> matches;
+  module.walk([&](pdl_interp::RecordMatchOp op) { matches.push_back(op); });
+  for (pdl_interp::RecordMatchOp op : matches) {
+    std::string pattern = op.getRewriter().getLeafReference().getValue().str();
+    std::string name = "record_match_" + pattern;
+    nameToPattern[name] = pattern;
+
+    auto matcher = op->getParentOfType<pdl_interp::FuncOp>();
+    assert(matcher && matcher.getBody().front().getNumArguments() >= 1 &&
+           "record_match must be inside a matcher with a root operation arg");
+    Value root = matcher.getBody().front().getArgument(0);
+
+    SmallVector<Value> args;
+    args.push_back(root);
+    llvm::append_range(args, op.getInputs());
+
+    OpBuilder builder(op);
+    builder.create<pdl_interp::ApplyConstraintOp>(
+        op.getLoc(), /*results=*/TypeRange{}, name, args,
+        /*isNegated=*/false, op.getDest(), op.getDest());
+    op.erase();
+  }
+  return nameToPattern;
+}
+
 namespace {
 
 struct EmatchSaturatePass
@@ -466,6 +529,173 @@ struct ConvertEmatchToPDLInterpPass
       return;
 
     convertEmatchOpsToApplyRewrites(patternsModule);
+  }
+};
+
+struct EquivalenceGraphContainsPass
+    : public impl::EquivalenceGraphContainsPassBase<
+          EquivalenceGraphContainsPass> {
+  using impl::EquivalenceGraphContainsPassBase<
+      EquivalenceGraphContainsPass>::EquivalenceGraphContainsPassBase;
+
+  /// Per-pattern containment result.
+  struct PatternResult {
+    bool matchedYield = false;
+    unsigned totalMatches = 0;
+  };
+
+  void runOnOperation() final {
+    ModuleOp module = getOperation();
+    MLIRContext *ctx = module.getContext();
+
+    ModuleOp patternsModule;
+    ModuleOp irModule;
+    OwningOpRef<ModuleOp> parsedPatternsModule;
+
+    if (!patternsFile.empty()) {
+      // Parse patterns from external file; the input module is the IR module.
+      irModule = module;
+      parsedPatternsModule = parseSourceFile<ModuleOp>(patternsFile, ctx);
+      if (!parsedPatternsModule) {
+        emitError(module.getLoc())
+            << "failed to parse patterns file: " << patternsFile;
+        return signalPassFailure();
+      }
+      patternsModule = parsedPatternsModule.release();
+    } else {
+      patternsModule =
+          module.lookupSymbol<ModuleOp>(StringAttr::get(ctx, "patterns"));
+      irModule = module.lookupSymbol<ModuleOp>(StringAttr::get(ctx, "ir"));
+      if (!patternsModule || !irModule) {
+        emitError(module.getLoc())
+            << "expected @patterns and @ir submodules, or a patterns-file";
+        return signalPassFailure();
+      }
+    }
+
+    // Lower the e-class helper ops used by the matcher (get_class_*, ...) to
+    // pdl_interp.apply_rewrite.
+    convertEmatchOpsToApplyRewrites(patternsModule);
+
+    // Lower ematch.is_arg to recording constraints, and replace record_match
+    // with constraints that register matches against the e-graph.
+    llvm::DenseSet<uint32_t> argIndices;
+    lowerIsArgOps(patternsModule, argIndices);
+    std::map<std::string, std::string> recordNameToPattern =
+        replaceRecordMatches(patternsModule);
+
+    // We only match, never rewrite. The PDL bytecode generator still requires a
+    // @rewriters module to be present, so keep it but drop its contents (the
+    // rewriter functions) so they are not compiled into the bytecode and need
+    // not be registered.
+    if (auto rewriters = patternsModule.lookupSymbol<ModuleOp>(
+            StringAttr::get(ctx, "rewriters"))) {
+      for (Operation &op :
+           llvm::make_early_inc_range(rewriters.getBodyRegion().front()))
+        op.erase();
+    }
+
+    // A rewriter is required to drive the bytecode interpreter and the e-class
+    // helper functions. None of the helpers mutate the IR here.
+    HashConsPatternRewriter rewriter(ctx);
+
+    // Collect the e-class identity of every value returned by an
+    // equivalence.yield.
+    llvm::DenseSet<Value> yieldClasses;
+    irModule.walk([&](equivalence::YieldOp yieldOp) {
+      for (Value v : yieldOp.getValues())
+        yieldClasses.insert(getClassResult(rewriter, v));
+    });
+
+    // Containment results, keyed by pattern. Pre-populate so patterns that are
+    // never matched are still reported.
+    std::map<std::string, PatternResult> results;
+    for (auto &entry : recordNameToPattern)
+      results[entry.second];
+
+    patternsModule.getOperation()->remove();
+    PDLPatternModule pdlPattern(patternsModule);
+
+    // Helper rewrites used by the matcher to traverse e-classes.
+    pdlPattern.registerRewriteFunction("get_class_vals", getClassVals);
+    pdlPattern.registerRewriteFunction("get_class_representative",
+                                       getClassRepresentative);
+    pdlPattern.registerRewriteFunction("get_class_result", getClassResult);
+    pdlPattern.registerRewriteFunction("get_class_results", getClassResults);
+
+    // is_arg_<index>: succeed iff the value is (equivalent to) block argument
+    // `index` of the enclosing function.
+    for (uint32_t index : argIndices) {
+      std::string name = ("is_arg_" + Twine(index)).str();
+      pdlPattern.registerConstraintFunction(
+          name, [index](PatternRewriter &rw, PDLResultList &,
+                        ArrayRef<PDLValue> args) -> LogicalResult {
+            if (args.empty() || !args[0].isa<Value>())
+              return failure();
+            for (Value cv : getClassVals(rw, args[0].cast<Value>())) {
+              if (auto ba = dyn_cast<BlockArgument>(cv))
+                if (ba.getArgNumber() == index)
+                  return success();
+            }
+            return failure();
+          });
+    }
+
+    // record_match_<pattern>: register the match and check whether its root is
+    // equivalent to a yielded value.
+    for (auto &entry : recordNameToPattern) {
+      std::string pattern = entry.second;
+      pdlPattern.registerConstraintFunction(
+          entry.first,
+          [&results, &yieldClasses, pattern](
+              PatternRewriter &rw, PDLResultList &,
+              ArrayRef<PDLValue> args) -> LogicalResult {
+            PatternResult &r = results[pattern];
+            r.totalMatches++;
+            if (!args.empty() && args[0].isa<Operation *>()) {
+              Operation *root = args[0].cast<Operation *>();
+              for (Value res : root->getResults()) {
+                if (yieldClasses.count(getClassResult(rw, res))) {
+                  r.matchedYield = true;
+                  break;
+                }
+              }
+            }
+            return success();
+          });
+    }
+
+    RewritePatternSet patternList(ctx);
+    patternList.add(std::move(pdlPattern));
+    FrozenRewritePatternSet frozen(std::move(patternList));
+
+    const auto *bytecode = frozen.getPDLByteCode();
+    if (!bytecode) {
+      emitError(module.getLoc())
+          << "failed to build PDL bytecode from the patterns";
+      return signalPassFailure();
+    }
+
+    mlir::detail::PDLByteCodeMutableState state;
+    bytecode->initializeMutableState(state);
+
+    irModule.walk([&](Operation *op) {
+      Dialect *dialect = op->getDialect();
+      if (dialect != nullptr && isa<equivalence::EquivalenceDialect>(dialect))
+        return;
+      SmallVector<mlir::detail::PDLByteCode::MatchResult> opMatches;
+      bytecode->match(op, rewriter, opMatches, state);
+    });
+    state.cleanupAfterMatchAndRewrite();
+
+    llvm::outs() << "Pattern containment results:\n";
+    for (auto &entry : results) {
+      const PatternResult &r = entry.second;
+      llvm::outs() << "  @" << entry.first << ": "
+                   << (r.matchedYield ? "contained" : "not contained") << " ("
+                   << r.totalMatches << " match"
+                   << (r.totalMatches == 1 ? "" : "es") << ")\n";
+    }
   }
 };
 } // namespace

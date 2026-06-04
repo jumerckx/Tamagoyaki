@@ -10,6 +10,7 @@
 #define EMATCH_EMATCHDIALECT_H
 
 // IWYU pragma: begin_keep
+#include "mlir/Bytecode/BytecodeOpInterface.h"
 #include "mlir/Dialect/PDL/IR/PDLTypes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Dialect.h"
