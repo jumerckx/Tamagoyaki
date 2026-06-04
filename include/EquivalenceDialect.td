@@ -155,11 +155,10 @@ def Equivalence_ClassOp : Equivalence_Op<"class", [
 
     // Establishes the class normal form: merges a nested class operand into
     // this class, and redirects any *other* op that still refers to an operand
-    // directly so that it refers to the class result instead. These are the
-    // structural rewrites the verifier no longer enforces.
+    // directly so that it refers to the class result instead.
     let hasCanonicalizeMethod = 1;
 
-    // Verify only the always-true structural invariants:
+    // Verify:
     // 1. At least one operand.
     // 2. If present, the leader is the result of a ClassOp.
     // The normal-form properties (a class result is never an operand of another
@@ -251,12 +250,7 @@ def EquivalenceRestoreInvariants: Pass<"equivalence-restore-invariants", "::mlir
         (nested classes are merged), and
       * a class's operands are used only by that class
         (external uses are rerouted through the class result).
-
-    Unlike the general `--canonicalize` pass, which caps the number of greedy
-    iterations and so only *attempts* to reach a fixpoint, this pass runs the
-    greedy driver with no iteration or rewrite limit. It is the mandatory,
-    deterministic normalization step that downstream passes depend on, in
-    contrast to opportunistic canonicalization.
+      * class operands are deduplicated
   }];
   let dependentDialects = ["::mlir::equivalence::EquivalenceDialect"];
 }

@@ -8,10 +8,7 @@
 //     merged), and
 //   * a class's operands are used only by that class (external uses are
 //     rerouted through the class result).
-//
-// These are no longer verifier invariants; they are transiently broken by
-// other ops' canonicalizations (here, `arith.addi %v, 0 -> %v` floats a class
-// result into a class operand) and restored by this pass.
+//   * class operands are deduplicated
 // ===----------------------------------------------------------------------===//
 
 // A nested class operand is absorbed and external operand uses are rerouted

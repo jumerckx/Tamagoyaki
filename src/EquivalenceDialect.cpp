@@ -97,14 +97,6 @@ mlir::LogicalResult mlir::equivalence::ClassOp::verify() {
 }
 
 mlir::OpFoldResult mlir::equivalence::ClassOp::fold(FoldAdaptor adaptor) {
-  // fold() may only return an existing value or mutate *this* op in place. It
-  // must never create or mutate other operations — merging a nested class is
-  // such a foreign-op mutation, so it lives in canonicalize() instead.
-  //
-  // Classes that participate in leader linkage are left untouched.
-  if (getLeader())
-    return {};
-
   // A class that lists its own result as an operand: that operand is redundant
   // and can be dropped in place.
   for (auto [idx, input] : llvm::enumerate(getInputs())) {
@@ -129,7 +121,7 @@ mlir::OpFoldResult mlir::equivalence::ClassOp::fold(FoldAdaptor adaptor) {
   }
 
   // A trivial e-class — a single input — is interchangeable with that input.
-  if (getInputs().size() == 1)
+  if (!getLeader() && (getInputs().size() == 1))
     return getInputs().front();
 
   return {};
@@ -143,10 +135,6 @@ mlir::equivalence::ClassOp::canonicalize(ClassOp op,
   // collapsed: the inner class absorbs this class's remaining operands and this
   // class is replaced by the inner class result. This is the structural rewrite
   // that establishes "a class result is never an operand of another class".
-  //
-  // It mutates an operation other than `op` (the inner class), so it must go
-  // through the rewriter — that is precisely why it cannot live in fold(). Using
-  // modifyOpInPlace re-queues the inner class and notifies listeners.
   if (!op.getLeader()) {
     for (auto [idx, input] : llvm::enumerate(op.getInputs())) {
       auto innerClass = input.getDefiningOp<ClassOp>();

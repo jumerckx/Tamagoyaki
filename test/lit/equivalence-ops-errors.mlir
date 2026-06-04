@@ -4,12 +4,6 @@
 // Test equivalence.class verification - error cases
 // ===----------------------------------------------------------------------===//
 
-// Note: several class properties are NOT verification errors — a class result
-// used as an operand of another class, a class operand reused by other ops, and
-// duplicate operands. They are transiently valid states broken by other ops'
-// canonicalizations; the `equivalence-restore-invariants` pass is responsible
-// for normalizing them. See test/lit/canonicalize/restore-invariants.mlir.
-
 // Test: leader must be the result of a class operation.
 func.func @test_class_bad_leader() {
     %0 = arith.constant 1 : i32
