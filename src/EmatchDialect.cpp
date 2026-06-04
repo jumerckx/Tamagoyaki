@@ -139,6 +139,63 @@ void convertEmatchOpsToApplyRewrites(ModuleOp module) {
   (void)applyPatternsGreedily(module, std::move(patterns), config);
 }
 
+/// Resolve the patterns and IR modules for a pass. When `patternsFile` is
+/// non-empty, the patterns are parsed from that file and the input `module`
+/// itself is used as the IR module; otherwise the `@patterns` and `@ir`
+/// submodules of `module` are used. `parsedPatternsModule` retains ownership of
+/// a module parsed from file until it is handed off to a PDLPatternModule.
+///
+/// Returns failure if parsing fails, or if the submodules are missing. When the
+/// submodules are missing and `emitErrorIfMissing` is false, failure is
+/// returned without emitting a diagnostic (silent skip).
+static LogicalResult
+resolvePatternAndIrModules(ModuleOp module, StringRef patternsFile,
+                           bool emitErrorIfMissing,
+                           OwningOpRef<ModuleOp> &parsedPatternsModule,
+                           ModuleOp &patternsModule, ModuleOp &irModule) {
+  MLIRContext *ctx = module.getContext();
+  if (!patternsFile.empty()) {
+    // Parse patterns from external file; the input module is the IR module.
+    irModule = module;
+    parsedPatternsModule = parseSourceFile<ModuleOp>(patternsFile, ctx);
+    if (!parsedPatternsModule) {
+      emitError(module.getLoc())
+          << "failed to parse patterns file: " << patternsFile;
+      return failure();
+    }
+    patternsModule = parsedPatternsModule.release();
+    return success();
+  }
+
+  patternsModule =
+      module.lookupSymbol<ModuleOp>(StringAttr::get(ctx, "patterns"));
+  irModule = module.lookupSymbol<ModuleOp>(StringAttr::get(ctx, "ir"));
+  if (!patternsModule || !irModule) {
+    if (emitErrorIfMissing)
+      emitError(module.getLoc())
+          << "expected @patterns and @ir submodules, or a patterns-file";
+    return failure();
+  }
+  return success();
+}
+
+/// Register the e-class traversal helpers used by the matcher bytecode to walk
+/// the e-graph (get_class_vals, get_class_representative, ...).
+static void registerEmatchRewrites(PDLPatternModule &pdlPattern) {
+  pdlPattern.registerRewriteFunction("get_class_vals", getClassVals);
+  pdlPattern.registerRewriteFunction("get_class_representative",
+                                     getClassRepresentative);
+  pdlPattern.registerRewriteFunction("get_class_result", getClassResult);
+  pdlPattern.registerRewriteFunction("get_class_results", getClassResults);
+}
+
+/// Operations in the equivalence dialect are skipped when walking the IR for
+/// matching: they form the e-graph scaffolding, not user payload.
+static bool isEquivalenceDialectOp(Operation *op) {
+  Dialect *dialect = op->getDialect();
+  return dialect != nullptr && isa<equivalence::EquivalenceDialect>(dialect);
+}
+
 /// Run equality saturation on the given IR module using the provided pattern
 /// module. The patternsModule is consumed (removed from parent).
 /// Returns true on success.
@@ -158,11 +215,7 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
     uf.hashconsGraph(hashconsRewriter, graph);
   });
 
-  pdlPattern.registerRewriteFunction("get_class_vals", getClassVals);
-  pdlPattern.registerRewriteFunction("get_class_representative",
-                                     getClassRepresentative);
-  pdlPattern.registerRewriteFunction("get_class_result", getClassResult);
-  pdlPattern.registerRewriteFunction("get_class_results", getClassResults);
+  registerEmatchRewrites(pdlPattern);
   pdlPattern.registerRewriteFunction("union", [&uf, eagerRewrite](
                                                   PatternRewriter &rewriter,
                                                   PDLResultList &results,
@@ -254,8 +307,7 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
       // are not visited in the same iteration.
       SmallVector<Operation *> opsToProcess;
       irModule.walk([&](Operation *op) {
-        auto dialect = op->getDialect();
-        if (dialect != nullptr && isa<equivalence::EquivalenceDialect>(dialect))
+        if (isEquivalenceDialectOp(op))
           return;
         opsToProcess.push_back(op);
       });
@@ -289,9 +341,7 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
       {
         TAMAGOYAKI_SCOPED_TIMER("match");
         irModule.walk([&](Operation *op) {
-          auto dialect = op->getDialect();
-          if (dialect != nullptr &&
-              isa<equivalence::EquivalenceDialect>(dialect))
+          if (isEquivalenceDialectOp(op))
             return;
 
           SmallVector<mlir::detail::PDLByteCode::MatchResult> opMatches;
@@ -438,25 +488,14 @@ struct EmatchSaturatePass
     ModuleOp irModule;
     OwningOpRef<ModuleOp> parsedPatternsModule;
 
-    if (!patternsFile.empty()) {
-      // Parse patterns from external file; the input module is the IR module.
-      irModule = module;
-      parsedPatternsModule =
-          parseSourceFile<ModuleOp>(patternsFile, module.getContext());
-      if (!parsedPatternsModule) {
-        emitError(module.getLoc())
-            << "failed to parse patterns file: " << patternsFile;
-        return signalPassFailure();
-      }
-      patternsModule = parsedPatternsModule.release();
-    } else {
-      patternsModule = module.lookupSymbol<ModuleOp>(
-          StringAttr::get(module->getContext(), "patterns"));
-      irModule = module.lookupSymbol<ModuleOp>(
-          StringAttr::get(module->getContext(), "ir"));
-
-      if (!patternsModule || !irModule)
-        return;
+    if (failed(resolvePatternAndIrModules(
+            module, patternsFile, /*emitErrorIfMissing=*/false,
+            parsedPatternsModule, patternsModule, irModule))) {
+      // A parse failure already emitted a diagnostic; missing submodules are a
+      // silent skip.
+      if (!patternsFile.empty())
+        signalPassFailure();
+      return;
     }
 
     convertEmatchOpsToApplyRewrites(patternsModule);
@@ -588,26 +627,10 @@ struct EquivalenceGraphContainsPass
     ModuleOp irModule;
     OwningOpRef<ModuleOp> parsedPatternsModule;
 
-    if (!patternsFile.empty()) {
-      // Parse patterns from external file; the input module is the IR module.
-      irModule = module;
-      parsedPatternsModule = parseSourceFile<ModuleOp>(patternsFile, ctx);
-      if (!parsedPatternsModule) {
-        emitError(module.getLoc())
-            << "failed to parse patterns file: " << patternsFile;
-        return signalPassFailure();
-      }
-      patternsModule = parsedPatternsModule.release();
-    } else {
-      patternsModule =
-          module.lookupSymbol<ModuleOp>(StringAttr::get(ctx, "patterns"));
-      irModule = module.lookupSymbol<ModuleOp>(StringAttr::get(ctx, "ir"));
-      if (!patternsModule || !irModule) {
-        emitError(module.getLoc())
-            << "expected @patterns and @ir submodules, or a patterns-file";
-        return signalPassFailure();
-      }
-    }
+    if (failed(resolvePatternAndIrModules(
+            module, patternsFile, /*emitErrorIfMissing=*/true,
+            parsedPatternsModule, patternsModule, irModule)))
+      return signalPassFailure();
 
     // Lower the e-class helper ops used by the matcher (get_class_*, ...) to
     // pdl_interp.apply_rewrite.
@@ -653,11 +676,7 @@ struct EquivalenceGraphContainsPass
     PDLPatternModule pdlPattern(patternsModule);
 
     // Helper rewrites used by the matcher to traverse e-classes.
-    pdlPattern.registerRewriteFunction("get_class_vals", getClassVals);
-    pdlPattern.registerRewriteFunction("get_class_representative",
-                                       getClassRepresentative);
-    pdlPattern.registerRewriteFunction("get_class_result", getClassResult);
-    pdlPattern.registerRewriteFunction("get_class_results", getClassResults);
+    registerEmatchRewrites(pdlPattern);
 
     // is_arg_<index>: succeed iff the value is (equivalent to) block argument
     // `index` of the enclosing function.
@@ -716,8 +735,7 @@ struct EquivalenceGraphContainsPass
     bytecode->initializeMutableState(state);
 
     irModule.walk([&](Operation *op) {
-      Dialect *dialect = op->getDialect();
-      if (dialect != nullptr && isa<equivalence::EquivalenceDialect>(dialect))
+      if (isEquivalenceDialectOp(op))
         return;
       SmallVector<mlir::detail::PDLByteCode::MatchResult> opMatches;
       bytecode->match(op, rewriter, opMatches, state);
