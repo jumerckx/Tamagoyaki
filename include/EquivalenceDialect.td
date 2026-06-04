@@ -153,16 +153,19 @@ def Equivalence_ClassOp : Equivalence_Op<"class", [
 
     let hasFolder = 1;
 
-    // For each operand, redirect any *other* op that still refers to the
-    // operand directly so that it refers to the class result instead. This
-    // establishes the invariant the verifier checks: a class's operands are
-    // only used by the class operation.
+    // Establishes the class normal form: merges a nested class operand into
+    // this class, and redirects any *other* op that still refers to an operand
+    // directly so that it refers to the class result instead. These are the
+    // structural rewrites the verifier no longer enforces.
     let hasCanonicalizeMethod = 1;
 
-    // Verify the following:
+    // Verify only the always-true structural invariants:
     // 1. At least one operand.
-    // 2. Operands cannot be result of other ClassOp.
-    // 3. Operands must be used only by this ClassOp.
+    // 2. Operands are unique.
+    // 3. If present, the leader is the result of a ClassOp.
+    // The normal-form properties (a class result is never an operand of another
+    // class; operands are used only by the class) are established by the
+    // `equivalence-restore-invariants` pass, not enforced here.
     let hasVerifier = 1;
 }
 
@@ -234,6 +237,26 @@ def EquivalenceSelectConstants: Pass<"equivalence-select-constants", "::mlir::Mo
     classes that contain an operand produced by a constant operation, selects
     that operand. Classes that already carry a `min_cost_index`, or that contain
     no constant operand, are left untouched.
+  }];
+  let dependentDialects = ["::mlir::equivalence::EquivalenceDialect"];
+}
+
+def EquivalenceRestoreInvariants: Pass<"equivalence-restore-invariants", "::mlir::ModuleOp"> {
+  let summary = "Restores the equivalence-class normal form to a fixpoint.";
+  let description = [{
+    Applies the `equivalence.class` folder and canonicalizer until no further
+    rewrites apply, re-establishing the class normal form:
+
+      * a class result is never used as an operand of another class
+        (nested classes are merged), and
+      * a class's operands are used only by that class
+        (external uses are rerouted through the class result).
+
+    Unlike the general `--canonicalize` pass, which caps the number of greedy
+    iterations and so only *attempts* to reach a fixpoint, this pass runs the
+    greedy driver with no iteration or rewrite limit. It is the mandatory,
+    deterministic normalization step that downstream passes depend on, in
+    contrast to opportunistic canonicalization.
   }];
   let dependentDialects = ["::mlir::equivalence::EquivalenceDialect"];
 }

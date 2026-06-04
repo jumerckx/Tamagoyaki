@@ -74,6 +74,13 @@ mlir::RegionKind GraphOp::getRegionKind(unsigned index) {
 } // namespace mlir::equivalence
 
 mlir::LogicalResult mlir::equivalence::ClassOp::verify() {
+  // verify() only enforces the structural invariants that must always hold for
+  // a class op to be meaningful. The stronger normal-form properties — a class
+  // result is never an operand of another class, and a class's operands are
+  // used only by the class — are *not* checked here: they are transiently
+  // broken by other ops' canonicalizations (e.g. `c1 + 0 -> c1` floats a class
+  // result into a class operand) and are the responsibility of the
+  // `equivalence-restore-invariants` normalization pass, not of well-formedness.
   if (getInputs().empty()) {
     return emitOpError("must have at least one operand");
   }
@@ -82,18 +89,6 @@ mlir::LogicalResult mlir::equivalence::ClassOp::verify() {
   for (Value operand : getInputs()) {
     if (!seen.insert(operand).second) {
       return emitOpError("operands must be unique");
-    }
-
-    Operation *defOp = operand.getDefiningOp();
-    if (defOp && isa<ClassOp>(defOp)) {
-      return emitOpError("result of a class operation cannot be used as an "
-                         "operand of another class");
-    }
-
-    for (Operation *user : operand.getUsers()) {
-      if (user != getOperation()) {
-        return emitOpError("operands must only be used by the class operation");
-      }
     }
   }
 
@@ -108,32 +103,22 @@ mlir::LogicalResult mlir::equivalence::ClassOp::verify() {
 }
 
 mlir::OpFoldResult mlir::equivalence::ClassOp::fold(FoldAdaptor adaptor) {
+  // fold() may only return an existing value or mutate *this* op in place. It
+  // must never create or mutate other operations — merging a nested class is
+  // such a foreign-op mutation, so it lives in canonicalize() instead.
+  //
   // Classes that participate in leader linkage are left untouched.
   if (getLeader())
     return {};
 
+  // A class that lists its own result as an operand: that operand is redundant
+  // and can be dropped in place.
   for (auto [idx, input] : llvm::enumerate(getInputs())) {
     auto innerClass = input.getDefiningOp<ClassOp>();
-    if (!innerClass)
-      continue;
     if (innerClass == getOperation()) {
-        getInputsMutable().erase(static_cast<unsigned>(idx));
-        return getResult();
+      getInputsMutable().erase(static_cast<unsigned>(idx));
+      return getResult();
     }
-
-    SmallVector<Value> merged = llvm::to_vector(innerClass.getInputs());
-    SmallPtrSet<Value, 8> seen(merged.begin(), merged.end());
-    for (auto [j, other] : llvm::enumerate(getInputs())) {
-      if (j == idx)
-        continue;
-      if (seen.insert(other).second)
-        merged.push_back(other);
-    }
-
-    // Operand indices change, so any precomputed selection is stale.
-    innerClass->removeAttr("min_cost_index");
-    innerClass.getInputsMutable().assign(merged);
-    return innerClass.getResult();
   }
 
   // Drop duplicate operands. A value appearing more than once adds nothing to
@@ -159,14 +144,48 @@ mlir::OpFoldResult mlir::equivalence::ClassOp::fold(FoldAdaptor adaptor) {
 mlir::LogicalResult
 mlir::equivalence::ClassOp::canonicalize(ClassOp op,
                                          PatternRewriter &rewriter) {
+  // Merge a nested e-class into this one. If an operand is itself the result of
+  // another class, the two classes denote the same equivalence set and can be
+  // collapsed: the inner class absorbs this class's remaining operands and this
+  // class is replaced by the inner class result. This is the structural rewrite
+  // that establishes "a class result is never an operand of another class".
+  //
+  // It mutates an operation other than `op` (the inner class), so it must go
+  // through the rewriter — that is precisely why it cannot live in fold(). Using
+  // modifyOpInPlace re-queues the inner class and notifies listeners.
+  if (!op.getLeader()) {
+    for (auto [idx, input] : llvm::enumerate(op.getInputs())) {
+      auto innerClass = input.getDefiningOp<ClassOp>();
+      if (!innerClass || innerClass == op.getOperation())
+        continue;
+
+      SmallVector<Value> merged = llvm::to_vector(innerClass.getInputs());
+      SmallPtrSet<Value, 8> seen(merged.begin(), merged.end());
+      for (auto [j, other] : llvm::enumerate(op.getInputs())) {
+        if (j == idx)
+          continue;
+        if (seen.insert(other).second)
+          merged.push_back(other);
+      }
+
+      rewriter.modifyOpInPlace(innerClass, [&] {
+        // Operand indices change, so any precomputed selection is stale.
+        innerClass->removeAttr("min_cost_index");
+        innerClass.getInputsMutable().assign(merged);
+      });
+      rewriter.replaceOp(op, innerClass.getResult());
+      return success();
+    }
+  }
+
   Value result = op.getResult();
   bool changed = false;
 
   // Every operand of an e-class is, by definition, equivalent to the class
   // itself. Any other operation that still refers to the operand directly
   // should instead route through the class result. Rewriting these uses
-  // establishes the invariant the verifier enforces: a class's operands are
-  // used only by the class operation.
+  // establishes the invariant that a class's operands are used only by the
+  // class operation.
   for (Value input : op.getInputs()) {
     rewriter.replaceUsesWithIf(input, result, [&](OpOperand &use) {
       if (use.getOwner() == op.getOperation())
@@ -206,6 +225,7 @@ namespace mlir::equivalence {
 #define GEN_PASS_DEF_EQUIVALENCESELECTCONSTANTS
 #define GEN_PASS_DEF_EQUIVALENCEEXTRACT
 #define GEN_PASS_DEF_EQUIVALENCEGRAPHSIZE
+#define GEN_PASS_DEF_EQUIVALENCERESTOREINVARIANTS
 #include "EquivalencePasses.h.inc"
 
 namespace {
@@ -358,6 +378,30 @@ public:
           inlineGraphOp(graphOp);
       }
     });
+  }
+};
+
+class EquivalenceRestoreInvariants
+    : public impl::EquivalenceRestoreInvariantsBase<
+          EquivalenceRestoreInvariants> {
+public:
+  using impl::EquivalenceRestoreInvariantsBase<
+      EquivalenceRestoreInvariants>::EquivalenceRestoreInvariantsBase;
+  void runOnOperation() final {
+    RewritePatternSet patterns(&getContext());
+    ClassOp::getCanonicalizationPatterns(patterns, &getContext());
+    FrozenRewritePatternSet patternSet(std::move(patterns));
+
+    // Run the class folder and canonicalizer to a genuine fixpoint. The cleanup
+    // (merge nested classes, reroute external uses) is a monotone rewrite, so
+    // lifting the greedy driver's iteration/rewrite caps lets it converge
+    // rather than bailing out after the default iteration budget.
+    GreedyRewriteConfig config;
+    config.setMaxIterations(GreedyRewriteConfig::kNoLimit);
+    config.setMaxNumRewrites(GreedyRewriteConfig::kNoLimit);
+
+    if (failed(applyPatternsGreedily(getOperation(), patternSet, config)))
+      signalPassFailure();
   }
 };
 
