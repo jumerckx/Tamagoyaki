@@ -48,6 +48,8 @@ The `ematch` dialect extends the `pdl_interp` dialect to support e-matching for 
 
 - **`-ematch-saturate-benchmark`**: Runs the equality saturation process N times for benchmarking and profiling. Each iteration clones the input IR to ensure fresh state, making it useful for performance analysis and optimization validation.
 
+- **`-equivalence-graph-contains`**: Reports, for each pattern in a `pdl_interp` patterns module (via `patterns-file=...` or nested `@patterns`/`@ir` submodules), whether it is *contained* in the e-graph — i.e. whether the pattern matches with its root in the e-class of a value returned by an `equivalence.yield`. Rather than rewriting, the pass replaces every `pdl_interp.record_match` with a custom constraint that registers the match and its operands, then runs the matcher once over the graph. Patterns can use the `ematch.is_arg` operation to pin operands to specific block arguments, fully grounding the query (e.g. "is `a * 2` for argument `a` present?" rather than "is some `x * 2` present?").
+
 ## Herbie-MLIR
 
 The `herbie-mlir` subproject extends Tamagoyaki with floating-point expression optimization inspired by [Herbie](https://herbie.uwplse.org/). The goal is to use equality saturation with the `ematch` dialect to explore equivalent floating-point expressions and select those with improved numerical accuracy or performance characteristics.
