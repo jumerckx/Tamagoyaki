@@ -36,13 +36,13 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/StringRef.h"
+#include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <cassert>
 #include <chrono>
-#include <set>
 #include <string>
 #include <utility>
 
@@ -416,7 +416,7 @@ struct LowerIsArgPattern : public OpRewritePattern<IsArgOp> {
 struct ReplaceRecordMatchPattern
     : public OpRewritePattern<pdl_interp::RecordMatchOp> {
   ReplaceRecordMatchPattern(MLIRContext *context,
-                            std::set<std::string> &patterns)
+                            llvm::StringSet<> &patterns)
       : OpRewritePattern<pdl_interp::RecordMatchOp>(context),
         patterns(patterns) {}
 
@@ -441,7 +441,7 @@ struct ReplaceRecordMatchPattern
     return success();
   }
 
-  std::set<std::string> &patterns;
+  llvm::StringSet<> &patterns;
 };
 
 /// Lower every `ematch.is_arg` in the module to a `pdl_interp.apply_constraint`
@@ -462,9 +462,9 @@ static void lowerIsArgOps(ModuleOp module,
 /// `pdl_interp.apply_constraint` that records the match for the
 /// equivalence-graph-contains pass.
 /// Returns the set of patterns (leaf rewriter symbols) that were recorded.
-static std::set<std::string> replaceRecordMatches(ModuleOp module) {
+static llvm::StringSet<> replaceRecordMatches(ModuleOp module) {
   TAMAGOYAKI_SCOPED_TIMER("replaceRecordMatches");
-  std::set<std::string> recordedPatterns;
+  llvm::StringSet<> recordedPatterns;
   RewritePatternSet patterns(module.getContext());
   patterns.add<ReplaceRecordMatchPattern>(module.getContext(),
                                           recordedPatterns);
@@ -641,8 +641,7 @@ struct EquivalenceGraphContainsPass
     // with constraints that register matches against the e-graph.
     llvm::DenseSet<uint32_t> argIndices;
     lowerIsArgOps(patternsModule, argIndices);
-    std::set<std::string> recordedPatterns =
-        replaceRecordMatches(patternsModule);
+    llvm::StringSet<> recordedPatterns = replaceRecordMatches(patternsModule);
 
     // We only match, never rewrite. The PDL bytecode generator still requires a
     // @rewriters module to be present, so keep it but drop its contents (the
@@ -670,8 +669,8 @@ struct EquivalenceGraphContainsPass
     // Containment results, keyed by pattern. Pre-populate so patterns that are
     // never matched are still reported.
     std::map<std::string, PatternResult> results;
-    for (const std::string &pattern : recordedPatterns)
-      results[pattern];
+    for (const auto &entry : recordedPatterns)
+      results[entry.getKey().str()];
 
     patternsModule.getOperation()->remove();
     PDLPatternModule pdlPattern(patternsModule);
@@ -699,7 +698,8 @@ struct EquivalenceGraphContainsPass
 
     // record_match_<pattern>: register the match and check whether its root is
     // equivalent to a yielded value.
-    for (const std::string &pattern : recordedPatterns) {
+    for (const auto &entry : recordedPatterns) {
+      std::string pattern = entry.getKey().str();
       std::string name = "record_match_" + pattern;
       pdlPattern.registerConstraintFunction(
           name,
