@@ -18,12 +18,29 @@ using namespace mlir;
 using namespace mlir::equivalence;
 using namespace mlir::ematch;
 
+#ifdef TAMAGOYAKI_INCLUDE_TESTS
+// Test-only passes defined in test/lib/. They have no public header and are
+// only available when the build is configured with TAMAGOYAKI_INCLUDE_TESTS.
+namespace mlir::test {
+void registerTestEquivalenceUtilsPasses();
+void registerTestSaturationCanonicalizePasses();
+} // namespace mlir::test
+
+static void registerTestPasses() {
+  mlir::test::registerTestEquivalenceUtilsPasses();
+  mlir::test::registerTestSaturationCanonicalizePasses();
+}
+#endif
+
 int main(int argc, char **argv) {
   tamagoyaki::registerTimingCLOptions();
 
   mlir::registerAllPasses();
   mlir::equivalence::registerEquivalencePasses();
   mlir::ematch::registerEmatchPasses();
+#ifdef TAMAGOYAKI_INCLUDE_TESTS
+  registerTestPasses();
+#endif
   mlir::DialectRegistry registry;
   registry.insert<mlir::equivalence::EquivalenceDialect,
                   mlir::ematch::EmatchDialect>();

@@ -86,9 +86,16 @@ set(TAMAGOYAKI_OPT_LIBS
   TamagoyakiTiming
 )
 
+if(TAMAGOYAKI_INCLUDE_TESTS)
+  list(APPEND TAMAGOYAKI_OPT_LIBS TamagoyakiTestPasses)
+endif()
+
 add_llvm_executable(tamagoyaki-opt tamagoyaki-opt.cpp)
 llvm_update_compile_flags(tamagoyaki-opt)
 target_link_libraries(tamagoyaki-opt PRIVATE ${TAMAGOYAKI_OPT_LIBS})
+if(TAMAGOYAKI_INCLUDE_TESTS)
+  target_compile_definitions(tamagoyaki-opt PRIVATE TAMAGOYAKI_INCLUDE_TESTS)
+endif()
 add_dependencies(tamagoyaki-opt
   MLIREquivalenceIncGen
   MLIREmatchIncGen

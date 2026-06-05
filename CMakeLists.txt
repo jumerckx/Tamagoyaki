@@ -18,6 +18,12 @@ if(ENABLE_ASAN)
   add_link_options(-fsanitize=address)
 endif()
 
+# Build the test-only passes in test/lib/ and link them into tamagoyaki-opt.
+# These passes are not part of the Tamagoyaki core; they exist solely to drive
+# lit/FileCheck tests (mirrors MLIR's MLIR_INCLUDE_TESTS option).
+option(TAMAGOYAKI_INCLUDE_TESTS
+       "Build test-only passes and link them into tamagoyaki-opt" ON)
+
 find_package(MLIR REQUIRED CONFIG)
 
 message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
