@@ -20,10 +20,8 @@
 // CHECK-NEXT:    %[[EXTRA:.*]] = arith.addi %[[CLS]], %[[CLS]] : i32
 // CHECK-NEXT:    return %[[CLS]], %[[EXTRA]] : i32, i32
 func.func @nested_and_reroute(%a: i32, %b: i32, %c: i32) -> (i32, i32) {
-  %zero = arith.constant 0 : i32
   %inner = equivalence.class %a, %b : i32
-  %x = arith.addi %inner, %zero : i32
-  %O = equivalence.class %x, %c : i32
+  %O = equivalence.class %inner, %c : i32
   %extra = arith.addi %a, %c : i32
   return %O, %extra : i32, i32
 }
@@ -34,11 +32,19 @@ func.func @nested_and_reroute(%a: i32, %b: i32, %c: i32) -> (i32, i32) {
 // CHECK-NOT:     min_cost_index
 // CHECK-NEXT:    return %[[CLS]] : i32
 func.func @merge_drops_min_cost_index(%a: i32, %b: i32, %c: i32) -> i32 {
-  %zero = arith.constant 0 : i32
   %inner = equivalence.class %a, %b (min_cost_index = 1) : i32
-  %x = arith.addi %inner, %zero : i32
-  %O = equivalence.class %x, %c : i32
+  %O = equivalence.class %inner, %c : i32
   return %O : i32
+}
+
+// A single-element class is NOT collapsed: that is an optimization, not a
+// normal-form invariant, and the pass leaves the e-graph structure intact.
+// CHECK-LABEL: func @single_element_class_preserved
+// CHECK-NEXT:    %[[CLS:.*]] = equivalence.class %{{.*}} : i32
+// CHECK-NEXT:    return %[[CLS]] : i32
+func.func @single_element_class_preserved(%a: i32) -> i32 {
+  %0 = equivalence.class %a : i32
+  return %0 : i32
 }
 
 // Duplicate operands are not a verifier error; the pass deduplicates them.

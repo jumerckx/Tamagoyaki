@@ -243,7 +243,7 @@ def EquivalenceSelectConstants: Pass<"equivalence-select-constants", "::mlir::Mo
 def EquivalenceRestoreInvariants: Pass<"equivalence-restore-invariants", "::mlir::ModuleOp"> {
   let summary = "Restores the equivalence-class normal form to a fixpoint.";
   let description = [{
-    Applies the `equivalence.class` folder and canonicalizer until no further
+    Applies the `equivalence.class` canonicalization patterns until no further
     rewrites apply, re-establishing the class normal form:
 
       * a class result is never used as an operand of another class
@@ -251,6 +251,12 @@ def EquivalenceRestoreInvariants: Pass<"equivalence-restore-invariants", "::mlir
       * a class's operands are used only by that class
         (external uses are rerouted through the class result).
       * class operands are deduplicated
+
+    Unlike the general `--canonicalize` pass, this runs the greedy driver with
+    no iteration or rewrite limit, so it reaches a genuine fixpoint. Folding and
+    constant CSE are disabled: those optimizing rewrites (e.g. collapsing a
+    single-element class to its operand) are not part of the normal form and
+    would destroy e-graph structure that downstream consumers depend on.
   }];
   let dependentDialects = ["::mlir::equivalence::EquivalenceDialect"];
 }

@@ -122,6 +122,18 @@ void inlineGraphOp(GraphOp graphOp);
 /// Returns the sorted operations (excluding YieldOp).
 SmallVector<Operation *> computeSelectedTopoSort(GraphOp graphOp);
 
+/// Restore the equivalence-class normal form under `root` by applying the
+/// ClassOp canonicalization patterns to a genuine fixpoint (no greedy-driver
+/// iteration or rewrite limit). This re-establishes the invariants that
+/// verify() deliberately does not enforce: a class result is never an operand
+/// of another class (nested classes are merged), a class's operands are used
+/// only by that class (external uses are rerouted through the class result),
+/// and operands are unique. Folding and constant CSE are disabled so that
+/// optimizing rewrites (e.g. collapsing single-element classes, hoisting
+/// constants) do not destroy e-graph structure callers depend on. Returns
+/// failure if the greedy driver fails.
+LogicalResult restoreClassInvariants(Operation *root);
+
 } // namespace mlir::equivalence
 
 #endif // EQUIVALENCE_UTILS_H

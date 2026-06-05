@@ -504,6 +504,15 @@ struct EmatchSaturatePass
     patternsModule.getOperation()->remove();
     PDLPatternModule pdlPattern(patternsModule);
 
+    // Normalize the input e-graph before saturating. The IR may arrive with the
+    // class normal form broken (e.g. a prior canonicalization left a class
+    // result floating into a class operand); saturation assumes the invariants
+    // hold, so restore them to a fixpoint first.
+    if (failed(equivalence::restoreClassInvariants(irModule))) {
+      signalPassFailure();
+      return;
+    }
+
     runSaturation(module.getContext(), std::move(pdlPattern), irModule,
                   maxIters, maxNodes, /*listener=*/nullptr, eagerRewrite);
   }

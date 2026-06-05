@@ -130,6 +130,26 @@ mlir::OpFoldResult mlir::equivalence::ClassOp::fold(FoldAdaptor adaptor) {
 mlir::LogicalResult
 mlir::equivalence::ClassOp::canonicalize(ClassOp op,
                                          PatternRewriter &rewriter) {
+  // Drop self-referential and duplicate operands.
+  {
+    SmallPtrSet<Value, 8> seen;
+    SmallVector<Value> unique;
+    for (Value input : op.getInputs()) {
+      if (input.getDefiningOp() == op.getOperation())
+        continue; // self-reference
+      if (seen.insert(input).second)
+        unique.push_back(input);
+    }
+    if (!unique.empty() && unique.size() != op.getInputs().size()) {
+      rewriter.modifyOpInPlace(op, [&] {
+        // Operand indices change, so any precomputed selection is stale.
+        op->removeAttr("min_cost_index");
+        op.getInputsMutable().assign(unique);
+      });
+      return success();
+    }
+  }
+
   // Merge a nested e-class into this one. If an operand is itself the result of
   // another class, the two classes denote the same equivalence set and can be
   // collapsed: the inner class absorbs this class's remaining operands and this
@@ -370,19 +390,7 @@ public:
   using impl::EquivalenceRestoreInvariantsBase<
       EquivalenceRestoreInvariants>::EquivalenceRestoreInvariantsBase;
   void runOnOperation() final {
-    RewritePatternSet patterns(&getContext());
-    ClassOp::getCanonicalizationPatterns(patterns, &getContext());
-    FrozenRewritePatternSet patternSet(std::move(patterns));
-
-    // Run the class folder and canonicalizer to a genuine fixpoint. The cleanup
-    // (merge nested classes, reroute external uses) is a monotone rewrite, so
-    // lifting the greedy driver's iteration/rewrite caps lets it converge
-    // rather than bailing out after the default iteration budget.
-    GreedyRewriteConfig config;
-    config.setMaxIterations(GreedyRewriteConfig::kNoLimit);
-    config.setMaxNumRewrites(GreedyRewriteConfig::kNoLimit);
-
-    if (failed(applyPatternsGreedily(getOperation(), patternSet, config)))
+    if (failed(restoreClassInvariants(getOperation())))
       signalPassFailure();
   }
 };
@@ -830,6 +838,32 @@ SmallVector<Operation *> computeSelectedTopoSort(GraphOp graphOp) {
   computeTopologicalSorting(opsToSort, isOperandReady);
 
   return opsToSort;
+}
+
+LogicalResult restoreClassInvariants(Operation *root) {
+  TAMAGOYAKI_SCOPED_TIMER("restoreClassInvariants");
+
+  RewritePatternSet patterns(root->getContext());
+  ClassOp::getCanonicalizationPatterns(patterns, root->getContext());
+  FrozenRewritePatternSet patternSet(std::move(patterns));
+
+  // Run the class canonicalizer to a genuine fixpoint. The cleanup (merge
+  // nested classes, reroute external uses, deduplicate operands) is a monotone
+  // rewrite, so lifting the greedy driver's iteration/rewrite caps lets it
+  // converge rather than bailing out after the default iteration budget.
+  //
+  // Folding and constant CSE are deliberately disabled: those are *optimizing*
+  // rewrites (e.g. collapsing a single-element class to its operand, hoisting
+  // constants) that are not part of the normal form and would destroy e-graph
+  // structure callers rely on. Only the invariant-restoring canonicalization
+  // patterns run.
+  GreedyRewriteConfig config;
+  config.setMaxIterations(GreedyRewriteConfig::kNoLimit);
+  config.setMaxNumRewrites(GreedyRewriteConfig::kNoLimit);
+  config.enableFolding(false);
+  config.enableConstantCSE(false);
+
+  return applyPatternsGreedily(root, patternSet, config);
 }
 
 } // namespace mlir::equivalence
