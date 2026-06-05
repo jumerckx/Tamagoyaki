@@ -210,44 +210,13 @@ struct TestGenerateEquivalenceExprPass
 // test-saturation-canonicalize
 //===----------------------------------------------------------------------===//
 
-/// Sum the e-class / e-node counts of every graph in a module.
-static GraphSize moduleGraphSize(ModuleOp module) {
-  GraphSize total;
-  module.walk([&](GraphOp graph) {
-    GraphSize s = computeGraphSize(graph);
-    total.classes += s.classes;
-    total.nodes += s.nodes;
-  });
-  return total;
-}
-
-/// A program has been reduced to `1` when the value yielded by its graph is the
-/// floating-point constant 1.0.
-static bool isReducedToOne(ModuleOp module) {
-  bool reduced = false;
-  module.walk([&](YieldOp yield) {
-    if (yield.getValues().size() != 1)
-      return;
-    Operation *def = yield.getValues()[0].getDefiningOp();
-    if (!def || def->getName().getStringRef() != "arith.constant")
-      return;
-    if (auto f = dyn_cast_or_null<FloatAttr>(def->getAttr("value")))
-      if (f.getValueAsDouble() == 1.0)
-        reduced = true;
-  });
-  return reduced;
-}
-
-/// Which flow(s) test-saturation-canonicalize should run.
-enum class Flow {
-  /// Run both flows and report the round-count comparison.
-  Both,
-  /// Flow A only: intertwine saturation with canonicalization.
-  A,
-  /// Flow B only: saturation only, probing after each round.
-  B,
-};
-
+/// Run the core equality-saturation loop, canonicalizing the IR between every
+/// iteration. After building the e-graph, each round applies one round of
+/// saturation, then selects constants, extracts the chosen program and
+/// canonicalizes it. Canonicalizing the extracted IR shrinks what the next
+/// saturation round starts from, so the e-graph stays small and converges in
+/// fewer rounds. The loop runs exactly `rounds` iterations; the transformed
+/// module is left in place as the pass output.
 struct TestSaturationCanonicalizePass
     : public PassWrapper<TestSaturationCanonicalizePass,
                          OperationPass<ModuleOp>> {
@@ -259,8 +228,8 @@ struct TestSaturationCanonicalizePass
 
   StringRef getArgument() const final { return "test-saturation-canonicalize"; }
   StringRef getDescription() const final {
-    return "Compare intertwining saturation with canonicalization against "
-           "saturation only, reporting e-graph size per iteration (test only)";
+    return "Run equality saturation, canonicalizing the IR between every "
+           "iteration (test only)";
   }
 
   void getDependentDialects(DialectRegistry &registry) const override {
@@ -272,19 +241,10 @@ struct TestSaturationCanonicalizePass
   Option<std::string> patternsFile{
       *this, "patterns-file",
       llvm::cl::desc("Path to the MLIR file containing the rewrite patterns")};
-  Option<int> maxRounds{
-      *this, "max-rounds",
-      llvm::cl::desc("Safety cap on the number of saturation rounds per flow"),
-      llvm::cl::init(32)};
-  Option<Flow> flow{
-      *this, "flow",
-      llvm::cl::desc("Which flow(s) to run"), llvm::cl::init(Flow::Both),
-      llvm::cl::values(
-          clEnumValN(Flow::Both, "both",
-                     "Run both flows and report the comparison"),
-          clEnumValN(Flow::A, "a",
-                     "Run only flow A (saturation + canonicalization)"),
-          clEnumValN(Flow::B, "b", "Run only flow B (saturation only)"))};
+  Option<int> rounds{
+      *this, "rounds",
+      llvm::cl::desc("Number of saturation + canonicalization rounds to run"),
+      llvm::cl::init(4)};
 
   /// Run a single pass on `module`, returning success/failure.
   LogicalResult runPass(ModuleOp module, std::unique_ptr<Pass> pass) {
@@ -300,8 +260,9 @@ struct TestSaturationCanonicalizePass
     return ematch::createEmatchSaturatePass(opts);
   }
 
-  /// select-constants, extract, canonicalize -- the simplification half of one
-  /// round. Applied in place to `module`.
+  /// select-constants, extract, canonicalize -- the canonicalization half of
+  /// one round. The GraphOp wrapper is kept (extract's default) so the next
+  /// round can keep saturating. Applied in place to `module`.
   LogicalResult simplify(ModuleOp module) {
     PassManager pm(module.getContext(), module.getOperationName());
     pm.addPass(createEquivalenceSelectConstants());
@@ -318,98 +279,18 @@ struct TestSaturationCanonicalizePass
       return signalPassFailure();
     }
 
-    // Establish the shared starting point: wrap the generated function in a
-    // graph. Both flows start from a clone of this.
-    OwningOpRef<ModuleOp> base(module.clone());
-    if (failed(runPass(base.get(), createEquivalenceInsertGraph()))) {
-      module.emitError("failed to insert graph");
-      return signalPassFailure();
-    }
-
-    int numVars = 0;
-    base->walk([&](func::FuncOp f) { numVars = f.getNumArguments(); });
-
-    GraphSize start = moduleGraphSize(base.get());
-
-    bool runA = flow == Flow::Both || flow == Flow::A;
-    bool runB = flow == Flow::Both || flow == Flow::B;
-
-    // --- Flow A: intertwine saturation and canonicalization. ---
-    SmallVector<GraphSize> flowA;
-    int roundsA = -1;
-    if (runA) {
-      OwningOpRef<ModuleOp> work(base->clone());
-      for (int round = 1; round <= maxRounds; ++round) {
-        if (failed(runPass(work.get(), saturateOnce()))) {
-          module.emitError("flow A saturation failed");
-          return signalPassFailure();
-        }
-        // Record the peak e-graph size reached this round, before the
-        // simplification half shrinks it back down.
-        flowA.push_back(moduleGraphSize(work.get()));
-        if (failed(simplify(work.get()))) {
-          module.emitError("flow A simplification failed");
-          return signalPassFailure();
-        }
-        if (isReducedToOne(work.get())) {
-          roundsA = round;
-          break;
-        }
+    // Core loop: saturate one round, then canonicalize the extracted IR,
+    // repeated for the requested number of rounds.
+    for (int round = 1; round <= rounds; ++round) {
+      if (failed(runPass(module, saturateOnce()))) {
+        module.emitError("saturation failed");
+        return signalPassFailure();
+      }
+      if (failed(simplify(module))) {
+        module.emitError("canonicalization failed");
+        return signalPassFailure();
       }
     }
-
-    // --- Flow B: saturation only, probing after each round. ---
-    SmallVector<GraphSize> flowB;
-    int roundsB = -1;
-    if (runB) {
-      OwningOpRef<ModuleOp> work(base->clone());
-      for (int round = 1; round <= maxRounds; ++round) {
-        if (failed(runPass(work.get(), saturateOnce()))) {
-          module.emitError("flow B saturation failed");
-          return signalPassFailure();
-        }
-        flowB.push_back(moduleGraphSize(work.get()));
-
-        // Probe: would a single extract+canonicalize collapse it to 1?
-        OwningOpRef<ModuleOp> probe(work->clone());
-        if (failed(simplify(probe.get()))) {
-          module.emitError("flow B probe failed");
-          return signalPassFailure();
-        }
-        if (isReducedToOne(probe.get())) {
-          roundsB = round;
-          break;
-        }
-      }
-    }
-
-    // --- Report. ---
-    llvm::outs() << "=== saturation vs. canonicalization ===\n";
-    llvm::outs() << "variables: " << numVars << "\n";
-    llvm::outs() << "initial graph: " << start.classes << " e-classes, "
-                 << start.nodes << " e-nodes\n\n";
-
-    auto report = [](StringRef name, ArrayRef<GraphSize> sizes, int rounds) {
-      llvm::outs() << name << ":\n";
-      for (auto [i, s] : llvm::enumerate(sizes))
-        llvm::outs() << "  round " << (i + 1) << ": " << s.classes
-                     << " e-classes, " << s.nodes << " e-nodes\n";
-      if (rounds > 0)
-        llvm::outs() << "  reduced to 1 after " << rounds << " round(s)\n";
-      else
-        llvm::outs() << "  did NOT reduce to 1 within the round cap\n";
-      llvm::outs() << "\n";
-    };
-
-    if (runA)
-      report("flow A (saturation + canonicalization)", flowA, roundsA);
-    if (runB)
-      report("flow B (saturation only)", flowB, roundsB);
-
-    if (runA && runB && roundsA > 0 && roundsB > 0)
-      llvm::outs() << "summary: intertwining canonicalization took " << roundsA
-                   << " round(s) vs. " << roundsB
-                   << " round(s) for saturation only\n";
   }
 };
 

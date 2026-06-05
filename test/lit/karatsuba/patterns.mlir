@@ -1,3 +1,5 @@
+// RUN: true
+
 // Port of egg-style rewrite rules to PDL, specialized to i8.
 //
 // The leading width child `?w` in each egg term is carried by the result

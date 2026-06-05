@@ -1,3 +1,5 @@
+// RUN: true
+
 // // Matches:  (ah * bl) + (al * bh)
 // pdl.pattern @CrossTermToKaratsuba : benefit(1) {
 //   %i8 = pdl.type : i8
