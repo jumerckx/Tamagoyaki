@@ -174,6 +174,10 @@ public:
                                        rewriterBuildPartialProduct);
     pdlPattern.registerRewriteFunction("BuildCompress", rewriterBuildCompress);
     pdlPattern.registerRewriteFunction("BuildZero", rewriterBuildZero);
+    if (failed(equivalence::restoreClassInvariants(irModule))) {
+      signalPassFailure();
+      return;
+    }
     bool saturationSuccess = mlir::ematch::runSaturation(
         irModule->getContext(), std::move(pdlPattern), irModule, maxIters,
         maxNodes);
