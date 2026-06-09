@@ -69,6 +69,39 @@
                 pkgs.lldb
               ];
 
+          # nixpkgs Racket reports its platform subpath as "<arch>-darwin", but
+          # Herbie's `egg-herbie` package is a redirect that gates its prebuilt
+          # binary dependency on the upstream Racket string ("<arch>-macosx").
+          # That guard never matches under nixpkgs Racket on macOS, so
+          # `raco pkg install herbie` silently omits the binary package and the
+          # `egg-herbie` collection ends up missing. Naming the prebuilt package
+          # for this system explicitly sidesteps the guard. On Linux the strings
+          # agree, so the default dependency resolution already works ("").
+          eggHerbiePkg =
+            if system == "aarch64-darwin" then
+              "egg-herbie-macosm1"
+            else if system == "x86_64-darwin" then
+              "egg-herbie-osx"
+            else
+              "";
+
+          # One-shot, idempotent helper: install Herbie into the user's Racket
+          # package scope together with the correct prebuilt egg-herbie for this
+          # system, then confirm the `egg-herbie` collection actually loads (it
+          # dlopen's a Rust cdylib via FFI). Run once per machine.
+          herbie-setup = pkgs.writeShellScriptBin "herbie-setup" ''
+            set -euo pipefail
+            want="herbie ${eggHerbiePkg}"
+            echo "herbie-setup: ensuring Herbie + egg-herbie are installed ..." >&2
+            raco pkg install --auto --skip-installed $want
+            if racket -e '(dynamic-require (quote egg-herbie) #f)' >/dev/null 2>&1; then
+              echo "herbie-setup: egg-herbie OK. Run: racket -l herbie -- web --quiet" >&2
+            else
+              echo "herbie-setup: egg-herbie collection still missing after install." >&2
+              exit 1
+            fi
+          '';
+
           # Prebuilt rival3-ffi static C-API library, so `nix build` is offline.
           rival-ffi = rustPlatform.buildRustPackage {
             pname = "rival3-ffi";
@@ -312,7 +345,10 @@
                     docsPython
                   ]
                   ++ lib.optionals (!ci) (
-                    [ rustToolchain ]
+                    [
+                      rustToolchain
+                      herbie-setup
+                    ]
                     ++ (with pkgs; [
                       racket
                       uv
@@ -336,7 +372,8 @@
                   RIVAL_PREBUILT_INCLUDE = "${rival-ffi}/include";
 
                   shellHook = ''
-                    # Keep the host PYTHONPATH out of lit's python.
+                    # Keep the host PYTHONPATH out of lit's python. (Only runs
+                    # under `nix develop`; direnv does not execute shellHook.)
                     unset PYTHONPATH
 
                     # gmp/mpfr/libmpc are dlopen'd at runtime, so they need to
@@ -363,6 +400,9 @@
                     echo "tamagoyaki ${variant}${lib.optionalString ci " (ci)"} shell ready"
                     echo "  configure: tamagoyaki-configure build"
                     echo "  build:     ninja -C build check-all"
+                    ${lib.optionalString (!ci) ''
+                      echo "  herbie:    herbie-setup  (once; then racket -l herbie -- web --quiet)"
+                    ''}
                   '';
                 };
 
