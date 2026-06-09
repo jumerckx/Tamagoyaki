@@ -312,7 +312,6 @@
                   ];
                 in
                 (pkgs.mkShell.override { inherit stdenv; }) ({
-                (pkgs.mkShell.override { inherit stdenv; }) {
                   name = "tamagoyaki${suffix}${lib.optionalString ci "-ci"}${lib.optionalString docs "-docs"}";
 
                   inputsFrom = [ tamagoyaki ];
@@ -356,7 +355,13 @@
                     echo "  configure: tamagoyaki-configure build"
                     echo "  build:     ninja -C build check-all"
                   '';
-                };
+                }
+                // (
+                  if isDarwin then
+                    { DYLD_LIBRARY_PATH = loaderPath; }
+                  else
+                    { LD_LIBRARY_PATH = loaderPath; }
+                ));
 
               shell = mkTamaShell { ci = false; };
               ciShell = mkTamaShell { ci = true; };
