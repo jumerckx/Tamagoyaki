@@ -304,6 +304,15 @@
 
                   inputsFrom = [ tamagoyaki ];
 
+                  # mkShell does not propagate hardeningDisable from inputsFrom,
+                  # so re-apply the variant's hardening overrides here. Without
+                  # this, in-shell incremental builds (`ninja -C build`) get
+                  # nix's default flags even though `nix build .#tamagoyaki-*`
+                  # would not. In debug, dropping libcxxhardeningfast lets the
+                  # _LIBCPP_HARDENING_MODE_EXTENSIVE define that LLVM exports
+                  # (when assertions are on) apply without -Wmacro-redefined.
+                  inherit (variantAttrs) hardeningDisable;
+
                   packages = [
                     tamagoyaki-configure
                   ]
