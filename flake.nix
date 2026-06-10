@@ -9,6 +9,24 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    # uv2nix toolchain: build the Python environment straight from
+    # pyproject.toml + uv.lock so the flake and uv share one source of truth.
+    pyproject-nix = {
+      url = "github:pyproject-nix/pyproject.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    uv2nix = {
+      url = "github:pyproject-nix/uv2nix";
+      inputs.pyproject-nix.follows = "pyproject-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    pyproject-build-systems = {
+      url = "github:pyproject-nix/build-system-pkgs";
+      inputs.pyproject-nix.follows = "pyproject-nix";
+      inputs.uv2nix.follows = "uv2nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     llvm-project-src = {
       url = "github:llvm/llvm-project/a47d3636f953870d96fb6cc68817365fdad2f9fe";
       flake = false;
@@ -28,6 +46,9 @@
       self,
       nixpkgs,
       rust-overlay,
+      pyproject-nix,
+      uv2nix,
+      pyproject-build-systems,
       llvm-project-src,
       circt-src,
       rival3-src,
@@ -140,20 +161,40 @@
             '';
           };
 
-          # Python interpreter with the Sphinx toolchain the docs build needs.
-          # Mirrors docs/requirements.txt so CI builds docs entirely from Nix.
-          docsPython = pkgs.python3.withPackages (
-            ps: with ps; [
-              sphinx
-              furo
-              myst-parser
-              breathe
-              sphinx-copybutton
-              sphinx-design
-              sphinxcontrib-mermaid
-              linkify-it-py
-            ]
-          );
+          # The whole Python toolchain, built from pyproject.toml + uv.lock via
+          # uv2nix. One source of truth shared with `uv`: the runtime deps
+          # (xdsl, numpy, pandas, matplotlib, snakemake), the dev tooling (lit,
+          # pre-commit, cmake-format) and the docs group (sphinx, furo, breathe,
+          # ...) all come from the lockfile. `deps.all` pulls in every
+          # optional-dependency group, so the docs build needs no separate env.
+          python = pkgs.python313;
+          uvWorkspace = uv2nix.lib.workspace.loadWorkspace { workspaceRoot = ./.; };
+          uvOverlay = uvWorkspace.mkPyprojectOverlay {
+            # Prefer prebuilt wheels; avoids compiling sdists from PyPI.
+            sourcePreference = "wheel";
+          };
+          # Per-package build-fixups layered on top of the generated overlay.
+          # connection-pool (a snakemake transitive dep) is an sdist-only legacy
+          # package that builds with setuptools but never declares it, so uv's
+          # isolated build can't find the backend. Inject it explicitly.
+          pyprojectOverrides = final: prev: {
+            connection-pool = prev.connection-pool.overrideAttrs (old: {
+              nativeBuildInputs =
+                (old.nativeBuildInputs or [ ])
+                ++ final.resolveBuildSystem { setuptools = [ ]; };
+            });
+          };
+          pythonSet =
+            (pkgs.callPackage pyproject-nix.build.packages {
+              inherit python;
+            }).overrideScope
+              (lib.composeManyExtensions [
+                pyproject-build-systems.overlays.default
+                uvOverlay
+                pyprojectOverrides
+              ]);
+          # Single venv used by every shell that needs Python.
+          pythonEnv = pythonSet.mkVirtualEnv "tamagoyaki-env" uvWorkspace.deps.all;
 
           mkVariant =
             { variant }:
@@ -363,15 +404,20 @@
                   ]
                   ++ lib.optionals docs [
                     pkgs.doxygen
-                    docsPython
+                    pythonEnv
                   ]
                   ++ lib.optionals (!ci) (
                     [
                       rustToolchain
                       herbie-setup
+                      # The full Python toolchain from uv.lock (xdsl, snakemake,
+                      # lit, pre-commit, cmake-format, plotting + docs deps).
+                      pythonEnv
                     ]
                     ++ (with pkgs; [
                       racket
+                      # uv stays for lockfile maintenance (`uv lock`); the
+                      # environment itself is the nix-built pythonEnv above.
                       uv
                     ])
                     ++ debuggers
@@ -443,7 +489,7 @@
             llvm-mlir-debug = debug.llvm-mlir;
             circt = release.circt;
             circt-debug = debug.circt;
-            inherit rival-ffi;
+            inherit rival-ffi pythonEnv;
           };
           devShells = {
             default = release.shell;

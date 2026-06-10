@@ -6,13 +6,24 @@ dependencies = [
     "cmake-format>=0.6.13",
     "lit>=18.1.8",
     "matplotlib>=3.10.8",
-    "mlir-wheel==20260405",
     "numpy>=2.4.3",
     "pandas>=3.0.1",
     "pre-commit>=4.5.1",
     "snakemake>=9",
     "snakemake-executor-plugin-cluster-generic>=1",
     "xdsl>=0.56.2",
+]
+
+[project.optional-dependencies]
+docs = [
+    "sphinx>=8.0",
+    "furo>=2024.8.6",
+    "myst-parser>=4.0",
+    "breathe>=4.35",
+    "sphinx-copybutton>=0.5",
+    "sphinx-design>=0.6",
+    "sphinxcontrib-mermaid>=1.0",
+    "linkify-it-py>=2.0",
 ]
 
 [tool.uv.workspace]
@@ -48,6 +59,3 @@ dev = [
 
 [project.entry-points.'xdsl.universe']
 tools = 'herbie_mlir.tools:EQSAT_UNIVERSE'
-
-[tool.uv]
-find-links = ["https://llvm.github.io/eudsl"]

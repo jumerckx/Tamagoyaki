@@ -61,38 +61,36 @@ The subproject includes the `herbie-mlir-opt` tool, which combines the `equivale
 
 ### Prerequisites
 
-This project uses [mlir-wheel](https://github.com/llvm/eudsl/tree/main/projects/mlir-wheel) for MLIR distribution. Install dependencies with:
+The project builds against a local MLIR/LLVM (and CIRCT) build supplied by the
+Nix flake, so the only host requirement is [Nix](https://nixos.org/) with flakes
+enabled. Enter the development shell — which provides the toolchain, a pinned
+LLVM/MLIR + CIRCT, and the full Python environment (xdsl, snakemake, lit,
+pre-commit, plotting and docs deps), all built from `pyproject.toml` + `uv.lock`
+via [uv2nix](https://github.com/pyproject-nix/uv2nix):
 
 ```shell
-uv init
-uv run pre-commit install
+nix develop          # release toolchain; use `nix develop .#debug` for assertions
+pre-commit install
 ```
+
+The shell exports `CMAKE_PREFIX_PATH` (LLVM/MLIR/CIRCT) and `LLVM_EXTERNAL_LIT`
+automatically. `uv` is still available for lockfile maintenance (`uv lock`), but
+the Python environment itself comes from Nix.
 
 ### CMake Configuration
 
-Configure the build with:
+Configure with the helper that picks up the shell's environment:
 
 ```shell
-cmake -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DPython3_EXECUTABLE=$(uv run which python) \
-  -DCMAKE_PREFIX_PATH=$(uv run python -m mlir_wheel --root-dir) \
-  -DLLVM_EXTERNAL_LIT=$(uv run which lit) \
-  -B build \
-  -S $PWD
+tamagoyaki-configure build      # cmake -G Ninja -B build with the right flags
 ```
-
-> [!TIP]  
-> You can also link against a local MLIR build by replacing `$(python -m mlir_wheel --root-dir)` with the path to your LLVM install directory.
-
 
 ### Running Tests
 
 Build and run the test suite:
 
 ```shell
-cd build
-ninja check-tamagoyaki
+ninja -C build check-tamagoyaki   # or `check-all`
 ```
 
 ## About

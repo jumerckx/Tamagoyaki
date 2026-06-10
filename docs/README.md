@@ -9,12 +9,14 @@ The site is built with [Sphinx](https://www.sphinx-doc.org/) using:
 
 ## Local build
 
+The Sphinx toolchain and Doxygen are provided by the `docs` Nix dev shell (the
+Python deps come from `pyproject.toml`'s `docs` optional-dependency group, built
+via uv2nix):
+
 ```shell
-python -m venv .venv && source .venv/bin/activate
-pip install -r docs/requirements.txt
-sudo apt-get install -y doxygen        # or `brew install doxygen`
+nix develop .#docs
 make -C docs html
-xdg-open docs/_build/html/index.html
+xdg-open docs/_build/html/index.html   # `open` on macOS
 ```
 
 Set `SKIP_DOXYGEN=1` to skip the C++ extraction step (useful when iterating on
@@ -29,7 +31,6 @@ prose only).
 | [`index.md`](index.md) | Landing page and top-level toctree. |
 | [`guides/`](guides/) | Freeform Markdown walkthroughs. |
 | [`api/`](api/) | Auto-generated C++ API reference. |
-| [`requirements.txt`](requirements.txt) | Python deps for building the docs. |
 
 ## Adding a new freeform guide
 
