@@ -57,11 +57,17 @@ if(HERBIE_MLIR_BUILD_HERBIE)
   # Pre-install rackunit-lib (not included in racket-minimal) before
   # the Herbie Makefile runs `raco pkg install ./egg-herbie`, which
   # would otherwise prompt interactively and fail on EOF.
+  #
+  # Only install it when it isn't already available: the full nixpkgs `racket`
+  # ships rackunit-lib at *installation* scope, and `raco pkg install` at the
+  # default *user* scope then aborts with "package is currently installed in a
+  # wider scope" rather than skipping. Guarding on whether `rackunit` already
+  # loads makes this work for both full racket and racket-minimal.
   ExternalProject_Add_Step(herbie install_racket_deps
     COMMAND ${CMAKE_COMMAND} -E env
               "PLTADDONDIR=${HERBIE_RACKET_PREFIX}"
               "PATH=${_RACKET_BIN_DIR}:$ENV{PATH}"
-              raco pkg install --auto --skip-installed rackunit-lib
+              sh -c "racket -e '(require rackunit)' >/dev/null 2>&1 || raco pkg install --auto --skip-installed rackunit-lib"
     DEPENDEES patch
     DEPENDERS build
     LOG TRUE

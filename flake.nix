@@ -123,6 +123,54 @@
             fi
           '';
 
+          # One-command, reproducible Herbie-MLIR evaluation. Configures and
+          # builds an eval build dir with Herbie compiled from source (so the
+          # build-local PLTADDONDIR the Snakefile points at is populated, and
+          # `racket -l herbie report` resolves), then runs the Snakemake
+          # pipeline. Run inside `nix develop` (or via `nix run .#herbie-eval`),
+          # which supplies racket, rust, the Python env (snakemake + the
+          # herbie_mlir CLIs) and the MLIR/CIRCT/rival paths. Knobs (env vars):
+          # BUILD_DIR (default build-eval), HERBIE_GIT_TAG, CORES (default 1),
+          # HERBIE_EVAL_BUILD_ONLY=1 (configure + build, skip the pipeline).
+          # Extra arguments are forwarded to snakemake (e.g. `-n`, a target).
+          herbie-eval = pkgs.writeShellScriptBin "herbie-eval" ''
+            set -euo pipefail
+            builddir="''${BUILD_DIR:-build-eval}"
+            herbie_tag="''${HERBIE_GIT_TAG:-5500c9684c044bdaca03aee415605f9ac2f05687}"
+            cores="''${CORES:-1}"
+
+            repo_root="$(git rev-parse --show-toplevel)"
+            cd "$repo_root"
+
+            echo "herbie-eval: configuring + building '$builddir' (Herbie @ $herbie_tag from source) ..." >&2
+            # tamagoyaki-configure injects the MLIR/CIRCT/rival paths + lit from
+            # the dev-shell env; -DCMAKE_BUILD_TYPE=Release wins over its default.
+            tamagoyaki-configure "$builddir" \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DBUILD_HERBIE_MLIR=ON \
+              -DBUILD_ROVER_MLIR=OFF \
+              -DHERBIE_MLIR_BUILD_HERBIE=ON \
+              -DHERBIE_GIT_TAG="$herbie_tag"
+            cmake --build "$builddir"
+
+            abs_build="$(cd "$builddir" && pwd)"
+            if [ -n "''${HERBIE_EVAL_BUILD_ONLY:-}" ]; then
+              echo "herbie-eval: build complete ($abs_build); skipping pipeline (HERBIE_EVAL_BUILD_ONLY set)." >&2
+              exit 0
+            fi
+
+            echo "herbie-eval: running Snakemake pipeline (build_dir=$abs_build, cores=$cores) ..." >&2
+            cd "$repo_root/herbie_mlir/eval"
+            exec snakemake -j"$cores" --config build_dir="$abs_build" "$@"
+          '';
+
+          # `nix run .#herbie-eval` re-enters the default dev shell (so racket,
+          # rust, the Python env and the MLIR/rival env are present) and runs the
+          # eval. Arguments pass through to snakemake.
+          herbie-eval-app = pkgs.writeShellScript "herbie-eval-app" ''
+            exec nix develop --command herbie-eval "$@"
+          '';
+
           # Prebuilt rival3-ffi static C-API library, so `nix build` is offline.
           rival-ffi = rustPlatform.buildRustPackage {
             pname = "rival3-ffi";
@@ -413,6 +461,7 @@
                     [
                       rustToolchain
                       herbie-setup
+                      herbie-eval
                       # The full Python toolchain from uv.lock (xdsl, snakemake,
                       # lit, pre-commit, cmake-format, plotting + docs deps).
                       pythonEnv
@@ -452,6 +501,7 @@
                     echo "  build:     ninja -C build check-all"
                     ${lib.optionalString (!ci) ''
                       echo "  herbie:    herbie-setup  (once; then racket -l herbie -- web --quiet)"
+                      echo "  eval:      herbie-eval   (build + run the Herbie-MLIR evaluation)"
                     ''}
                   '';
                 }
@@ -493,13 +543,19 @@
             llvm-mlir-debug = debug.llvm-mlir;
             circt = release.circt;
             circt-debug = debug.circt;
-            inherit rival-ffi pythonEnv;
+            inherit rival-ffi pythonEnv herbie-eval;
           };
           devShells = {
             default = release.shell;
             debug = debug.shell;
             ci = release.ciShell;
             docs = release.docsShell;
+          };
+          apps = {
+            herbie-eval = {
+              type = "app";
+              program = "${herbie-eval-app}";
+            };
           };
         };
 
@@ -508,5 +564,6 @@
     {
       packages = builtins.mapAttrs (_: v: v.packages) everything;
       devShells = builtins.mapAttrs (_: v: v.devShells) everything;
+      apps = builtins.mapAttrs (_: v: v.apps) everything;
     };
 }

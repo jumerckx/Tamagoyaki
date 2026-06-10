@@ -93,6 +93,32 @@ Build and run the test suite:
 ninja -C build check-tamagoyaki   # or `check-all`
 ```
 
+## Herbie-MLIR Evaluation
+
+The full Herbie-MLIR evaluation (Snakemake pipeline in
+[`herbie_mlir/eval/Snakefile`](herbie_mlir/eval/Snakefile)) is wrapped by a
+single reproducible command. It configures and builds an evaluation tree with
+Herbie compiled from a pinned source revision — so `racket -l herbie report`
+runs against a known Herbie — and then runs the pipeline (fpcore → MLIR →
+equality saturation → fpcore → Herbie report → plots):
+
+```shell
+nix run .#herbie-eval         # from a checkout; builds + runs end-to-end
+```
+
+or, from inside the dev shell:
+
+```shell
+nix develop
+herbie-eval                   # same thing; extra args pass through to snakemake
+herbie-eval -n                # dry-run the pipeline
+```
+
+Knobs are environment variables: `BUILD_DIR` (default `build-eval`),
+`HERBIE_GIT_TAG`, `CORES` (default `1`), and `HERBIE_EVAL_BUILD_ONLY=1` to stop
+after the build. The `make eval` / `make eval-build` targets wrap the same
+command. Outputs (plots, `evaluation.csv`) land in `herbie_mlir/eval/out/`.
+
 ## About
 
 This project's build configuration is based on [Max Levental](https://makslevental.github.io/about/)'s [mmlir](https://github.com/makslevental/mmlir) example repository.
