@@ -2,17 +2,20 @@
 
 module @ir {
   func.func @ShiftedFma(%a : i32, %b : i32, %s : i5, %c : i64) -> i65 {
-    %false = hw.constant false
-    %c0_i60 = hw.constant 0 : i60
-    %c0_i33 = hw.constant 0 : i33
-    %0 = comb.concat %c0_i33, %a : i33, i32
-    %1 = comb.concat %c0_i33, %b : i33, i32
-    %2 = comb.mul %0, %1 {sv.namehint = "d"} : i65
-    %3 = comb.concat %c0_i60, %s : i60, i5
-    %4 = comb.shl %2, %3 {sv.namehint = "e"} : i65
-    %5 = comb.concat %false, %c : i1, i64
-    %6 = comb.add %4, %5 : i65
-    func.return %6 : i65
+    %g = equivalence.graph -> (i65) {
+      %false = hw.constant false
+      %c0_i60 = hw.constant 0 : i60
+      %c0_i33 = hw.constant 0 : i33
+      %0 = comb.concat %c0_i33, %a : i33, i32
+      %1 = comb.concat %c0_i33, %b : i33, i32
+      %2 = comb.mul %0, %1 {sv.namehint = "d"} : i65
+      %3 = comb.concat %c0_i60, %s : i60, i5
+      %4 = comb.shl %2, %3 {sv.namehint = "e"} : i65
+      %5 = comb.concat %false, %c : i1, i64
+      %6 = comb.add %4, %5 : i65
+      equivalence.yield %6 : i65
+    }
+    func.return %g : i65
   }
 }
 

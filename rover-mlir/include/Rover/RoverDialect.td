@@ -33,6 +33,10 @@ def RoverSaturatePass : Pass<"rover-saturate", "::mlir::ModuleOp"> {
   let description = [{
     This pass runs the first half of Rover optimization pipeline on a function:
 
+    The IR is expected to already be wrapped in `equivalence.graph`
+    operations. Run `equivalence-insert-graph` (for `func.func`) or
+    `rover-insert-graph` (for `hw.module`) beforehand.
+
     If a "patterns" module exists in the parent module, it
     will be used for equality saturation.
   }];

@@ -203,14 +203,6 @@ public:
         return;
     }
 
-    irModule.walk([&](mlir::func::FuncOp funcOp) {
-      if (mlir::failed(mlir::equivalence::insertGraphInFunction(
-              funcOp, /*insertSingleElementEqs=*/false))) {
-        funcOp.emitError() << "Failed to insert equivalence graph";
-        return signalPassFailure();
-      }
-    });
-
     // Run saturation
     mlir::ematch::convertEmatchOpsToApplyRewrites(patternModule);
 
