@@ -1,7 +1,7 @@
 // RUN: rover-mlir-opt --rover-saturate="patterns-file=%S/../rewrites_pdl_interp.mlir max-iters=4" %s --rover-extract=delay --remove-dead-values | FileCheck %s
 
 module @ir {
-  func.func @AdpcmDecoder(%step : i32, %delta : i32) -> i32 {
+  hw.module @AdpcmDecoder(in %step : i32, in %delta : i32, out result : i32) {
     %g = equivalence.graph -> (i32) {
       %c0_i3 = hw.constant 0 : i3
       %c0_i2 = hw.constant 0 : i2
@@ -27,11 +27,11 @@ module @ir {
       %17 = comb.mux %5, %16, %15 {sv.namehint = "out3"} : i32
       equivalence.yield %17 : i32
     }
-    func.return %g : i32
+    hw.output %g : i32
   }
 }
 
-// CHECK-LABEL: func.func @AdpcmDecoder
+// CHECK-LABEL: hw.module @AdpcmDecoder
 // CHECK-NOT: comb.mul
 // CHECK: comb.add
-// CHECK: return %{{.*}} : i32
+// CHECK: hw.output %{{.*}} : i32

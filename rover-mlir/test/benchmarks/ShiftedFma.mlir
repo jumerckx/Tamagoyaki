@@ -1,7 +1,7 @@
 // RUN: rover-mlir-opt --rover-saturate="patterns-file=%S/../rewrites_pdl_interp.mlir max-iters=4" %s --rover-extract=delay --remove-dead-values | FileCheck %s
 
 module @ir {
-  func.func @ShiftedFma(%a : i32, %b : i32, %s : i5, %c : i64) -> i65 {
+  hw.module @ShiftedFma(in %a : i32, in %b : i32, in %s : i5, in %c : i64, out result : i65) {
     %g = equivalence.graph -> (i65) {
       %false = hw.constant false
       %c0_i60 = hw.constant 0 : i60
@@ -15,13 +15,13 @@ module @ir {
       %6 = comb.add %4, %5 : i65
       equivalence.yield %6 : i65
     }
-    func.return %g : i65
+    hw.output %g : i65
   }
 }
 
-// CHECK-LABEL: func.func @ShiftedFma
+// CHECK-LABEL: hw.module @ShiftedFma
 // CHECK-NOT: comb.mul
 // CHECK-DAG: datapath.partial_product
 // CHECK-DAG: datapath.compress
 // CHECK: comb.add
-// CHECK: return %{{.*}} : i65
+// CHECK: hw.output %{{.*}} : i65

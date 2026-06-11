@@ -1,7 +1,7 @@
 // RUN: rover-mlir-opt --rover-saturate="patterns-file=%S/../rewrites_pdl_interp.mlir max-iters=4" %s --rover-extract=delay --remove-dead-values | FileCheck %s
 
 module @ir {
-  func.func @MulSel(%a : i32, %b : i32, %c : i32, %s : i1) -> i64 {
+  hw.module @MulSel(in %a : i32, in %b : i32, in %c : i32, in %s : i1, out result : i64) {
     %g = equivalence.graph -> (i64) {
       %c0_i32 = hw.constant 0 : i32
       %0 = comb.concat %c0_i32, %a : i32, i32
@@ -12,13 +12,13 @@ module @ir {
       %5 = comb.mux %s, %2, %4 : i64
       equivalence.yield %5 : i64
     }
-    func.return %g : i64
+    hw.output %g : i64
   }
 }
 
-// CHECK-LABEL: func.func @MulSel
+// CHECK-LABEL: hw.module @MulSel
 // CHECK-NOT: comb.mul
 // CHECK-DAG: datapath.partial_product
 // CHECK-DAG: datapath.compress
 // CHECK: comb.add
-// CHECK: return %{{.*}} : i64
+// CHECK: hw.output %{{.*}} : i64
