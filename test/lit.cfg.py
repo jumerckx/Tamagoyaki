@@ -54,6 +54,11 @@ tools = ["tamagoyaki-opt"]
 
 llvm_config.add_tool_substitutions(tools, tool_dirs)
 
+# Expose whether tamagoyaki-opt was built with the test-only passes (test/lib/).
+# Tests that rely on a `test-*` pass should guard with: REQUIRES: tamagoyaki-tests
+if getattr(config, "tamagoyaki_include_tests", False):
+    config.available_features.add("tamagoyaki-tests")
+
 llvm_config.with_environment(
     "PYTHONPATH",
     [

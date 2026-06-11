@@ -1,4 +1,10 @@
+# Test-only pass library, linked into tamagoyaki-opt (see src/CMakeLists.txt).
+if(TAMAGOYAKI_INCLUDE_TESTS)
+  add_subdirectory(lib)
+endif()
+
 llvm_canonicalize_cmake_booleans(MLIR_ENABLE_BINDINGS_PYTHON)
+llvm_canonicalize_cmake_booleans(TAMAGOYAKI_INCLUDE_TESTS)
 
 # this configures the adjacent lit.site.cfg.py.in
 set(TAMAGOYAKI_BINARY_DIR ${PROJECT_BINARY_DIR})
