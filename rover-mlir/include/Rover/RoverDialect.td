@@ -13,6 +13,21 @@ include "mlir/Pass/PassBase.td"
 // Rover Passes
 //===----------------------------------------------------------------------===//
 
+def RoverInsertGraphPass : Pass<"rover-insert-graph", "::mlir::ModuleOp"> {
+  let summary = "Wrap each hw.module body in an equivalence.graph operation.";
+  let description = [{
+    This pass walks every `hw.module` in the module and replaces its body with
+    an `equivalence.graph` operation. It mirrors `equivalence-insert-graph`,
+    reusing the same `insertGraphInRegion` utility, but operates on `hw.module`
+    rather than `func.func`.
+  }];
+  let dependentDialects = [
+    "::mlir::equivalence::EquivalenceDialect",
+    "::circt::hw::HWDialect",
+    "::circt::comb::CombDialect"
+  ];
+}
+
 def RoverSaturatePass : Pass<"rover-saturate", "::mlir::ModuleOp"> {
   let summary = "Saturate a Rover e-graph on a function.";
   let description = [{

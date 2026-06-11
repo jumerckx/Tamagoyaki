@@ -39,6 +39,7 @@
 
 namespace rover {
 
+#define GEN_PASS_DEF_ROVERINSERTGRAPHPASS
 #define GEN_PASS_DEF_ROVERSATURATEPASS
 #define GEN_PASS_DEF_ROVEREXTRACTPASS
 #include "RoverPasses.h.inc"
@@ -124,6 +125,51 @@ static Operation *rewriterBuildCompress(PatternRewriter &rewriter,
 
   return compressOp.getOperation();
 }
+/// Wrap the body of an hw.module in an equivalence.graph operation, mirroring
+/// insertGraphInFunction but for hw.module. Reuses the shared
+/// insertGraphInRegion utility; the hw.output terminator's operands become the
+/// graph outputs, and a fresh hw.output consuming the graph's results is
+/// appended.
+static LogicalResult insertGraphInHWModule(hw::HWModuleOp moduleOp) {
+  Region &body = moduleOp.getBody();
+
+  if (!body.hasOneBlock()) {
+    return failure();
+  }
+
+  if (!isa<hw::OutputOp>(body.front().getTerminator())) {
+    return moduleOp.emitOpError("hw.module must have an output operation");
+  }
+
+  GraphOp graphOp = insertGraphInRegion(body, /*insertSingleElementEqs=*/false);
+  if (!graphOp) {
+    return failure();
+  }
+
+  OpBuilder builder(moduleOp->getContext());
+  builder.setInsertionPointToEnd(&body.front());
+  hw::OutputOp::create(builder, moduleOp.getLoc(), graphOp->getResults());
+
+  return success();
+}
+
+class RoverInsertGraphPass
+    : public impl::RoverInsertGraphPassBase<RoverInsertGraphPass> {
+public:
+  using impl::RoverInsertGraphPassBase<
+      RoverInsertGraphPass>::RoverInsertGraphPassBase;
+
+  void runOnOperation() final {
+    ModuleOp module = getOperation();
+
+    module.walk([&](hw::HWModuleOp moduleOp) {
+      if (failed(insertGraphInHWModule(moduleOp))) {
+        signalPassFailure();
+      }
+    });
+  }
+};
+
 class RoverSaturatePass
     : public impl::RoverSaturatePassBase<RoverSaturatePass> {
 public:
