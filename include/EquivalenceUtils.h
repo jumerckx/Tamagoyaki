@@ -14,6 +14,17 @@
 
 namespace mlir::equivalence {
 
+/// Wrap the body of a single-block region in a GraphOp. The region's
+/// terminator operands become the graph outputs; the terminator is replaced by
+/// a YieldOp inside the graph. A fresh entry block is created in `region` that
+/// takes over the original block arguments (the graph captures them
+/// implicitly) and contains the inserted GraphOp. The caller is responsible for
+/// appending a new terminator that consumes the GraphOp's results.
+/// If insertSingleElementEqs is true, all values are wrapped in ClassOps.
+/// Returns the created GraphOp, or nullptr if the region does not have exactly
+/// one block.
+GraphOp insertGraphInRegion(Region &region, bool insertSingleElementEqs);
+
 /// Transform a function by wrapping its body in a GraphOp.
 /// If insertSingleElementEqs is true, all values are wrapped in ClassOps.
 /// Returns success if the transformation was successful.

@@ -81,7 +81,8 @@ mlir::LogicalResult mlir::equivalence::ClassOp::verify() {
   // are transiently broken by other ops' canonicalizations (e.g. `c1 + 0 -> c1`
   // floats a class result into a class operand, and rerouting external uses can
   // collapse two operands to the same value) and are the responsibility of the
-  // `equivalence-restore-invariants` normalization pass, not of well-formedness.
+  // `equivalence-restore-invariants` normalization pass, not of
+  // well-formedness.
   if (getInputs().empty()) {
     return emitOpError("must have at least one operand");
   }
@@ -445,15 +446,14 @@ GraphSize computeGraphSize(GraphOp graphOp) {
   GraphSize size;
   graphOp.walk([&](Operation *op) {
     if (op == graphOp) {
-        return;
+      return;
     }
     if (dyn_cast<ClassOp>(op)) {
       size.classes += 1;
     } else {
       size.nodes += op->getNumResults();
       for (auto result : op->getResults()) {
-        if (!(result.hasOneUse() &&
-              dyn_cast<ClassOp>(*result.user_begin()))) {
+        if (!(result.hasOneUse() && dyn_cast<ClassOp>(*result.user_begin()))) {
           size.classes += 1;
         }
       }
@@ -639,47 +639,47 @@ void selectConstants(GraphOp graphOp) {
   });
 }
 
-LogicalResult insertGraphInFunction(func::FuncOp funcOp,
-                                    bool insertSingleElementEqs) {
-  TAMAGOYAKI_SCOPED_TIMER("insertGraphInFunction");
-  Region &funcBody = funcOp.getFunctionBody();
-
-  if (!funcBody.hasOneBlock()) {
-    return failure();
+GraphOp insertGraphInRegion(Region &region, bool insertSingleElementEqs) {
+  TAMAGOYAKI_SCOPED_TIMER("insertGraphInRegion");
+  if (!region.hasOneBlock()) {
+    return nullptr;
   }
 
-  Block &entryBlock = funcBody.front();
-  auto returnOp = dyn_cast<func::ReturnOp>(*entryBlock.getTerminator());
+  Block &entryBlock = region.front();
+  Operation *terminator = entryBlock.getTerminator();
 
-  if (!returnOp) {
-    return funcOp.emitOpError("function must have a return operation");
-  }
+  Location loc = region.getParentOp()->getLoc();
+  OpBuilder builder(region.getContext());
 
-  Location loc = funcOp.getLoc();
-  FunctionType funcType = funcOp.getFunctionType();
-  OpBuilder builder(funcOp->getContext());
-
-  auto graphOp = GraphOp::create(builder, loc, funcType.getResults(), {});
+  // The graph's outputs mirror the operands of the region's terminator.
+  auto graphOp =
+      GraphOp::create(builder, loc, terminator->getOperandTypes(), {});
 
   Region &graphBody = graphOp.getBody();
-  graphBody.takeBody(funcBody);
+  graphBody.takeBody(region);
 
-  builder.setInsertionPoint(returnOp);
-  YieldOp::create(builder, returnOp.getLoc(), returnOp.getOperands());
-  returnOp.erase();
+  // Replace the original terminator (now inside the graph) with a YieldOp.
+  builder.setInsertionPoint(terminator);
+  YieldOp::create(builder, terminator->getLoc(), terminator->getOperands());
+  terminator->erase();
 
   if (insertSingleElementEqs) {
     wrapValuesInClassOps(graphBody, builder);
   }
 
-  Block *newEntryBlock =
-      builder.createBlock(&funcBody, funcBody.end(), funcType.getInputs(),
-                          SmallVector<Location>(funcType.getNumInputs(), loc));
-
-  // Remap the inner block arguments (which were the original function
-  // arguments) to the new outer function arguments, as GraphOp captures them
-  // implicitly.
+  // Recreate the region's entry block, taking over the original block
+  // arguments, as GraphOp captures them implicitly.
   Block &innerBlock = graphBody.front();
+  SmallVector<Type> argTypes(innerBlock.getArgumentTypes());
+  SmallVector<Location> argLocs;
+  argLocs.reserve(innerBlock.getNumArguments());
+  for (BlockArgument arg : innerBlock.getArguments()) {
+    argLocs.push_back(arg.getLoc());
+  }
+
+  Block *newEntryBlock =
+      builder.createBlock(&region, region.end(), argTypes, argLocs);
+
   unsigned numArgs = innerBlock.getNumArguments();
   for (unsigned i = 0; i < numArgs; ++i) {
     innerBlock.getArgument(i).replaceAllUsesWith(newEntryBlock->getArgument(i));
@@ -689,7 +689,30 @@ LogicalResult insertGraphInFunction(func::FuncOp funcOp,
   builder.setInsertionPointToStart(newEntryBlock);
   builder.insert(graphOp);
 
-  func::ReturnOp::create(builder, loc, graphOp->getResults());
+  return graphOp;
+}
+
+LogicalResult insertGraphInFunction(func::FuncOp funcOp,
+                                    bool insertSingleElementEqs) {
+  TAMAGOYAKI_SCOPED_TIMER("insertGraphInFunction");
+  Region &funcBody = funcOp.getFunctionBody();
+
+  if (!funcBody.hasOneBlock()) {
+    return failure();
+  }
+
+  if (!isa<func::ReturnOp>(funcBody.front().getTerminator())) {
+    return funcOp.emitOpError("function must have a return operation");
+  }
+
+  GraphOp graphOp = insertGraphInRegion(funcBody, insertSingleElementEqs);
+  if (!graphOp) {
+    return failure();
+  }
+
+  OpBuilder builder(funcOp->getContext());
+  builder.setInsertionPointToEnd(&funcBody.front());
+  func::ReturnOp::create(builder, funcOp.getLoc(), graphOp->getResults());
 
   return success();
 }
