@@ -12,7 +12,7 @@ add_dialect_tablegen(
   NAME Equivalence
   NAMESPACE equivalence
   TD_FILE EquivalenceDialect.td
-  COMPONENTS Ops Types Attrs Dialect Passes
+  COMPONENTS Ops Attrs Dialect Passes
 )
 
 # ============================================================================

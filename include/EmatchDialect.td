@@ -21,11 +21,11 @@ include "mlir/Dialect/PDL/IR/PDLTypes.td"
 
 def Ematch_Dialect : Dialect {
     let name = "ematch";
-    let summary = "An ematch out-of-tree MLIR dialect.";
+    let summary = "A dialect for e-matching and equality saturation.";
     let description = [{
-        This dialect is an example of an out-of-tree MLIR dialect designed to
-        illustrate the basic setup required to develop MLIR-based tools without
-        working inside of the LLVM source tree.
+        The ematch dialect provides operations used to express e-matching and
+        equality saturation over the e-graphs built with the `equivalence`
+        dialect.
     }];
     let cppNamespace = "::mlir::ematch";
 
@@ -42,32 +42,6 @@ class Ematch_Op<string mnemonic, list<Trait> traits = []> :
 //===----------------------------------------------------------------------===//
 // Ematch Operations
 //===----------------------------------------------------------------------===//
-
-def Ematch_FooOp : Ematch_Op<"foo", [Pure, SameOperandsAndResultType]> {
-    let summary = "Illustrates how to define an operation.";
-    let description = [{
-        The `ematch.foo` operation illustrates how to define a new
-        operation in a dialect. It uses an operation trait to declare that it
-        has no side effects.
-
-        This operation takes an integer argument and returns an integer.
-
-        Example:
-
-        ```mlir
-        %0 = arith.constant 2 : i32
-        // Apply the foo operation to %0
-        %1 = ematch.foo %0 : i32
-        ```
-    }];
-
-    let arguments = (ins I32:$input);
-    let results = (outs I32:$res);
-
-    let assemblyFormat = [{
-        $input attr-dict `:` type($input)
-    }];
-}
 
 def Ematch_GetClassValsOp : Ematch_Op<"get_class_vals"> {
     let summary = "Get all values in the equivalence class of a value.";
@@ -197,7 +171,6 @@ def EmatchSaturatePass : Pass<"ematch-saturate", "::mlir::ModuleOp"> {
     let summary = "Run equality saturation on the program with the provided patterns.";
     let description = [{
         This pass applies pattern rewriting to operations in the ematch dialect.
-        It serves as an example of implementing a transformation pass.
     }];
     let dependentDialects = [
         "::mlir::ematch::EmatchDialect",

@@ -33,10 +33,12 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Casting.h"
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <llvm/ADT/SmallVector.h>
+#include <llvm/Support/raw_ostream.h>
 #include <mlir/IR/OpDefinition.h>
 #include <string>
 #include <utility>
@@ -56,7 +58,6 @@ void mlir::equivalence::EquivalenceDialect::initialize() {
 #include "EquivalenceOps.cpp.inc"
 
       >();
-  registerTypes();
   registerAttributes();
 }
 
@@ -223,7 +224,6 @@ mlir::LogicalResult mlir::equivalence::GraphOp::verify() {
 
 namespace mlir::equivalence {
 #define GEN_PASS_DEF_EQUIVALENCEINSERTGRAPH
-#define GEN_PASS_DEF_EQUIVALENCESWITCHBARFOO
 #define GEN_PASS_DEF_EQUIVALENCESELECTGREEDY
 #define GEN_PASS_DEF_EQUIVALENCESELECTCONSTANTS
 #define GEN_PASS_DEF_EQUIVALENCEEXTRACT
@@ -294,44 +294,6 @@ public:
         signalPassFailure();
       }
     });
-  }
-};
-
-class EquivalenceSwitchBarFooRewriter : public OpRewritePattern<func::FuncOp> {
-public:
-  using OpRewritePattern<func::FuncOp>::OpRewritePattern;
-  LogicalResult matchAndRewrite(func::FuncOp f_op,
-                                PatternRewriter &rewriter) const final {
-    for (Operation &op : f_op.getOps()) {
-      if (isSpeculatable(&op)) {
-        op.setAttr("speculatable", rewriter.getAttr<UnitAttr>());
-      }
-      if (isMemoryEffectFree(&op)) {
-        op.setAttr("memoryeffectfree", rewriter.getAttr<UnitAttr>());
-      }
-    }
-    if (f_op.getSymName() == "bar") {
-      rewriter.modifyOpInPlace(f_op, [&f_op]() { f_op.setSymName("foo"); });
-      return success();
-    }
-    return failure();
-  }
-};
-
-class EquivalenceSwitchBarFoo
-    : public impl::EquivalenceSwitchBarFooBase<EquivalenceSwitchBarFoo> {
-public:
-  using impl::EquivalenceSwitchBarFooBase<
-      EquivalenceSwitchBarFoo>::EquivalenceSwitchBarFooBase;
-  void runOnOperation() final {
-    RewritePatternSet patterns(&getContext());
-    patterns.add<EquivalenceSwitchBarFooRewriter>(&getContext());
-    FrozenRewritePatternSet patternSet(std::move(patterns));
-    GreedyRewriteConfig config = GreedyRewriteConfig();
-    config.enableConstantCSE(false);
-    config.enableFolding(false);
-    if (failed(applyPatternsGreedily(getOperation(), patternSet, config)))
-      signalPassFailure();
   }
 };
 
@@ -415,22 +377,11 @@ public:
 } // namespace mlir::equivalence
 
 //===----------------------------------------------------------------------===//
-// Equivalence types
+// Equivalence attributes
 //===----------------------------------------------------------------------===//
-
-#define GET_TYPEDEF_CLASSES
-#include "EquivalenceTypes.cpp.inc"
 
 #define GET_ATTRDEF_CLASSES
 #include "EquivalenceAttrs.cpp.inc"
-
-void mlir::equivalence::EquivalenceDialect::registerTypes() {
-  addTypes<
-#define GET_TYPEDEF_LIST
-#include "EquivalenceTypes.cpp.inc"
-
-      >();
-}
 
 void mlir::equivalence::EquivalenceDialect::registerAttributes() {
   addAttributes<

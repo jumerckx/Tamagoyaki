@@ -37,9 +37,6 @@ namespace mlir::equivalence {
 #include "EquivalencePasses.h.inc"
 } // namespace mlir::equivalence
 
-#define GET_TYPEDEF_CLASSES
-#include "EquivalenceTypes.h.inc"
-
 #define GET_ATTRDEF_CLASSES
 #include "EquivalenceAttrs.h.inc"
 

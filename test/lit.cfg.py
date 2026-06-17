@@ -53,12 +53,3 @@ tool_dirs = [config.tamagoyaki_tools_dir, config.llvm_tools_dir]
 tools = ["tamagoyaki-opt"]
 
 llvm_config.add_tool_substitutions(tools, tool_dirs)
-
-llvm_config.with_environment(
-    "PYTHONPATH",
-    [
-        os.path.join(config.tamagoyaki_obj_root, "python"),
-        os.path.join(config.tamagoyaki_src_root, "python"),
-    ],
-    append_path=True,
-)

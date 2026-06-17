@@ -24,18 +24,16 @@ include "mlir/IR/RegionKindInterface.td"
 
 def Equivalence_Dialect : Dialect {
     let name = "equivalence";
-    let summary = "An equivalence out-of-tree MLIR dialect.";
+    let summary = "A dialect for representing e-graphs as MLIR operations.";
     let description = [{
-        This dialect is an example of an out-of-tree MLIR dialect designed to
-        illustrate the basic setup required to develop MLIR-based tools without
-        working inside of the LLVM source tree.
+        The equivalence dialect represents e-graphs: `equivalence.graph` holds an
+        unordered region of operations, and `equivalence.class` groups values
+        that are known to be equivalent.
     }];
     let cppNamespace = "::mlir::equivalence";
 
-    let useDefaultTypePrinterParser = 1;
     let useDefaultAttributePrinterParser = 1;
     let extraClassDeclaration = [{
-        void registerTypes();
         void registerAttributes();
     }];
 }
@@ -50,32 +48,6 @@ class Equivalence_Op<string mnemonic, list<Trait> traits = []> :
 //===----------------------------------------------------------------------===//
 // Equivalence Operations
 //===----------------------------------------------------------------------===//
-
-def Equivalence_FooOp : Equivalence_Op<"foo", [Pure, SameOperandsAndResultType]> {
-    let summary = "Illustrates how to define an operation.";
-    let description = [{
-        The `equivalence.foo` operation illustrates how to define a new
-        operation in a dialect. It uses an operation trait to declare that it
-        has no side effects.
-
-        This operation takes an integer argument and returns an integer.
-
-        Example:
-
-        ```mlir
-        %0 = arith.constant 2 : i32
-        // Apply the foo operation to %0
-        %1 = equivalence.foo %0 : i32
-        ```
-    }];
-
-    let arguments = (ins I32:$input);
-    let results = (outs I32:$res);
-
-    let assemblyFormat = [{
-        $input attr-dict `:` type($input)
-    }];
-}
 
 // definition of the YieldOp (equivalence.yield)
 def Equivalence_YieldOp : Equivalence_Op<"yield", [
@@ -178,22 +150,6 @@ def EquivalenceInsertGraph : Pass<"equivalence-insert-graph", "::mlir::ModuleOp"
 }
   
 
-def EquivalenceSwitchBarFoo: Pass<"equivalence-switch-bar-foo", "::mlir::ModuleOp"> {
-  let summary = "Switches the name of a FuncOp named `bar` to `foo` and folds.";
-  let description = [{
-    Switches the name of a FuncOp named `bar` to `foo` and folds.
-    ```
-    func.func @bar() {
-      return
-    }
-    // Gets transformed to:
-    func.func @foo() {
-      return
-    }
-    ```
-  }];
-}
-
 def EquivalenceExtract: Pass<"equivalence-extract", "::mlir::ModuleOp"> {
   let summary = "Extracts selected nodes from equivalence classes.";
   let description = [{
@@ -288,18 +244,6 @@ def Equivalence_CostAttr : Equivalence_Attr<"Cost", "cost"> {
   }];
   let parameters = (ins "int64_t":$value);
   let assemblyFormat = "`<` $value `>`";
-}
-
-class Equivalence_Type<string name, string typeMnemonic, list<Trait> traits = []>
-    : TypeDef<Equivalence_Dialect, name, traits> {
-  let mnemonic = typeMnemonic;
-}
-
-def Equivalence_CustomType : Equivalence_Type<"Custom", "custom"> {
-    let summary = "Equivalence custom type";
-    let description = "Custom type in equivalence dialect";
-    let parameters = (ins StringRefParameter<"the custom value">:$value);
-    let assemblyFormat = "`<` $value `>`";
 }
 
 #endif // EQUIVALENCE_DIALECT

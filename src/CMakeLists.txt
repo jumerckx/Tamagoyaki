@@ -61,17 +61,6 @@ add_mlir_dialect_library(MLIREmatch
 )
 
 # ============================================================================
-# C API Library
-# ============================================================================
-add_mlir_public_c_api_library(EquivalenceCAPI
-  EquivalenceCAPI.cpp
-  PARTIAL_SOURCES_INTENDED
-
-  LINK_LIBS PUBLIC
-  MLIREquivalence
-)
-
-# ============================================================================
 # tamagoyaki-opt Executable
 # ============================================================================
 get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
@@ -102,7 +91,6 @@ install(TARGETS
   MLIREquivalence
   MLIREmatch
   TamagoyakiTiming
-  EquivalenceCAPI
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}

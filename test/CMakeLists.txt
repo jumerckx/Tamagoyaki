@@ -1,5 +1,3 @@
-llvm_canonicalize_cmake_booleans(MLIR_ENABLE_BINDINGS_PYTHON)
-
 # this configures the adjacent lit.site.cfg.py.in
 set(TAMAGOYAKI_BINARY_DIR ${PROJECT_BINARY_DIR})
 set(TAMAGOYAKI_SOURCE_DIR ${PROJECT_SOURCE_DIR})
