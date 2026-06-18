@@ -51,8 +51,10 @@ class Equivalence_Op<string mnemonic, list<Trait> traits = []> :
 
 // definition of the YieldOp (equivalence.yield)
 def Equivalence_YieldOp : Equivalence_Op<"yield", [
+    HasParent<"GraphOp">,
+    Pure,
+    ReturnLike,
     Terminator, 
-    HasParent<"GraphOp">
 ]> {
     let summary = "Yield values from a graph region";
     let description = [{
@@ -77,6 +79,7 @@ def Equivalence_YieldOp : Equivalence_Op<"yield", [
 def Equivalence_GraphOp : Equivalence_Op<"graph", [
     SingleBlockImplicitTerminator<"YieldOp">,
     DeclareOpInterfaceMethods<RegionKindInterface>,
+    RecursivelySpeculatable,
  ]> {
     let summary = "A graph region operation";
     let description = [{
