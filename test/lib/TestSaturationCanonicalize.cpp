@@ -50,6 +50,8 @@
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
 
+#include "llvm/ADT/Twine.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/Support/raw_ostream.h"
 #include <llvm/ADT/STLExtras.h>
 #include <llvm/Support/CommandLine.h>
@@ -66,6 +68,8 @@
 
 using namespace mlir;
 using namespace mlir::equivalence;
+
+#define DEBUG_TYPE "test-saturation-canonicalize"
 
 namespace {
 
@@ -260,6 +264,20 @@ struct TestSaturationCanonicalizePass
     return ematch::createEmatchSaturatePass(opts);
   }
 
+  /// Debug-print the size (e-classes / e-nodes) of every GraphOp in `module`,
+  /// tagging the output with `when` (e.g. the round number and whether this is
+  /// before or after canonicalization). Uses computeGraphSize from
+  /// EquivalenceUtils so the measure matches the rest of the e-graph tooling.
+  void debugPrintGraphSize(ModuleOp module, const Twine &when) {
+    LLVM_DEBUG({
+      module.walk([&](GraphOp graph) {
+        GraphSize size = computeGraphSize(graph);
+        llvm::dbgs() << "Graph has " << size.classes << " e-classes and "
+                     << size.nodes << " e-nodes (" << when << ").\n";
+      });
+    });
+  }
+
   /// select-constants, extract, canonicalize -- the canonicalization half of
   /// one round. The GraphOp wrapper is kept (extract's default) so the next
   /// round can keep saturating. Applied in place to `module`.
@@ -286,10 +304,14 @@ struct TestSaturationCanonicalizePass
         module.emitError("saturation failed");
         return signalPassFailure();
       }
+      debugPrintGraphSize(module, "round " + Twine(round) +
+                                      ", before canonicalization");
       if (failed(simplify(module))) {
         module.emitError("canonicalization failed");
         return signalPassFailure();
       }
+      debugPrintGraphSize(module, "round " + Twine(round) +
+                                      ", after canonicalization");
     }
   }
 };

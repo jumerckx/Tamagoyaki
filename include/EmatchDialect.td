@@ -269,9 +269,14 @@ def EquivalenceGraphContainsPass : Pass<"equivalence-graph-contains", "::mlir::M
         "::mlir::pdl_interp::PDLInterpDialect",
     ];
     let options = [
-        Option<"patternsFile", "patterns-file", "std::string", /*default=*/"\"\"",
-               "Path to an MLIR file containing the pdl_interp patterns module. "
-               "When set, the input module is treated as the IR module directly.">
+      Option<"patternsFile", "patterns-file", "std::string", /*default=*/"\"\"",
+              "Path to an MLIR file containing the pdl_interp patterns module. "
+              "When set, the input module is treated as the IR module directly.">,
+      Option<"rootedAtYield", "rooted-at-yield", "bool", "true",
+              "When true (default), only check whether each pattern is present "
+              "rooted at a value returned by an equivalence.yield. When false, "
+              "match anywhere in the e-graph and separately report whether any "
+              "match happens to be rooted at a yielded value.">
     ];
 }
 

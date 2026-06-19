@@ -744,13 +744,25 @@ struct EquivalenceGraphContainsPass
     mlir::detail::PDLByteCodeMutableState state;
     bytecode->initializeMutableState(state);
 
-    irModule.walk([&](Operation *op) {
-      if (isEquivalenceDialectOp(op))
-        return;
-      SmallVector<mlir::detail::PDLByteCode::MatchResult> opMatches;
-      bytecode->match(op, rewriter, opMatches, state);
-    });
-    state.cleanupAfterMatchAndRewrite();
+    // When `rootedAtYield` is set we only attempt matches whose root is an
+        // operation with a result in the e-class of a yielded value, rather than
+        // feeding every operation in the e-graph as a candidate matcher root.
+        auto isRootedAtYield = [&](Operation *op) {
+          for (Value res : op->getResults())
+            if (yieldClasses.count(getClassResult(rewriter, res)))
+              return true;
+          return false;
+        };
+    
+        irModule.walk([&](Operation *op) {
+          if (isEquivalenceDialectOp(op))
+            return;
+          if (rootedAtYield && !isRootedAtYield(op))
+            return;
+          SmallVector<mlir::detail::PDLByteCode::MatchResult> opMatches;
+          bytecode->match(op, rewriter, opMatches, state);
+        });
+        state.cleanupAfterMatchAndRewrite();
 
     llvm::outs() << "Pattern containment results:\n";
     for (auto &entry : results) {
