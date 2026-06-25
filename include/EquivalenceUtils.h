@@ -25,6 +25,11 @@ namespace mlir::equivalence {
 /// one block.
 GraphOp insertGraphInRegion(Region &region, bool insertSingleElementEqs);
 
+/// Recursively wrap the single-block regions of speculatable operations in
+/// `block`, and inside the graphs thereby created.
+/// If insertSingleElementEqs is true, all values are wrapped in ClassOps.
+void insertNestedGraphs(Block &block, bool insertSingleElementEqs);
+
 /// Transform a function by wrapping its body in a GraphOp.
 /// If insertSingleElementEqs is true, all values are wrapped in ClassOps.
 /// Returns success if the transformation was successful.

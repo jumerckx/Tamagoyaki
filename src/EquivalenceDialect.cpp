@@ -39,7 +39,9 @@
 #include <limits>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Support/raw_ostream.h>
+#include <mlir/IR/Attributes.h>
 #include <mlir/IR/OpDefinition.h>
+#include <mlir/IR/OperationSupport.h>
 #include <string>
 #include <utility>
 
@@ -594,14 +596,22 @@ void selectConstants(GraphOp graphOp) {
   });
 }
 
-GraphOp insertGraphInRegion(Region &region, bool insertSingleElementEqs) {
-  TAMAGOYAKI_SCOPED_TIMER("insertGraphInRegion");
+// Wrap the single-block body of `region` in a GraphOp, then give `region` a
+// fresh entry block containing the graph followed by a clone of the original
+// terminator (now consuming the graph's results). Returns the graph, or
+// nullptr if `region` is not single-block. Non-recursive.
+static GraphOp wrapRegionBodyInGraph(Region &region,
+                                     bool insertSingleElementEqs) {
   if (!region.hasOneBlock()) {
     return nullptr;
   }
 
-  Block &entryBlock = region.front();
-  Operation *terminator = entryBlock.getTerminator();
+  Operation *terminator = region.front().getTerminator();
+
+  // Snapshot everything about the terminator before it's replaced.
+  OperationName termName = terminator->getName();
+  Location termLoc = terminator->getLoc();
+  SmallVector<NamedAttribute> termAttrs(terminator->getAttrs());
 
   Location loc = region.getParentOp()->getLoc();
   OpBuilder builder(region.getContext());
@@ -609,7 +619,6 @@ GraphOp insertGraphInRegion(Region &region, bool insertSingleElementEqs) {
   // The graph's outputs mirror the operands of the region's terminator.
   auto graphOp =
       GraphOp::create(builder, loc, terminator->getOperandTypes(), {});
-
   Region &graphBody = graphOp.getBody();
   graphBody.takeBody(region);
 
@@ -618,12 +627,11 @@ GraphOp insertGraphInRegion(Region &region, bool insertSingleElementEqs) {
   YieldOp::create(builder, terminator->getLoc(), terminator->getOperands());
   terminator->erase();
 
-  if (insertSingleElementEqs) {
+  if (insertSingleElementEqs)
     wrapValuesInClassOps(graphBody, builder);
-  }
 
   // Recreate the region's entry block, taking over the original block
-  // arguments, as GraphOp captures them implicitly.
+  // arguments (GraphOp captures them implicitly).
   Block &innerBlock = graphBody.front();
   SmallVector<Type> argTypes(innerBlock.getArgumentTypes());
   SmallVector<Location> argLocs;
@@ -641,10 +649,36 @@ GraphOp insertGraphInRegion(Region &region, bool insertSingleElementEqs) {
   }
   innerBlock.eraseArguments(0, numArgs);
 
+  // Populate the new entry block: the graph, then the re-created terminator.
   builder.setInsertionPointToStart(newEntryBlock);
   builder.insert(graphOp);
+  builder.setInsertionPointToEnd(newEntryBlock);
+  OperationState state(termLoc, termName);
+  state.addOperands(graphOp->getResults());
+  state.addAttributes(termAttrs);
+  builder.create(state);
 
   return graphOp;
+}
+
+// Recursively wrap the single-block regions of speculatable operations in
+// `block`, and inside the graphs thereby created.
+void insertNestedGraphs(Block &block, bool insertSingleElementEqs) {
+  // Snapshot first: wrapping inserts a fresh entry block, and we don't want to
+  // revisit the graphs we create.
+  SmallVector<Operation *> ops;
+  for (Operation &op : block)
+    ops.push_back(&op);
+  for (Operation *op : ops) {
+    if (isa<GraphOp>(op))
+      continue;
+    if (!mlir::isSpeculatable(op))
+      continue;
+    for (Region &region : op->getRegions())
+      if (GraphOp graphOp =
+              wrapRegionBodyInGraph(region, insertSingleElementEqs))
+        insertNestedGraphs(graphOp.getBody().front(), insertSingleElementEqs);
+  }
 }
 
 LogicalResult insertGraphInFunction(func::FuncOp funcOp,
@@ -660,14 +694,7 @@ LogicalResult insertGraphInFunction(func::FuncOp funcOp,
     return funcOp.emitOpError("function must have a return operation");
   }
 
-  GraphOp graphOp = insertGraphInRegion(funcBody, insertSingleElementEqs);
-  if (!graphOp) {
-    return failure();
-  }
-
-  OpBuilder builder(funcOp->getContext());
-  builder.setInsertionPointToEnd(&funcBody.front());
-  func::ReturnOp::create(builder, funcOp.getLoc(), graphOp->getResults());
+  insertNestedGraphs(funcBody.getBlocks().front(), false);
 
   return success();
 }

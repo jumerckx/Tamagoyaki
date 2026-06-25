@@ -141,14 +141,7 @@ static LogicalResult insertGraphInHWModule(hw::HWModuleOp moduleOp) {
     return moduleOp.emitOpError("hw.module must have an output operation");
   }
 
-  GraphOp graphOp = insertGraphInRegion(body, /*insertSingleElementEqs=*/false);
-  if (!graphOp) {
-    return failure();
-  }
-
-  OpBuilder builder(moduleOp->getContext());
-  builder.setInsertionPointToEnd(&body.front());
-  hw::OutputOp::create(builder, moduleOp.getLoc(), graphOp->getResults());
+  insertNestedGraphs(body.getBlocks().front(), false);
 
   return success();
 }
