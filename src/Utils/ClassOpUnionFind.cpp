@@ -27,12 +27,28 @@
 #include "llvm/Support/ErrorHandling.h"
 #include <cassert>
 #include <cstddef>
+#include <mlir/IR/OpDefinition.h>
 #include <utility>
 
 #define DEBUG_TYPE "ematch"
 
 using namespace mlir;
 using namespace mlir::ematch;
+
+// Number of enclosing regions of `op` (its distance to the top-level region).
+// A smaller depth means a shallower / outer scope. When two congruent e-nodes
+// or two unioned classes live at different depths, the one with the smaller
+// depth must survive a merge: its result is visible to users in the deeper
+// scope, but not vice versa.
+static unsigned regionDepth(mlir::Operation *op) {
+  unsigned depth = 0;
+  for (mlir::Region *r = op->getParentRegion(); r;) {
+    ++depth;
+    mlir::Operation *parent = r->getParentOp();
+    r = parent ? parent->getParentRegion() : nullptr;
+  }
+  return depth;
+}
 
 SmallVector<mlir::Value>
 mlir::ematch::getClassVals(mlir::PatternRewriter &rewriter, mlir::Value val) {
@@ -178,16 +194,28 @@ void ClassOpUnionFind::classUnion(mlir::PatternRewriter &rewriter,
   if (leader == other)
     return;
 
-  unsigned rankLeader = unionRank.lookup(leader.getOperation());
-  unsigned rankOther = unionRank.lookup(other.getOperation());
+  unsigned depthLeader = regionDepth(leader.getOperation());
+  unsigned depthOther = regionDepth(other.getOperation());
 
-  if (rankLeader < rankOther)
-    std::swap(leader, other);
+  if (depthLeader != depthOther) {
+    // Different scope depths: the survivor must be the class in the outer
+    // (ancestor) scope, otherwise users in the outer scope would be rewritten
+    // to reference a value defined in the inner scope. This overrides the
+    // union-by-rank heuristic (which only affects performance).
+    if (depthOther < depthLeader)
+      std::swap(leader, other);
+  } else {
+    unsigned rankLeader = unionRank.lookup(leader.getOperation());
+    unsigned rankOther = unionRank.lookup(other.getOperation());
+
+    if (rankLeader < rankOther)
+      std::swap(leader, other);
+    if (rankLeader == rankOther)
+      unionRank[leader.getOperation()] = rankLeader + 1;
+  }
 
   // Lazy union: just point `other` at `leader` via the leader operand.
   other.getLeaderMutable().assign(leader.getResult());
-  if (rankLeader == rankOther)
-    unionRank[leader.getOperation()] = rankLeader + 1;
 
   // We push `other` such that at the start of `rebuild`,
   worklist.push_back(other);
@@ -359,12 +387,38 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
   return true;
 }
 
+// Find the region whose hash-cons scope a nested graph should be a child of:
+// the body of the nearest enclosing GraphOp. Returns nullptr (→ root scope) if
+// an IsolatedFromAbove boundary is crossed before any enclosing GraphOp is
+// found, because the graph then cannot reference values from further out and
+// must not dedup/union against them.
+static Region *parentGraphRegion(equivalence::GraphOp graph) {
+  Region *r = graph->getParentRegion();
+  while (r) {
+    Operation *parentOp = r->getParentOp();
+    if (!parentOp)
+      return nullptr;
+    if (auto pg = llvm::dyn_cast<equivalence::GraphOp>(parentOp))
+      return &pg.getBody();
+    if (parentOp->hasTrait<OpTrait::IsIsolatedFromAbove>())
+      return nullptr;
+    r = parentOp->getParentRegion();
+  }
+  return nullptr;
+}
+
 void ClassOpUnionFind::hashconsGraph(HashConsPatternRewriter &rewriter,
                                      equivalence::GraphOp graph) {
   TAMAGOYAKI_SCOPED_TIMER("hashconsGraph");
 
   Region *region = &graph.getBody();
-  rewriter.createRootScope(region);
+  // A nested graph shares the scope chain of its enclosing graph (so an inner
+  // op congruent to an outer one is found and the inner duplicate removed),
+  // unless an IsolatedFromAbove boundary separates them.
+  if (Region *parent = parentGraphRegion(graph))
+    rewriter.createChildScope(region, parent);
+  else
+    rewriter.createRootScope(region);
 
   SmallVector<std::pair<Operation *, Operation *>> toMerge;
   SmallPtrSet<Operation *, 8> scheduledForMerge;
@@ -419,8 +473,17 @@ void ClassOpUnionFind::repair(HashConsPatternRewriter &rewriter,
 
     if (op2) {
       assert(op2->getBlock());
-      if (scheduledForMerge.insert(op1).second)
-        toMerge.emplace_back(op1, op2);
+      // Keep the user in the outer (ancestor) scope and merge the deeper one
+      // into it, so a redirected use never references a value defined in a
+      // more deeply nested scope.
+      Operation *keep = op2, *other = op1;
+      if (regionDepth(other) < regionDepth(keep)) {
+        std::swap(keep, other);
+        // Future congruent users should merge into the now-outer survivor.
+        uniqueParents[op1] = keep;
+      }
+      if (scheduledForMerge.insert(other).second)
+        toMerge.emplace_back(other, keep);
     } else {
       uniqueParents[op1] = op1;
     }

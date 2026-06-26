@@ -43,6 +43,7 @@
 #include <chrono>
 #include <cstdint>
 #include <llvm/ADT/STLExtras.h>
+#include <mlir/IR/Visitors.h>
 #include <string>
 #include <utility>
 
@@ -212,7 +213,9 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
   if (listener)
     hashconsRewriter.setListener(listener);
 
-  irModule.walk([&](equivalence::GraphOp graph) {
+  // PreOrder so an outer graph's scope is created before its nested graphs;
+  // nested graphs are registered as child scopes of their enclosing graph.
+  irModule.walk<WalkOrder::PreOrder>([&](equivalence::GraphOp graph) {
     uf.hashconsGraph(hashconsRewriter, graph);
   });
 
