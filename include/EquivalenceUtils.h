@@ -14,21 +14,14 @@
 
 namespace mlir::equivalence {
 
-/// Wrap the body of a single-block region in a GraphOp. The region's
-/// terminator operands become the graph outputs; the terminator is replaced by
-/// a YieldOp inside the graph. A fresh entry block is created in `region` that
-/// takes over the original block arguments (the graph captures them
-/// implicitly) and contains the inserted GraphOp. The caller is responsible for
-/// appending a new terminator that consumes the GraphOp's results.
+/// Wrap `region`'s single-block body in a GraphOp, then recurse into the
+/// single-block regions of speculatable operations inside it, wrapping each in
+/// its own nested graph. The region's terminator operands become the graph
+/// outputs; the terminator is replaced by a YieldOp inside the graph and a
+/// clone of it (now consuming the graph's results) is appended after the graph.
+/// No-op if `region` is not single-block.
 /// If insertSingleElementEqs is true, all values are wrapped in ClassOps.
-/// Returns the created GraphOp, or nullptr if the region does not have exactly
-/// one block.
-GraphOp insertGraphInRegion(Region &region, bool insertSingleElementEqs);
-
-/// Recursively wrap the single-block regions of speculatable operations in
-/// `block`, and inside the graphs thereby created.
-/// If insertSingleElementEqs is true, all values are wrapped in ClassOps.
-void insertNestedGraphs(Block &block, bool insertSingleElementEqs);
+void insertNestedGraphs(Region &region, bool insertSingleElementEqs);
 
 /// Transform a function by wrapping its body in a GraphOp.
 /// If insertSingleElementEqs is true, all values are wrapped in ClassOps.

@@ -127,7 +127,7 @@ static Operation *rewriterBuildCompress(PatternRewriter &rewriter,
 }
 /// Wrap the body of an hw.module in an equivalence.graph operation, mirroring
 /// insertGraphInFunction but for hw.module. Reuses the shared
-/// insertGraphInRegion utility; the hw.output terminator's operands become the
+/// insertNestedGraphs utility; the hw.output terminator's operands become the
 /// graph outputs, and a fresh hw.output consuming the graph's results is
 /// appended.
 static LogicalResult insertGraphInHWModule(hw::HWModuleOp moduleOp) {
@@ -141,7 +141,7 @@ static LogicalResult insertGraphInHWModule(hw::HWModuleOp moduleOp) {
     return moduleOp.emitOpError("hw.module must have an output operation");
   }
 
-  insertNestedGraphs(body.getBlocks().front(), false);
+  insertNestedGraphs(body, /*insertSingleElementEqs=*/false);
 
   return success();
 }

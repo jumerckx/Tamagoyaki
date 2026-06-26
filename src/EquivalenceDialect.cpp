@@ -661,40 +661,49 @@ static GraphOp wrapRegionBodyInGraph(Region &region,
   return graphOp;
 }
 
-// Recursively wrap the single-block regions of speculatable operations in
-// `block`, and inside the graphs thereby created.
-void insertNestedGraphs(Block &block, bool insertSingleElementEqs) {
-  // Snapshot first: wrapping inserts a fresh entry block, and we don't want to
-  // revisit the graphs we create.
+// Recurse into the single-block regions of the speculatable operations in
+// `block`, wrapping each in its own nested graph.
+static void insertNestedGraphsInBlock(Block &block,
+                                      bool insertSingleElementEqs) {
+  // Snapshot first: wrapping inserts fresh entry blocks we don't want to
+  // revisit.
   SmallVector<Operation *> ops;
   for (Operation &op : block)
     ops.push_back(&op);
+
   for (Operation *op : ops) {
-    if (isa<GraphOp>(op))
-      continue;
     if (!mlir::isSpeculatable(op))
       continue;
-    for (Region &region : op->getRegions())
-      if (GraphOp graphOp =
-              wrapRegionBodyInGraph(region, insertSingleElementEqs))
-        insertNestedGraphs(graphOp.getBody().front(), insertSingleElementEqs);
+    for (Region &nested : op->getRegions())
+      insertNestedGraphs(nested, insertSingleElementEqs);
   }
+}
+
+void insertNestedGraphs(Region &region, bool insertSingleElementEqs) {
+  if (GraphOp graphOp = wrapRegionBodyInGraph(region, insertSingleElementEqs)) {
+    // Single-block region: now wrapped in a graph. Descend into its body.
+    insertNestedGraphsInBlock(graphOp.getBody().front(),
+                              insertSingleElementEqs);
+    return;
+  }
+
+  // Multi-block (or empty) region: it cannot be wrapped in a single graph, but
+  // its blocks may still hold wrappable nested regions.
+  for (Block &block : region)
+    insertNestedGraphsInBlock(block, insertSingleElementEqs);
 }
 
 LogicalResult insertGraphInFunction(func::FuncOp funcOp,
                                     bool insertSingleElementEqs) {
   TAMAGOYAKI_SCOPED_TIMER("insertGraphInFunction");
   Region &funcBody = funcOp.getFunctionBody();
+  if (funcBody.empty())
+    return success();
 
-  if (!funcBody.hasOneBlock()) {
-    return failure();
-  }
-
-  if (!isa<func::ReturnOp>(funcBody.front().getTerminator())) {
-    return funcOp.emitOpError("function must have a return operation");
-  }
-
-  insertNestedGraphs(funcBody.getBlocks().front(), false);
+  // A single-block body is wrapped in a graph; a multi-block (CFG) body cannot
+  // be, but insertNestedGraphs still descends into any wrappable nested
+  // regions. Either way this is not a failure.
+  insertNestedGraphs(funcBody, insertSingleElementEqs);
 
   return success();
 }
