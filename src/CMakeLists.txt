@@ -16,6 +16,7 @@ add_mlir_dialect_library(MLIREquivalence
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRInferTypeOpInterface
+  MLIRLoopLikeInterface
   MLIRFuncDialect
   MLIRRegisterAllDialects
   MLIRRegisterAllPasses

@@ -74,6 +74,39 @@ namespace mlir::equivalence {
 mlir::RegionKind GraphOp::getRegionKind(unsigned index) {
   return mlir::RegionKind::Graph;
 }
+
+//===----------------------------------------------------------------------===//
+// GraphOp LoopLikeOpInterface
+//===----------------------------------------------------------------------===//
+
+// A graph is not itself a loop, but it implements LoopLikeOpInterface so that
+// loop-invariant code motion can hoist operations out of the graph region.
+// The "loop body" inspected for invariant ops is the graph's own region, while
+// the notion of "outside the loop" (for both the invariance check and the
+// destination of hoisted ops) is delegated to the nearest enclosing loop. The
+// net effect of running LICM on a graph nested in a loop is that invariant ops
+// are lifted clear of that loop.
+
+// The enclosing loop whose looplike behaviour this graph forwards to, or null
+// if the graph is not nested in a loop.
+static LoopLikeOpInterface getEnclosingLoop(GraphOp op) {
+  return op->getParentOfType<LoopLikeOpInterface>();
+}
+
+bool GraphOp::isDefinedOutsideOfLoop(Value value) {
+  if (LoopLikeOpInterface loop = getEnclosingLoop(*this))
+    return loop.isDefinedOutsideOfLoop(value);
+  // With no enclosing loop there is nowhere to hoist to, so treat nothing as
+  // defined outside; this prevents LICM from moving anything.
+  return false;
+}
+
+SmallVector<Region *> GraphOp::getLoopRegions() { return {&getBody()}; }
+
+void GraphOp::moveOutOfLoop(Operation *op) {
+  if (LoopLikeOpInterface loop = getEnclosingLoop(*this))
+    loop.moveOutOfLoop(op);
+}
 } // namespace mlir::equivalence
 
 mlir::LogicalResult mlir::equivalence::ClassOp::verify() {
