@@ -53,9 +53,9 @@ using namespace mlir::ematch;
 namespace {
 using ScopeId = mlir::Region *;
 
-/// The nearest enclosing `equivalence.graph` body region of `op`, or null if
-/// `op` is not inside any graph.
-ScopeId enclosingGraphScope(Operation *op) {
+/// The scope of `op`: the nearest enclosing `equivalence.graph` body region, or
+/// null if `op` is not inside any graph.
+ScopeId scopeOf(Operation *op) {
   for (Region *r = op->getParentRegion(); r;) {
     Operation *parent = r->getParentOp();
     if (!parent)
@@ -66,8 +66,6 @@ ScopeId enclosingGraphScope(Operation *op) {
   }
   return nullptr;
 }
-
-ScopeId scopeOf(Operation *op) { return enclosingGraphScope(op); }
 ScopeId scopeOf(equivalence::ClassOp c) { return scopeOf(c.getOperation()); }
 
 /// The enclosing scope of scope `s` (the next graph body out), or null at the
@@ -75,7 +73,7 @@ ScopeId scopeOf(equivalence::ClassOp c) { return scopeOf(c.getOperation()); }
 ScopeId parentScope(ScopeId s) {
   if (!s)
     return nullptr;
-  return enclosingGraphScope(s->getParentOp());
+  return scopeOf(s->getParentOp());
 }
 
 /// Distance from the outermost graph (0 for a top-level graph body); a null
@@ -337,18 +335,18 @@ void ClassOpUnionFind::classUnion(mlir::PatternRewriter &rewriter,
   assert(encloses(scopeOf(leader), scopeOf(other)) &&
          "incomparable scopes must not occur");
 
-  // Seed both rows before merging so `mergeScopeRows` sees a `{leader}` row to
-  // collide against and a `{other}`-or-bigger row to fold in.
-  rowFor(leader);
+  // Seed `other`'s row before merging so `mergeScopeRows` has a `{other}`-or-
+  // bigger row to fold in (it seeds `leader`'s `{leader}` row itself).
   rowFor(other);
 
   // Inner -> outer (or same-scope): SSA-valid, never inward.
   other.getLeaderMutable().assign(leader.getResult());
 
-  if (dl == dor && unionRank.lookup(leader.getOperation()) ==
-                       unionRank.lookup(other.getOperation()))
-    unionRank[leader.getOperation()] =
-        unionRank.lookup(leader.getOperation()) + 1;
+  if (dl == dor) {
+    unsigned &rankLeader = unionRank[leader.getOperation()];
+    if (rankLeader == unionRank.lookup(other.getOperation()))
+      ++rankLeader;
+  }
 
   mergeScopeRows(leader, other);
   dirtyRoots.insert(leader);
@@ -436,7 +434,7 @@ void ClassOpUnionFind::mergeScopeRows(equivalence::ClassOp winRoot,
   SmallVector<equivalence::ClassOp> lose = std::move(loseIt->second);
   scopeReps.erase(loseRoot);
 
-  auto &win = scopeReps[winRoot];
+  auto &win = rowFor(winRoot); // seeds `{winRoot}` on first access.
   for (equivalence::ClassOp r : lose) {
     if (equivalence::ClassOp *s = findByScope(win, scopeOf(r)))
       sameScopeDups.push_back({r, *s}); // r must fuse into the existing rep.
@@ -614,20 +612,16 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
       }
     }
 
-    // ---- Phase B: reorient leaders outward, per dirty component ----
-    for (equivalence::ClassOp root : roots) {
-      auto it = scopeReps.find(root);
-      if (it != scopeReps.end())
-        reorientComponent(it->second);
-    }
-
-    // ---- Phase C: push users to the deepest visible rep, per component ----
+    // ---- Phase B/C, per dirty component (independent across components) ----
+    // B: reorient leaders outward. C: push users to the deepest visible rep.
     for (equivalence::ClassOp root : roots) {
       auto it = scopeReps.find(root);
       if (it == scopeReps.end())
         continue;
-      // Snapshot the rep list: retargetUsersToDeepest pushes to the worklist
-      // but does not mutate the row, yet repairs later in this loop might.
+      reorientComponent(it->second); // Phase B
+
+      // Phase C. Snapshot the rep list: retargetUsersToDeepest pushes to the
+      // worklist but does not mutate the row, yet repairs later might.
       SmallVector<equivalence::ClassOp> reps(it->second.begin(),
                                              it->second.end());
       for (equivalence::ClassOp rep : reps) {
