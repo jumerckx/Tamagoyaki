@@ -43,7 +43,10 @@ add_mlir_library(TamagoyakiTiming
 add_mlir_dialect_library(MLIREmatch
   EmatchDialect.cpp
   Utils/MutableScopedHashTable.cpp
-  Utils/ClassOpUnionFind.cpp
+  Utils/GraphScope.cpp
+  Utils/ClassOpUtils.cpp
+  Utils/ScopeRepIndex.cpp
+  Utils/CongruenceEngine.cpp
   Utils/HashConsPatternRewriter.cpp
   PARTIAL_SOURCES_INTENDED
 

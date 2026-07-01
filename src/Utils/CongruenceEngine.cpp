@@ -1,4 +1,4 @@
-//===- ClassOpUnionFind.cpp - Union-find data structure for ClassOp ---*- C++
+//===- CongruenceEngine.cpp - Scope-aware e-graph congruence engine -*- C++
 //-*-===//
 //
 // This file is licensed under the Apache License v2.0 with LLVM Exceptions.
@@ -7,13 +7,14 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "Utils/ClassOpUnionFind.h"
+#include "Utils/CongruenceEngine.h"
 #include "EquivalenceDialect.h"
 #include "TamagoyakiTiming.h"
+#include "Utils/ClassOpUtils.h"
+#include "Utils/GraphScope.h"
 #include "Utils/HashConsPatternRewriter.h"
-#include "mlir/IR/Builders.h"
+#include "Utils/ScopeRepIndex.h"
 #include "mlir/IR/PatternMatch.h"
-#include "mlir/IR/TypeRange.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Support/LLVM.h"
@@ -35,233 +36,10 @@ using namespace mlir;
 using namespace mlir::ematch;
 
 //===----------------------------------------------------------------------===//
-// Scope primitives
-//
-// A "scope" is the body region of an `equivalence.graph`; scopes nest along the
-// graph-nesting tree. `ScopeId` is just that `Region *`, derived from IR
-// nesting. A value defined outside every graph (e.g. a function argument) has a
-// null scope.
+// Union operations
 //===----------------------------------------------------------------------===//
 
-namespace {
-using ScopeId = mlir::Region *;
-
-/// The scope of `op`: the nearest enclosing `equivalence.graph` body region, or
-/// null if `op` is not inside any graph.
-ScopeId scopeOf(Operation *op) {
-  for (Region *r = op->getParentRegion(); r;) {
-    Operation *parent = r->getParentOp();
-    if (!parent)
-      return nullptr;
-    if (isa<equivalence::GraphOp>(parent))
-      return r; // r is a graph body.
-    r = parent->getParentRegion();
-  }
-  return nullptr;
-}
-ScopeId scopeOf(equivalence::ClassOp c) { return scopeOf(c.getOperation()); }
-
-/// The enclosing scope of scope `s` (the next graph body out), or null at the
-/// outermost graph / for a null scope.
-ScopeId parentScope(ScopeId s) {
-  if (!s)
-    return nullptr;
-  return scopeOf(s->getParentOp());
-}
-
-/// Distance from the outermost graph (0 for a top-level graph body); a null
-/// (out-of-graph) scope also reports 0.
-unsigned depthOf(ScopeId s) {
-  unsigned d = 0;
-  for (ScopeId p = parentScope(s); p; p = parentScope(p))
-    ++d;
-  return d;
-}
-unsigned depthOf(equivalence::ClassOp c) { return depthOf(scopeOf(c)); }
-
-/// Ancestor-or-equal test: does graph scope `outer` enclose `inner`? A scope
-/// encloses itself, so equal scopes test true.
-bool encloses(ScopeId outer, ScopeId inner) {
-  for (ScopeId s = inner;; s = parentScope(s)) {
-    if (s == outer)
-      return true;
-    if (!s)
-      return false;
-  }
-}
-
-/// Find the (unique) rep of `row` living in scope `s`, or null. Linear scan;
-/// rows have at most #scopes entries, so this beats a nested map.
-equivalence::ClassOp *findByScope(SmallVectorImpl<equivalence::ClassOp> &row,
-                                  ScopeId s) {
-  for (auto &c : row)
-    if (scopeOf(c) == s)
-      return &c;
-  return nullptr;
-}
-
-/// The outermost (minimum-depth) rep of a non-empty row.
-equivalence::ClassOp outermost(SmallVectorImpl<equivalence::ClassOp> &row) {
-  equivalence::ClassOp best = row.front();
-  unsigned bestDepth = depthOf(best);
-  for (equivalence::ClassOp c : row) {
-    unsigned d = depthOf(c);
-    if (d < bestDepth) {
-      best = c;
-      bestDepth = d;
-    }
-  }
-  return best;
-}
-
-/// The nearest *strictly enclosing* rep of scope `s` present in `row`, or null
-/// if none (i.e. `s` is the outermost occupied scope).
-equivalence::ClassOp
-nearestEnclosingRep(SmallVectorImpl<equivalence::ClassOp> &row, ScopeId s) {
-  for (ScopeId p = parentScope(s); p; p = parentScope(p))
-    if (equivalence::ClassOp *hit = findByScope(row, p))
-      return *hit;
-  return {};
-}
-
-/// The deepest rep enclosing scope `s` (walk `s` outward to the first rep in
-/// `row`), or null if none encloses `s`.
-equivalence::ClassOp
-deepestRepEnclosing(SmallVectorImpl<equivalence::ClassOp> &row, ScopeId s) {
-  for (ScopeId p = s; p; p = parentScope(p))
-    if (equivalence::ClassOp *hit = findByScope(row, p))
-      return *hit;
-  return {};
-}
-} // namespace
-
-SmallVector<mlir::Value>
-mlir::ematch::getClassVals(mlir::PatternRewriter &rewriter, mlir::Value val) {
-  Operation *defOp = val.getDefiningOp();
-  if (defOp == nullptr) {
-    return {val};
-  } else if (auto classOp = dyn_cast<equivalence::ClassOp>(defOp)) {
-    return llvm::to_vector(classOp.getInputs());
-  }
-  return {val};
-}
-
-mlir::Value
-mlir::ematch::getClassRepresentative(mlir::PatternRewriter &rewriter,
-                                     mlir::Value val) {
-  Operation *defOp = val.getDefiningOp();
-  if (defOp == nullptr) {
-    return val;
-  } else if (auto classOp = dyn_cast<equivalence::ClassOp>(defOp)) {
-    return classOp.getInputs().front();
-  }
-  return val;
-}
-
-equivalence::ClassOp
-mlir::ematch::getCanonicalLeader(equivalence::ClassOp classOp) {
-  assert(classOp->getBlock());
-  Value leaderVal = classOp.getLeader();
-  if (!leaderVal)
-    return classOp; // I am the leader.
-
-  auto parentOp = cast<equivalence::ClassOp>(leaderVal.getDefiningOp());
-  assert(parentOp->getBlock());
-  if (!parentOp.getLeader())
-    return parentOp; // My parent is the leader.
-
-  // Path compression: find root leader and update my pointer.
-  equivalence::ClassOp root = getCanonicalLeader(parentOp);
-  classOp.getLeaderMutable().assign(root.getResult());
-  return root;
-}
-
-mlir::Value mlir::ematch::getClassResult(mlir::PatternRewriter &rewriter,
-                                         mlir::Value val) {
-  if (val == nullptr) {
-    return val;
-  }
-  if (auto classOp = val.hasOneUse()
-                         ? dyn_cast<equivalence::ClassOp>(*val.user_begin())
-                         : nullptr) {
-    return classOp.getResult();
-  }
-  return val;
-}
-
-SmallVector<mlir::Value>
-mlir::ematch::getClassResults(mlir::PatternRewriter &rewriter,
-                              mlir::ValueRange vals) {
-  SmallVector<Value> results;
-  results.reserve(vals.size());
-
-  for (Value val : vals) {
-    results.push_back(getClassResult(rewriter, val));
-  }
-
-  return results;
-}
-
-// Erase the first occurrence of target from classOp input list.
-// Instead of using erase directly, it first swaps with the last element to make
-// erase O(1).
-static void swappedErase(equivalence::ClassOp classOp, Value target) {
-  auto inputs = classOp.getInputsMutable();
-
-  // Instead of searching the operand in the inputs, which is O(#inputs),
-  // search it from the uses.
-  // Since the uses are limited by the number of classes, this is cheaper.
-  for (auto &use : target.getUses()) {
-    if (use.getOwner() != classOp.getOperation())
-      continue;
-
-    unsigned i = use.getOperandNumber();
-    // Check whether it's an actual input, and not a leader.
-    if (i >= inputs.size())
-      continue;
-
-    // Perform actual swap-erase.
-    unsigned last = inputs.size() - 1;
-    if (i != last)
-      classOp->setOperand(i, inputs[last].get());
-    inputs.erase(last);
-    return;
-  }
-}
-
-equivalence::ClassOp getClassOpIfExists(Value val) {
-  if (auto *defOp = val.getDefiningOp()) {
-    if (auto classOp = dyn_cast<equivalence::ClassOp>(*defOp))
-      return classOp;
-  }
-  for (Operation *user : val.getUsers()) {
-    if (auto classOp = dyn_cast<equivalence::ClassOp>(*user))
-      return classOp;
-  }
-  return nullptr;
-}
-
-equivalence::ClassOp mlir::ematch::getClassOp(mlir::PatternRewriter &rewriter,
-                                              mlir::Value val) {
-
-  if (auto classOp = getClassOpIfExists(val)) {
-    return classOp;
-  }
-  // If the value is not part of an eclass yet, create one
-  OpBuilder builder(val.getContext());
-  assert(!val.getDefiningOp() ||
-         !dyn_cast<equivalence::ClassOp>(val.getDefiningOp()));
-  builder.setInsertionPointAfterValue(val);
-  auto classOp = equivalence::ClassOp::create(
-      builder, val.getLoc(), TypeRange{val.getType()}, ValueRange{val},
-      /*leader=*/Value{}, /*min_cost_index=*/nullptr);
-  rewriter.replaceUsesWithIf(
-      val, classOp.getResult(),
-      [&classOp](OpOperand &operand) { return operand.getOwner() != classOp; });
-  return classOp;
-}
-
-void ClassOpUnionFind::classUnion(mlir::PatternRewriter &rewriter,
+void CongruenceEngine::classUnion(mlir::PatternRewriter &rewriter,
                                   mlir::Value a, mlir::Value b) {
   if (a == b) {
     return;
@@ -290,8 +68,8 @@ void ClassOpUnionFind::classUnion(mlir::PatternRewriter &rewriter,
     if (depthLeader > depthOther)
       std::swap(leader, other);
   } else {
-    if (unionRank.lookup(leader.getOperation()) <
-        unionRank.lookup(other.getOperation()))
+    if (index.unionRank.lookup(leader.getOperation()) <
+        index.unionRank.lookup(other.getOperation()))
       std::swap(leader, other);
   }
 
@@ -300,22 +78,22 @@ void ClassOpUnionFind::classUnion(mlir::PatternRewriter &rewriter,
 
   // Seed `other`'s row before merging so `mergeScopeRows` has a `{other}`-or-
   // bigger row to fold in (it seeds `leader`'s `{leader}` row itself).
-  rowFor(other);
+  index.rowFor(other);
 
   // Inner -> outer (or same-scope): SSA-valid, never inward.
   other.getLeaderMutable().assign(leader.getResult());
 
   if (depthLeader == depthOther) {
-    unsigned &rankLeader = unionRank[leader.getOperation()];
-    if (rankLeader == unionRank.lookup(other.getOperation()))
+    unsigned &rankLeader = index.unionRank[leader.getOperation()];
+    if (rankLeader == index.unionRank.lookup(other.getOperation()))
       ++rankLeader;
   }
 
-  mergeScopeRows(leader, other);
+  index.mergeScopeRows(leader, other);
   dirtyRoots.insert(leader);
 }
 
-void ClassOpUnionFind::classUnion(mlir::PatternRewriter &rewriter,
+void CongruenceEngine::classUnion(mlir::PatternRewriter &rewriter,
                                   mlir::Operation *op, mlir::ValueRange vals) {
   assert(op->getNumResults() == vals.size() &&
          "Operation result count must match value range size");
@@ -323,18 +101,18 @@ void ClassOpUnionFind::classUnion(mlir::PatternRewriter &rewriter,
     classUnion(rewriter, result, val);
 }
 
-void ClassOpUnionFind::classUnion(mlir::PatternRewriter &rewriter,
+void CongruenceEngine::classUnion(mlir::PatternRewriter &rewriter,
                                   mlir::ValueRange a, mlir::ValueRange b) {
   assert(a.size() == b.size() && "Value ranges must have equal size");
   for (auto [va, vb] : llvm::zip(a, b))
     classUnion(rewriter, va, vb);
 }
 
-void ClassOpUnionFind::queueClassUnion(mlir::Value a, mlir::Value b) {
+void CongruenceEngine::queueClassUnion(mlir::Value a, mlir::Value b) {
   pendingClassUnions.emplace_back(a, b);
 }
 
-void ClassOpUnionFind::queueClassUnion(mlir::Operation *op,
+void CongruenceEngine::queueClassUnion(mlir::Operation *op,
                                        mlir::ValueRange vals) {
   assert(op->getNumResults() == vals.size() &&
          "Operation result count must match value range size");
@@ -342,20 +120,20 @@ void ClassOpUnionFind::queueClassUnion(mlir::Operation *op,
     queueClassUnion(result, val);
 }
 
-void ClassOpUnionFind::queueClassUnion(mlir::ValueRange a, mlir::ValueRange b) {
+void CongruenceEngine::queueClassUnion(mlir::ValueRange a, mlir::ValueRange b) {
   assert(a.size() == b.size() && "Value ranges must have equal size");
   for (auto [va, vb] : llvm::zip(a, b))
     queueClassUnion(va, vb);
 }
 
-void ClassOpUnionFind::processPendingClassUnions(PatternRewriter &rewriter) {
+void CongruenceEngine::processPendingClassUnions(PatternRewriter &rewriter) {
   for (auto [a, b] : pendingClassUnions) {
     classUnion(rewriter, a, b);
   }
   pendingClassUnions.clear();
 }
 
-void ClassOpUnionFind::repairDuplicate(Operation *dup) {
+void CongruenceEngine::repairDuplicate(Operation *dup) {
   // `dup` was found congruent to an existing e-node while being re-keyed after
   // an operand change. Both share operands, so scheduling repair of an
   // operand-defining op lets repair()'s normal duplicate-merging path collapse
@@ -373,55 +151,10 @@ void ClassOpUnionFind::repairDuplicate(Operation *dup) {
 }
 
 //===----------------------------------------------------------------------===//
-// Scope-index maintenance and rebuild helpers
+// Rebuild helpers that mutate IR / drive the rewriter
 //===----------------------------------------------------------------------===//
 
-SmallVector<equivalence::ClassOp> &
-ClassOpUnionFind::rowFor(equivalence::ClassOp root) {
-  auto it = scopeReps.find(root);
-  if (it != scopeReps.end())
-    return it->second;
-  auto &row = scopeReps[root];
-  row.push_back(root); // singleton component, root trivially outermost.
-  return row;
-}
-
-void ClassOpUnionFind::mergeScopeRows(equivalence::ClassOp winRoot,
-                                      equivalence::ClassOp loseRoot) {
-  auto loseIt = scopeReps.find(loseRoot);
-  if (loseIt == scopeReps.end())
-    return; // defensive: nothing to fold in.
-
-  // Move `lose` out and erase its key first: appending into `win` below may
-  // rehash `scopeReps`, which would invalidate any reference into it.
-  SmallVector<equivalence::ClassOp> lose = std::move(loseIt->second);
-  scopeReps.erase(loseRoot);
-
-  auto &win = rowFor(winRoot); // seeds `{winRoot}` on first access.
-  for (equivalence::ClassOp r : lose) {
-    if (equivalence::ClassOp *s = findByScope(win, scopeOf(r)))
-      sameScopeDups.push_back({r, *s}); // r must fuse into the existing rep.
-    else
-      win.push_back(r);
-    assert(encloses(scopeOf(winRoot), scopeOf(r)) &&
-           "winRoot must enclose every merged rep");
-  }
-}
-
-void ClassOpUnionFind::forgetClass(equivalence::ClassOp c) {
-  scopeReps.erase(c); // its own (root) row, if any.
-  for (auto &kv : scopeReps) {
-    auto &row = kv.second;
-    for (size_t i = 0, e = row.size(); i < e; ++i)
-      if (row[i] == c) {
-        row[i] = row.back();
-        row.pop_back();
-        break;
-      }
-  }
-}
-
-void ClassOpUnionFind::fuseSameScope(HashConsPatternRewriter &rewriter,
+void CongruenceEngine::fuseSameScope(HashConsPatternRewriter &rewriter,
                                      equivalence::ClassOp dup,
                                      equivalence::ClassOp survivor) {
   assert(scopeOf(dup) == scopeOf(survivor) &&
@@ -444,26 +177,10 @@ void ClassOpUnionFind::fuseSameScope(HashConsPatternRewriter &rewriter,
   dup.getLeaderMutable().clear();
   dup->remove();
   pendingErase.push_back(dup);
-  forgetClass(dup);
+  index.forgetClass(dup);
 }
 
-void ClassOpUnionFind::reorientComponent(
-    SmallVectorImpl<equivalence::ClassOp> &row) {
-  if (row.empty())
-    return;
-  equivalence::ClassOp rootRep = outermost(row);
-  rootRep.getLeaderMutable().clear();
-  for (equivalence::ClassOp r : row) {
-    if (r == rootRep)
-      continue;
-    equivalence::ClassOp tgt = nearestEnclosingRep(row, scopeOf(r));
-    assert(tgt && encloses(scopeOf(tgt), scopeOf(r)) &&
-           "every non-root rep has a strictly-enclosing rep");
-    r.getLeaderMutable().assign(tgt.getResult());
-  }
-}
-
-void ClassOpUnionFind::retargetUsersToDeepest(
+void CongruenceEngine::retargetUsersToDeepest(
     equivalence::ClassOp rep, SmallVectorImpl<equivalence::ClassOp> &row) {
   SmallVector<OpOperand *> toFix;
   for (OpOperand &u : rep.getResult().getUses()) {
@@ -486,32 +203,15 @@ void ClassOpUnionFind::retargetUsersToDeepest(
   }
 }
 
-#ifndef NDEBUG
-void ClassOpUnionFind::verifyIndex() {
-  for (auto &kv : scopeReps) {
-    auto &row = kv.second;
-    for (size_t i = 0, e = row.size(); i < e; ++i) {
-      assert(row[i]->getBlock() && "stale rep in index");
-      for (size_t j = i + 1; j < e; ++j)
-        assert(scopeOf(row[i]) != scopeOf(row[j]) &&
-               "two reps share a scope in one row");
-    }
-    if (!row.empty())
-      assert(kv.first == outermost(row) &&
-             "row must be keyed by its outermost rep");
-  }
-}
-#endif
-
-bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
+bool CongruenceEngine::rebuild(HashConsPatternRewriter &rewriter) {
   TAMAGOYAKI_SCOPED_TIMER("rebuild");
   LLVM_DEBUG({
     llvm::dbgs() << "Starting rebuild. Worklist=" << worklist.size()
-                 << " sameScopeDups=" << sameScopeDups.size()
+                 << " sameScopeDups=" << index.sameScopeDups.size()
                  << " dirtyRoots=" << dirtyRoots.size() << "\n";
   });
 
-  if (sameScopeDups.empty() && dirtyRoots.empty() && worklist.empty())
+  if (index.sameScopeDups.empty() && dirtyRoots.empty() && worklist.empty())
     return false;
 
   // Track ops that get erased during the loop below. Operations queued in
@@ -540,13 +240,14 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
     return !op || erasedOps.contains(op) || !op->getBlock();
   };
 
-  LLVM_DEBUG(verifyIndex());
+  LLVM_DEBUG(index.verify());
 
-  while (!sameScopeDups.empty() || !dirtyRoots.empty() || !worklist.empty()) {
+  while (!index.sameScopeDups.empty() || !dirtyRoots.empty() ||
+         !worklist.empty()) {
     // Collapse same-scope duplicate classes.
     {
       SmallVector<std::pair<equivalence::ClassOp, equivalence::ClassOp>> batch;
-      std::swap(batch, sameScopeDups);
+      std::swap(batch, index.sameScopeDups);
       for (auto [dup, survivor] : batch) {
         if (isDead(dup.getOperation()) || isDead(survivor.getOperation()))
           continue;
@@ -578,10 +279,10 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
     // Per component (independent across components): reorient leaders outward,
     // then push users down to the deepest visible rep.
     for (equivalence::ClassOp root : roots) {
-      auto it = scopeReps.find(root);
-      if (it == scopeReps.end())
+      auto it = index.scopeReps.find(root);
+      if (it == index.scopeReps.end())
         continue;
-      reorientComponent(it->second);
+      index.reorientComponent(it->second);
 
       // Snapshot the rep list: retargetUsersToDeepest pushes to the worklist
       // but does not mutate the row, yet repairs later might.
@@ -629,17 +330,21 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
   SmallPtrSet<Operation *, 8> erased;
   for (equivalence::ClassOp dead : pendingErase) {
     if (erased.insert(dead.getOperation()).second) {
-      forgetClass(dead);
+      index.forgetClass(dead);
       rewriter.eraseOp(dead);
     }
   }
   pendingErase.clear();
 
-  LLVM_DEBUG(verifyIndex());
+  LLVM_DEBUG(index.verify());
   return true;
 }
 
-void ClassOpUnionFind::hashconsGraph(HashConsPatternRewriter &rewriter,
+//===----------------------------------------------------------------------===//
+// Hash-consing and congruence repair
+//===----------------------------------------------------------------------===//
+
+void CongruenceEngine::hashconsGraph(HashConsPatternRewriter &rewriter,
                                      equivalence::GraphOp graph) {
   TAMAGOYAKI_SCOPED_TIMER("hashconsGraph");
 
@@ -675,7 +380,7 @@ void ClassOpUnionFind::hashconsGraph(HashConsPatternRewriter &rewriter,
   rebuild(rewriter);
 }
 
-void ClassOpUnionFind::repair(HashConsPatternRewriter &rewriter,
+void CongruenceEngine::repair(HashConsPatternRewriter &rewriter,
                               Operation *op) {
   // For a ClassOp we look at users of its single class result; for any
   // other operation we look at users of all of its results.
@@ -723,7 +428,7 @@ void ClassOpUnionFind::repair(HashConsPatternRewriter &rewriter,
   }
 }
 
-void ClassOpUnionFind::mergeResults(HashConsPatternRewriter &rewriter,
+void CongruenceEngine::mergeResults(HashConsPatternRewriter &rewriter,
                                     Operation *other, Operation *keep) {
   for (auto [resOther, resKeep] :
        llvm::zip_equal(other->getResults(), keep->getResults())) {

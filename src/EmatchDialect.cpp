@@ -12,7 +12,8 @@
 
 #include "EquivalenceDialect.h"
 #include "EquivalenceUtils.h"
-#include "Utils/ClassOpUnionFind.h"
+#include "Utils/ClassOpUtils.h"
+#include "Utils/CongruenceEngine.h"
 #include "Utils/HashConsPatternRewriter.h"
 #include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
 #include "mlir/IR/Builders.h"
@@ -206,9 +207,9 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
   TAMAGOYAKI_SCOPED_TIMER("runSaturation");
   RewritePatternSet patternList(ctx);
 
-  ClassOpUnionFind uf{};
+  CongruenceEngine uf{};
   HashConsPatternRewriter hashconsRewriter(ctx);
-  hashconsRewriter.setUnionFind(&uf);
+  hashconsRewriter.setEngine(&uf);
   if (listener)
     hashconsRewriter.setListener(listener);
 
