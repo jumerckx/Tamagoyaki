@@ -12,7 +12,8 @@
 include "mlir/IR/OpBase.td"
 include "mlir/Interfaces/InferTypeOpInterface.td"
 include "mlir/Interfaces/SideEffectInterfaces.td"
-include "mlir/Interfaces/ControlFlowInterfaces.td" 
+include "mlir/Interfaces/ControlFlowInterfaces.td"
+include "mlir/Interfaces/LoopLikeInterface.td"
 include "mlir/Pass/PassBase.td"
 include "mlir/IR/AttrTypeBase.td"
 include "mlir/IR/RegionKindInterface.td"
@@ -79,6 +80,8 @@ def Equivalence_YieldOp : Equivalence_Op<"yield", [
 def Equivalence_GraphOp : Equivalence_Op<"graph", [
     SingleBlockImplicitTerminator<"YieldOp">,
     DeclareOpInterfaceMethods<RegionKindInterface>,
+    DeclareOpInterfaceMethods<LoopLikeOpInterface,
+        ["isDefinedOutsideOfLoop", "getLoopRegions", "moveOutOfLoop"]>,
     RecursivelySpeculatable,
  ]> {
     let summary = "A graph region operation";
