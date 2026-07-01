@@ -116,23 +116,19 @@ public:
   SmallVector<mlir::Operation *> worklist;
 
 private:
-  // Per-component scope index, keyed by the connectivity-union-find ROOT.
-  // Each row holds at most one ClassOp per scope ("the reps"). Because of the
-  // root-is-outermost property maintained by `classUnion`, the row's outermost
-  // entry IS the keying root, so the index never has to be re-keyed on
-  // reorientation. Rows are seeded lazily (see `rowFor`); a class that has
-  // never been unioned is a trivial singleton component and need not appear.
+  // Per-component scope index, keyed by the union-find root. Each row holds at
+  // most one ClassOp per scope (the reps); the keying root is the row's
+  // outermost entry. Rows are seeded lazily (see `rowFor`).
   llvm::DenseMap<equivalence::ClassOp, SmallVector<equivalence::ClassOp>>
       scopeReps;
 
-  // Same-scope duplicates discovered at union time, fused in rebuild Phase A.
-  // {dup, survivor}: dup is folded into survivor and erased.
+  // {dup, survivor} pairs that share a scope: dup is folded into survivor and
+  // erased during rebuild.
   SmallVector<std::pair<equivalence::ClassOp, equivalence::ClassOp>>
       sameScopeDups;
 
-  // Component roots touched since the last rebuild; drives Phases B/C. Entries
-  // may become stale (no longer a root, or erased); rebuild re-canonicalizes
-  // and skips dead ops.
+  // Component roots touched since the last rebuild. Entries may go stale;
+  // rebuild re-canonicalizes and skips dead ops.
   llvm::SetVector<equivalence::ClassOp> dirtyRoots;
 
   SmallVector<equivalence::ClassOp> pendingErase;
@@ -145,36 +141,32 @@ private:
 
   // --- scope-index maintenance (see ClassOpUnionFind.cpp) ---
 
-  /// Return the row for component root `root`, seeding it with `{root}` on
-  /// first access. Must only be called with a current connectivity root.
+  /// Return the row for `root`, seeding it with `{root}` on first access.
   SmallVector<equivalence::ClassOp> &rowFor(equivalence::ClassOp root);
 
   /// Merge `loseRoot`'s row into `winRoot`'s, queueing same-scope collisions
-  /// into `sameScopeDups`. `winRoot` must be outermost (enclose every entry).
+  /// into `sameScopeDups`. `winRoot` must enclose every entry.
   void mergeScopeRows(equivalence::ClassOp winRoot,
                       equivalence::ClassOp loseRoot);
 
-  /// Drop every trace of `c` from the index (its own row if it is a key, and
-  /// any component row that lists it). Harmless if `c` is absent.
+  /// Drop every trace of `c` from the index. Harmless if `c` is absent.
   void forgetClass(equivalence::ClassOp c);
 
-  /// Phase A: fold same-scope `dup` into `survivor` (append deduped inputs,
-  /// redirect users, detach + defer-erase `dup`).
+  /// Fold same-scope `dup` into `survivor` and detach `dup` for erasure.
   void fuseSameScope(HashConsPatternRewriter &rewriter,
                      equivalence::ClassOp dup, equivalence::ClassOp survivor);
 
-  /// Phase B: re-point every non-root rep's leader operand at the nearest
-  /// enclosing rep in `row`; clear the outermost rep's leader.
+  /// Point every non-outermost rep's leader at its nearest enclosing rep in
+  /// `row`; clear the outermost rep's leader.
   void reorientComponent(SmallVectorImpl<equivalence::ClassOp> &row);
 
-  /// Phase C: move every user of `rep` to the deepest rep in `row` that still
-  /// encloses the user, queueing affected classes for congruence repair.
+  /// Move every user of `rep` to the deepest rep in `row` that still encloses
+  /// the user, queueing affected classes for congruence repair.
   void retargetUsersToDeepest(equivalence::ClassOp rep,
                               SmallVectorImpl<equivalence::ClassOp> &row);
 
 #ifndef NDEBUG
-  /// Debug-only consistency check on `scopeReps` (distinct scopes per row,
-  /// keying op is the unique outermost entry).
+  /// Consistency check on `scopeReps`.
   void verifyIndex();
 #endif
 };

@@ -35,19 +35,12 @@ using namespace mlir;
 using namespace mlir::ematch;
 
 //===----------------------------------------------------------------------===//
-// Scope primitives (Milestone 0)
+// Scope primitives
 //
-// A "scope" is the body region of an `equivalence.graph`, and the scope tree
-// is the graph-nesting tree (an inner graph's body is enclosed by the body of
-// the graph it sits inside, regardless of any intervening non-graph regions
-// such as an `scf.for` body). `ScopeId` is therefore just `Region *`, derived
-// purely from IR nesting; no attribute or side table is needed.
-//
-// Only *graph nesting* counts as a scope boundary. A ClassOp that wraps a
-// function argument (or any value defined outside every graph) lives in the
-// func body and has a null scope; it is a leaf "portal" into the graph it
-// feeds, and `classUnion` physically merges it into that graph's class rather
-// than chaining — exactly as the original single-scope implementation did.
+// A "scope" is the body region of an `equivalence.graph`; scopes nest along the
+// graph-nesting tree. `ScopeId` is just that `Region *`, derived from IR
+// nesting. A value defined outside every graph (e.g. a function argument) has a
+// null scope.
 //===----------------------------------------------------------------------===//
 
 namespace {
@@ -260,11 +253,9 @@ equivalence::ClassOp mlir::ematch::getClassOp(mlir::PatternRewriter &rewriter,
          !dyn_cast<equivalence::ClassOp>(val.getDefiningOp()));
   builder.setInsertionPointAfterValue(val);
 
-  // E-classes must never live outside a graph. A value defined outside every
-  // graph (e.g. a function argument or module-level constant) would otherwise
-  // get its ClassOp placed next to the definition, in the func body. Hoist such
-  // "portal" classes to the start of the outermost graph that encloses a use,
-  // so they share that graph's scope and merge into it like any other class.
+  // E-classes must never live outside a graph. If `val` is defined outside
+  // every graph (e.g. a function argument), hoist its class to the start of the
+  // outermost graph enclosing a use so it shares that graph's scope.
   Region *defRegion = val.getParentRegion();
   bool definedInGraph = false;
   for (Region *r = defRegion; r; r = r->getParentRegion())
@@ -315,11 +306,10 @@ void ClassOpUnionFind::classUnion(mlir::PatternRewriter &rewriter,
   if (leader == other)
     return;
 
-  // Orientation is dictated by scope, not by rank: the leader operand is a real
-  // SSA edge `other -> leader`, so `leader` must enclose `other`. On a
-  // cross-scope union the outer (smaller-depth) class is therefore forced to be
-  // the parent. Only when both already share a scope is the direction free, and
-  // there we fall back to union-by-rank for near-O(1) finds.
+  // The leader operand is an SSA edge `other -> leader`, so `leader` must
+  // enclose `other`: on a cross-scope union the outer (smaller-depth) class
+  // becomes the parent. Within one scope the direction is free, so we fall back
+  // to union-by-rank.
   unsigned dl = depthOf(leader);
   unsigned dor = depthOf(other);
 
@@ -410,7 +400,7 @@ void ClassOpUnionFind::repairDuplicate(Operation *dup) {
 }
 
 //===----------------------------------------------------------------------===//
-// Scope-index maintenance (Milestone 1) and rebuild phase helpers (Milestone 2)
+// Scope-index maintenance and rebuild helpers
 //===----------------------------------------------------------------------===//
 
 SmallVector<equivalence::ClassOp> &
@@ -441,7 +431,7 @@ void ClassOpUnionFind::mergeScopeRows(equivalence::ClassOp winRoot,
     else
       win.push_back(r);
     assert(encloses(scopeOf(winRoot), scopeOf(r)) &&
-           "winRoot must enclose every merged rep (root-is-outermost)");
+           "winRoot must enclose every merged rep");
   }
 }
 
@@ -505,8 +495,8 @@ void ClassOpUnionFind::retargetUsersToDeepest(
   SmallVector<OpOperand *> toFix;
   for (OpOperand &u : rep.getResult().getUses()) {
     Operation *user = u.getOwner();
-    // Scope-chain links (a child class pointing its leader at rep) are
-    // maintained by Phase B, not here.
+    // Skip leader links (a child class pointing at rep); `reorientComponent`
+    // owns those.
     if (auto uc = llvm::dyn_cast<equivalence::ClassOp>(user))
       if (uc.getLeader() == rep.getResult())
         continue;
@@ -580,7 +570,7 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
   LLVM_DEBUG(verifyIndex());
 
   while (!sameScopeDups.empty() || !dirtyRoots.empty() || !worklist.empty()) {
-    // ---- Phase A: collapse SAME-SCOPE duplicates only ----
+    // Collapse same-scope duplicate classes.
     {
       SmallVector<std::pair<equivalence::ClassOp, equivalence::ClassOp>> batch;
       std::swap(batch, sameScopeDups);
@@ -594,7 +584,7 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
       }
     }
 
-    // ---- Collect the dirty components, re-canonicalized and deduped ----
+    // Collect the dirty components, re-canonicalized and deduped.
     SmallVector<equivalence::ClassOp> roots;
     {
       SmallVector<equivalence::ClassOp> dirty(dirtyRoots.begin(),
@@ -612,16 +602,16 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
       }
     }
 
-    // ---- Phase B/C, per dirty component (independent across components) ----
-    // B: reorient leaders outward. C: push users to the deepest visible rep.
+    // Per component (independent across components): reorient leaders outward,
+    // then push users down to the deepest visible rep.
     for (equivalence::ClassOp root : roots) {
       auto it = scopeReps.find(root);
       if (it == scopeReps.end())
         continue;
-      reorientComponent(it->second); // Phase B
+      reorientComponent(it->second);
 
-      // Phase C. Snapshot the rep list: retargetUsersToDeepest pushes to the
-      // worklist but does not mutate the row, yet repairs later might.
+      // Snapshot the rep list: retargetUsersToDeepest pushes to the worklist
+      // but does not mutate the row, yet repairs later might.
       SmallVector<equivalence::ClassOp> reps(it->second.begin(),
                                              it->second.end());
       for (equivalence::ClassOp rep : reps) {
@@ -631,7 +621,7 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
       }
     }
 
-    // ---- Phase D: congruence repair (existing machinery) ----
+    // Congruence repair.
     {
       llvm::SetVector<Operation *> todo;
       SmallVector<Operation *> current;
@@ -645,8 +635,8 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
             continue;
           todo.insert(leader.getOperation());
         } else {
-          // Non-ClassOp entries come from `mergeResults`/Phase C: their users
-          // may have become identical and need to be deduplicated.
+          // Non-ClassOp entries come from `mergeResults` / user retargeting:
+          // their users may have become identical and need deduplication.
           todo.insert(op);
         }
       }
@@ -661,8 +651,8 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
     }
   }
 
-  // Now that all phases have reached a fixpoint, erase the dead eclasses that
-  // were detached during Phase A.
+  // Now that everything has reached a fixpoint, erase the dead eclasses
+  // detached by `fuseSameScope`.
   SmallPtrSet<Operation *, 8> erased;
   for (equivalence::ClassOp dead : pendingErase) {
     if (erased.insert(dead.getOperation()).second) {
