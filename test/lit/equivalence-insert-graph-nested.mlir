@@ -4,17 +4,24 @@
 // single-block regions of speculatable operations (here, scf.for), wrapping
 // each in its own nested graph.
 
+// Captured block arguments (the loop bounds and the iter_arg) are wrapped in a
+// ClassOp inside the graph that captures them, so every e-class lives inside a
+// graph.
+
 // CHECK-LABEL: func.func @nested_for
 // CHECK:         %0 = equivalence.graph -> (f32) {
-// CHECK:           %1 = scf.for %{{.*}} = %arg0 to %arg1 step %{{.*}} iter_args(%[[ACC:.*]] = %arg3) -> (f32) {
-// CHECK:             %2 = equivalence.graph -> (f32) {
+// CHECK:           %[[LB:.*]] = equivalence.class %arg0 : index
+// CHECK:           %[[UB:.*]] = equivalence.class %arg1 : index
+// CHECK:           %[[INIT:.*]] = equivalence.class %arg3 : f32
+// CHECK:           %[[R:.*]] = scf.for %{{.*}} = %[[LB]] to %[[UB]] step %{{.*}} iter_args(%[[ACC:.*]] = %[[INIT]]) -> (f32) {
+// CHECK:             %{{.*}} = equivalence.graph -> (f32) {
+// CHECK:               %[[ACCCLS:.*]] = equivalence.class %[[ACC]] : f32
 // CHECK:               %[[C:.*]] = arith.constant 2.000000e+00 : f32
-// CHECK:               %[[SUM:.*]] = arith.addf %[[ACC]], %[[C]] : f32
+// CHECK:               %[[SUM:.*]] = arith.addf %[[ACCCLS]], %[[C]] : f32
 // CHECK:               equivalence.yield %[[SUM]] : f32
 // CHECK:             }
-// CHECK:             scf.yield %2 : f32
 // CHECK:           }
-// CHECK:           equivalence.yield %1 : f32
+// CHECK:           equivalence.yield %[[R]] : f32
 // CHECK:         }
 // CHECK:         return %0 : f32
 
