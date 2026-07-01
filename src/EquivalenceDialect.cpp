@@ -658,6 +658,24 @@ static GraphOp wrapRegionBodyInGraph(Region &region,
   state.addAttributes(termAttrs);
   builder.create(state);
 
+  // The block arguments the graph captures (function args, region args like an
+  // scf.for induction variable) are defined outside the graph. Wrap each used
+  // capture in a ClassOp at the start of the graph body so its e-class lives
+  // inside the graph.
+  // When insertSingleElementEqs is set, wrapValuesInClassOps already wrapped
+  // these block arguments, so we skip them here.
+  if (!insertSingleElementEqs) {
+    builder.setInsertionPointToStart(&graphBody.front());
+    for (BlockArgument arg : newEntryBlock->getArguments()) {
+      if (arg.use_empty())
+        continue;
+      auto classOp = ClassOp::create(
+          builder, arg.getLoc(), TypeRange{arg.getType()}, ValueRange{arg},
+          /*leader=*/Value{}, /*min_cost_index=*/nullptr);
+      arg.replaceAllUsesExcept(classOp.getResult(), classOp);
+    }
+  }
+
   return graphOp;
 }
 

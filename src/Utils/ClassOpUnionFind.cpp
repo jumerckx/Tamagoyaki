@@ -34,6 +34,107 @@
 using namespace mlir;
 using namespace mlir::ematch;
 
+//===----------------------------------------------------------------------===//
+// Scope primitives
+//
+// A "scope" is the body region of an `equivalence.graph`; scopes nest along the
+// graph-nesting tree. `ScopeId` is just that `Region *`, derived from IR
+// nesting. A value defined outside every graph (e.g. a function argument) has a
+// null scope.
+//===----------------------------------------------------------------------===//
+
+namespace {
+using ScopeId = mlir::Region *;
+
+/// The scope of `op`: the nearest enclosing `equivalence.graph` body region, or
+/// null if `op` is not inside any graph.
+ScopeId scopeOf(Operation *op) {
+  for (Region *r = op->getParentRegion(); r;) {
+    Operation *parent = r->getParentOp();
+    if (!parent)
+      return nullptr;
+    if (isa<equivalence::GraphOp>(parent))
+      return r; // r is a graph body.
+    r = parent->getParentRegion();
+  }
+  return nullptr;
+}
+ScopeId scopeOf(equivalence::ClassOp c) { return scopeOf(c.getOperation()); }
+
+/// The enclosing scope of scope `s` (the next graph body out), or null at the
+/// outermost graph / for a null scope.
+ScopeId parentScope(ScopeId s) {
+  if (!s)
+    return nullptr;
+  return scopeOf(s->getParentOp());
+}
+
+/// Distance from the outermost graph (0 for a top-level graph body); a null
+/// (out-of-graph) scope also reports 0.
+unsigned depthOf(ScopeId s) {
+  unsigned d = 0;
+  for (ScopeId p = parentScope(s); p; p = parentScope(p))
+    ++d;
+  return d;
+}
+unsigned depthOf(equivalence::ClassOp c) { return depthOf(scopeOf(c)); }
+
+/// Ancestor-or-equal test: does graph scope `outer` enclose `inner`? A scope
+/// encloses itself, so equal scopes test true.
+bool encloses(ScopeId outer, ScopeId inner) {
+  for (ScopeId s = inner;; s = parentScope(s)) {
+    if (s == outer)
+      return true;
+    if (!s)
+      return false;
+  }
+}
+
+/// Find the (unique) rep of `row` living in scope `s`, or null. Linear scan;
+/// rows have at most #scopes entries, so this beats a nested map.
+equivalence::ClassOp *findByScope(SmallVectorImpl<equivalence::ClassOp> &row,
+                                  ScopeId s) {
+  for (auto &c : row)
+    if (scopeOf(c) == s)
+      return &c;
+  return nullptr;
+}
+
+/// The outermost (minimum-depth) rep of a non-empty row.
+equivalence::ClassOp outermost(SmallVectorImpl<equivalence::ClassOp> &row) {
+  equivalence::ClassOp best = row.front();
+  unsigned bestDepth = depthOf(best);
+  for (equivalence::ClassOp c : row) {
+    unsigned d = depthOf(c);
+    if (d < bestDepth) {
+      best = c;
+      bestDepth = d;
+    }
+  }
+  return best;
+}
+
+/// The nearest *strictly enclosing* rep of scope `s` present in `row`, or null
+/// if none (i.e. `s` is the outermost occupied scope).
+equivalence::ClassOp
+nearestEnclosingRep(SmallVectorImpl<equivalence::ClassOp> &row, ScopeId s) {
+  for (ScopeId p = parentScope(s); p; p = parentScope(p))
+    if (equivalence::ClassOp *hit = findByScope(row, p))
+      return *hit;
+  return {};
+}
+
+/// The deepest rep enclosing scope `s` (walk `s` outward to the first rep in
+/// `row`), or null if none encloses `s`.
+equivalence::ClassOp
+deepestRepEnclosing(SmallVectorImpl<equivalence::ClassOp> &row, ScopeId s) {
+  for (ScopeId p = s; p; p = parentScope(p))
+    if (equivalence::ClassOp *hit = findByScope(row, p))
+      return *hit;
+  return {};
+}
+} // namespace
+
 SmallVector<mlir::Value>
 mlir::ematch::getClassVals(mlir::PatternRewriter &rewriter, mlir::Value val) {
   Operation *defOp = val.getDefiningOp();
@@ -178,19 +279,40 @@ void ClassOpUnionFind::classUnion(mlir::PatternRewriter &rewriter,
   if (leader == other)
     return;
 
-  unsigned rankLeader = unionRank.lookup(leader.getOperation());
-  unsigned rankOther = unionRank.lookup(other.getOperation());
+  // The leader operand is an SSA edge `other -> leader`, so `leader` must
+  // enclose `other`: on a cross-scope union the outer (smaller-depth) class
+  // becomes the parent. Within one scope the direction is free, so we fall back
+  // to union-by-rank.
+  unsigned depthLeader = depthOf(leader);
+  unsigned depthOther = depthOf(other);
 
-  if (rankLeader < rankOther)
-    std::swap(leader, other);
+  if (depthLeader != depthOther) {
+    if (depthLeader > depthOther)
+      std::swap(leader, other);
+  } else {
+    if (unionRank.lookup(leader.getOperation()) <
+        unionRank.lookup(other.getOperation()))
+      std::swap(leader, other);
+  }
 
-  // Lazy union: just point `other` at `leader` via the leader operand.
+  assert(encloses(scopeOf(leader), scopeOf(other)) &&
+         "incomparable scopes must not occur");
+
+  // Seed `other`'s row before merging so `mergeScopeRows` has a `{other}`-or-
+  // bigger row to fold in (it seeds `leader`'s `{leader}` row itself).
+  rowFor(other);
+
+  // Inner -> outer (or same-scope): SSA-valid, never inward.
   other.getLeaderMutable().assign(leader.getResult());
-  if (rankLeader == rankOther)
-    unionRank[leader.getOperation()] = rankLeader + 1;
 
-  // We push `other` such that at the start of `rebuild`,
-  worklist.push_back(other);
+  if (depthLeader == depthOther) {
+    unsigned &rankLeader = unionRank[leader.getOperation()];
+    if (rankLeader == unionRank.lookup(other.getOperation()))
+      ++rankLeader;
+  }
+
+  mergeScopeRows(leader, other);
+  dirtyRoots.insert(leader);
 }
 
 void ClassOpUnionFind::classUnion(mlir::PatternRewriter &rewriter,
@@ -250,21 +372,153 @@ void ClassOpUnionFind::repairDuplicate(Operation *dup) {
   llvm_unreachable("repairDuplicate: congruent op has no defining-op operand");
 }
 
+//===----------------------------------------------------------------------===//
+// Scope-index maintenance and rebuild helpers
+//===----------------------------------------------------------------------===//
+
+SmallVector<equivalence::ClassOp> &
+ClassOpUnionFind::rowFor(equivalence::ClassOp root) {
+  auto it = scopeReps.find(root);
+  if (it != scopeReps.end())
+    return it->second;
+  auto &row = scopeReps[root];
+  row.push_back(root); // singleton component, root trivially outermost.
+  return row;
+}
+
+void ClassOpUnionFind::mergeScopeRows(equivalence::ClassOp winRoot,
+                                      equivalence::ClassOp loseRoot) {
+  auto loseIt = scopeReps.find(loseRoot);
+  if (loseIt == scopeReps.end())
+    return; // defensive: nothing to fold in.
+
+  // Move `lose` out and erase its key first: appending into `win` below may
+  // rehash `scopeReps`, which would invalidate any reference into it.
+  SmallVector<equivalence::ClassOp> lose = std::move(loseIt->second);
+  scopeReps.erase(loseRoot);
+
+  auto &win = rowFor(winRoot); // seeds `{winRoot}` on first access.
+  for (equivalence::ClassOp r : lose) {
+    if (equivalence::ClassOp *s = findByScope(win, scopeOf(r)))
+      sameScopeDups.push_back({r, *s}); // r must fuse into the existing rep.
+    else
+      win.push_back(r);
+    assert(encloses(scopeOf(winRoot), scopeOf(r)) &&
+           "winRoot must enclose every merged rep");
+  }
+}
+
+void ClassOpUnionFind::forgetClass(equivalence::ClassOp c) {
+  scopeReps.erase(c); // its own (root) row, if any.
+  for (auto &kv : scopeReps) {
+    auto &row = kv.second;
+    for (size_t i = 0, e = row.size(); i < e; ++i)
+      if (row[i] == c) {
+        row[i] = row.back();
+        row.pop_back();
+        break;
+      }
+  }
+}
+
+void ClassOpUnionFind::fuseSameScope(HashConsPatternRewriter &rewriter,
+                                     equivalence::ClassOp dup,
+                                     equivalence::ClassOp survivor) {
+  assert(scopeOf(dup) == scopeOf(survivor) &&
+         "fuseSameScope requires a shared scope");
+
+  // Dedup-append dup's inputs into survivor.
+  llvm::SmallPtrSet<Value, 16> existing(survivor.getInputs().begin(),
+                                        survivor.getInputs().end());
+  SmallVector<Value> add;
+  for (Value in : dup.getInputs())
+    if (existing.insert(in).second)
+      add.push_back(in);
+  survivor.getInputsMutable().append(add);
+
+  // Redirect every user of dup (e-nodes and any child class whose leader
+  // operand pointed at dup) onto survivor. Same scope => still SSA-valid.
+  rewriter.replaceAllUsesWith(dup.getResult(), survivor.getResult());
+
+  dup.getInputsMutable().clear();
+  dup.getLeaderMutable().clear();
+  dup->remove();
+  pendingErase.push_back(dup);
+  forgetClass(dup);
+}
+
+void ClassOpUnionFind::reorientComponent(
+    SmallVectorImpl<equivalence::ClassOp> &row) {
+  if (row.empty())
+    return;
+  equivalence::ClassOp rootRep = outermost(row);
+  rootRep.getLeaderMutable().clear();
+  for (equivalence::ClassOp r : row) {
+    if (r == rootRep)
+      continue;
+    equivalence::ClassOp tgt = nearestEnclosingRep(row, scopeOf(r));
+    assert(tgt && encloses(scopeOf(tgt), scopeOf(r)) &&
+           "every non-root rep has a strictly-enclosing rep");
+    r.getLeaderMutable().assign(tgt.getResult());
+  }
+}
+
+void ClassOpUnionFind::retargetUsersToDeepest(
+    equivalence::ClassOp rep, SmallVectorImpl<equivalence::ClassOp> &row) {
+  SmallVector<OpOperand *> toFix;
+  for (OpOperand &u : rep.getResult().getUses()) {
+    Operation *user = u.getOwner();
+    // Skip leader links (a child class pointing at rep); `reorientComponent`
+    // owns those.
+    if (auto uc = llvm::dyn_cast<equivalence::ClassOp>(user))
+      if (uc.getLeader() == rep.getResult())
+        continue;
+    equivalence::ClassOp want = deepestRepEnclosing(row, scopeOf(user));
+    if (want && want != rep)
+      toFix.push_back(&u);
+  }
+  for (OpOperand *u : toFix) {
+    equivalence::ClassOp want =
+        deepestRepEnclosing(row, scopeOf(u->getOwner()));
+    u->set(want.getResult());
+    worklist.push_back(rep.getOperation());  // rep lost a user
+    worklist.push_back(want.getOperation()); // want gained one
+  }
+}
+
+#ifndef NDEBUG
+void ClassOpUnionFind::verifyIndex() {
+  for (auto &kv : scopeReps) {
+    auto &row = kv.second;
+    for (size_t i = 0, e = row.size(); i < e; ++i) {
+      assert(row[i]->getBlock() && "stale rep in index");
+      for (size_t j = i + 1; j < e; ++j)
+        assert(scopeOf(row[i]) != scopeOf(row[j]) &&
+               "two reps share a scope in one row");
+    }
+    if (!row.empty())
+      assert(kv.first == outermost(row) &&
+             "row must be keyed by its outermost rep");
+  }
+}
+#endif
+
 bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
   TAMAGOYAKI_SCOPED_TIMER("rebuild");
   LLVM_DEBUG({
-    llvm::dbgs() << "Starting rebuild. Worklist contains " << worklist.size()
-                 << " entries\n";
+    llvm::dbgs() << "Starting rebuild. Worklist=" << worklist.size()
+                 << " sameScopeDups=" << sameScopeDups.size()
+                 << " dirtyRoots=" << dirtyRoots.size() << "\n";
   });
 
-  if (worklist.empty())
+  if (sameScopeDups.empty() && dirtyRoots.empty() && worklist.empty())
     return false;
 
   // Track ops that get erased during the loop below. Operations queued in
-  // `todo` (or `worklist` re-entry) may be freed by `repair`'s
-  // `replaceOp`, so we must not dereference their pointers afterwards.
-  // Just checking `op->getBlock()` is unsafe because the Operation memory
-  // itself may have been freed.
+  // `todo` (or `worklist` re-entry) may be freed by `repair`'s `replaceOp`, so
+  // we must not dereference their pointers afterwards. Just checking
+  // `op->getBlock()` is unsafe because the Operation memory itself may have
+  // been freed.
   SmallPtrSet<Operation *, 16> erasedOps;
   struct EraseTracker : public RewriterBase::ForwardingListener {
     EraseTracker(OpBuilder::Listener *previous,
@@ -282,87 +536,106 @@ bool ClassOpUnionFind::rebuild(HashConsPatternRewriter &rewriter) {
   auto restoreListener =
       llvm::scope_exit([&] { rewriter.setListener(previousListener); });
 
-  while (!worklist.empty()) {
-    llvm::SetVector<Operation *> todo;
-    // Deduplicate sets for operand merging keyed by leader op.
-    // Shared across all ClassOps merging into the same leader.
-    llvm::DenseMap<Operation *, llvm::SmallPtrSet<Value, 16>> leaderExisting;
-    // Operands to append to each leader, built across every ClassOp that merges into it.
-    // Allows for a batched append which will avoid repeated operand list resizes.
-    llvm::DenseMap<equivalence::ClassOp, SmallVector<Value>> leaderNewOperands;
-    SmallVector<Operation *> current;
-    std::swap(current, worklist);
-    for (Operation *op : current) {
-      if (!op || erasedOps.contains(op) || !op->getBlock()) {
-        continue; // op has already been removed/erased
-      }
+  auto isDead = [&](Operation *op) {
+    return !op || erasedOps.contains(op) || !op->getBlock();
+  };
 
-      auto c = llvm::dyn_cast<equivalence::ClassOp>(op);
-      if (!c) {
-        // Non-ClassOp entries come from `mergeResults`: their users may
-        // have become identical and need to be deduplicated.
-        todo.insert(op);
-        continue;
-      }
+  LLVM_DEBUG(verifyIndex());
 
-      auto leader = getCanonicalLeader(c);
-      if (c != leader) { // c needs to be canonicalized
-        // Add operands to leader (deduplicated).
-        // leaderExisting is shared across all ClassOps merging into the same
-        // leader.
-        auto [it, inserted] = leaderExisting.try_emplace(leader.getOperation());
-        if (inserted)
-          it->second.insert(leader.getInputs().begin(),
-                            leader.getInputs().end());
-        auto &existing = it->second;
-        auto &pending = leaderNewOperands[leader]; // Note: this access may make empty lists
-
-        for (Value operand : c.getInputs()) {
-          assert(
-              !operand.getDefiningOp() ||
-              !llvm::dyn_cast<equivalence::ClassOp>(operand.getDefiningOp()));
-          if (existing.insert(operand).second)
-            pending.push_back(operand);
-        }
-
-        // update all users of c
-        rewriter.replaceAllUsesWith(c.getResult(), leader.getResult());
-
-        // remove c from IR and queue for erasure
-        c.getInputsMutable().clear();
-        c.getLeaderMutable().clear();
-        c->remove();
-        pendingErase.push_back(c);
-      }
-      todo.insert(leader.getOperation());
-    }
-
-    // Batched append.
-    for (auto &[leaderClass, operands] : leaderNewOperands) {
-      if (!operands.empty())
-        leaderClass.getInputsMutable().append(operands);
-    }
-
-    for (Operation *op : todo) {
-      if (!op || erasedOps.contains(op) || !op->getBlock())
-        continue;
-      if (auto c = llvm::dyn_cast<equivalence::ClassOp>(op)) {
-        if (c.getInputs().empty())
+  while (!sameScopeDups.empty() || !dirtyRoots.empty() || !worklist.empty()) {
+    // Collapse same-scope duplicate classes.
+    {
+      SmallVector<std::pair<equivalence::ClassOp, equivalence::ClassOp>> batch;
+      std::swap(batch, sameScopeDups);
+      for (auto [dup, survivor] : batch) {
+        if (isDead(dup.getOperation()) || isDead(survivor.getOperation()))
           continue;
+        fuseSameScope(rewriter, dup, survivor);
+        equivalence::ClassOp root = getCanonicalLeader(survivor);
+        dirtyRoots.insert(root);
+        worklist.push_back(survivor.getOperation());
       }
-      repair(rewriter, op);
+    }
+
+    // Collect the dirty components, re-canonicalized and deduped.
+    SmallVector<equivalence::ClassOp> roots;
+    {
+      SmallVector<equivalence::ClassOp> dirty(dirtyRoots.begin(),
+                                              dirtyRoots.end());
+      dirtyRoots.clear();
+      SmallPtrSet<Operation *, 16> seen;
+      for (equivalence::ClassOp d : dirty) {
+        if (isDead(d.getOperation()))
+          continue;
+        equivalence::ClassOp root = getCanonicalLeader(d);
+        if (isDead(root.getOperation()))
+          continue;
+        if (seen.insert(root.getOperation()).second)
+          roots.push_back(root);
+      }
+    }
+
+    // Per component (independent across components): reorient leaders outward,
+    // then push users down to the deepest visible rep.
+    for (equivalence::ClassOp root : roots) {
+      auto it = scopeReps.find(root);
+      if (it == scopeReps.end())
+        continue;
+      reorientComponent(it->second);
+
+      // Snapshot the rep list: retargetUsersToDeepest pushes to the worklist
+      // but does not mutate the row, yet repairs later might.
+      SmallVector<equivalence::ClassOp> reps(it->second.begin(),
+                                             it->second.end());
+      for (equivalence::ClassOp rep : reps) {
+        if (isDead(rep.getOperation()))
+          continue;
+        retargetUsersToDeepest(rep, it->second);
+      }
+    }
+
+    // Congruence repair.
+    {
+      llvm::SetVector<Operation *> todo;
+      SmallVector<Operation *> current;
+      std::swap(current, worklist);
+      for (Operation *op : current) {
+        if (isDead(op))
+          continue;
+        if (auto c = llvm::dyn_cast<equivalence::ClassOp>(op)) {
+          equivalence::ClassOp leader = getCanonicalLeader(c);
+          if (isDead(leader.getOperation()))
+            continue;
+          todo.insert(leader.getOperation());
+        } else {
+          // Non-ClassOp entries come from `mergeResults` / user retargeting:
+          // their users may have become identical and need deduplication.
+          todo.insert(op);
+        }
+      }
+      for (Operation *op : todo) {
+        if (isDead(op))
+          continue;
+        if (auto c = llvm::dyn_cast<equivalence::ClassOp>(op))
+          if (c.getInputs().empty())
+            continue;
+        repair(rewriter, op);
+      }
     }
   }
 
-  // Now that the worklist is fully drained, erase all dead eclasses that
-  // were deferred during classUnion.
+  // Now that everything has reached a fixpoint, erase the dead eclasses
+  // detached by `fuseSameScope`.
   SmallPtrSet<Operation *, 8> erased;
   for (equivalence::ClassOp dead : pendingErase) {
-    if (erased.insert(dead.getOperation()).second)
+    if (erased.insert(dead.getOperation()).second) {
+      forgetClass(dead);
       rewriter.eraseOp(dead);
+    }
   }
   pendingErase.clear();
 
+  LLVM_DEBUG(verifyIndex());
   return true;
 }
 

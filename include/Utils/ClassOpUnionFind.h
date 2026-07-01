@@ -17,6 +17,8 @@
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/SetVector.h"
+#include <utility>
 
 namespace mlir::ematch {
 
@@ -114,6 +116,21 @@ public:
   SmallVector<mlir::Operation *> worklist;
 
 private:
+  // Per-component scope index, keyed by the union-find root. Each row holds at
+  // most one ClassOp per scope (the reps); the keying root is the row's
+  // outermost entry. Rows are seeded lazily (see `rowFor`).
+  llvm::DenseMap<equivalence::ClassOp, SmallVector<equivalence::ClassOp>>
+      scopeReps;
+
+  // {dup, survivor} pairs that share a scope: dup is folded into survivor and
+  // erased during rebuild.
+  SmallVector<std::pair<equivalence::ClassOp, equivalence::ClassOp>>
+      sameScopeDups;
+
+  // Component roots touched since the last rebuild. Entries may go stale;
+  // rebuild re-canonicalizes and skips dead ops.
+  llvm::SetVector<equivalence::ClassOp> dirtyRoots;
+
   SmallVector<equivalence::ClassOp> pendingErase;
   SmallVector<std::pair<mlir::Value, mlir::Value>> pendingClassUnions;
 
@@ -121,6 +138,37 @@ private:
   // Since this only affects the union-by-rank heuristic, not correctness,
   // no special handling is required for deletes / modifies.
   llvm::DenseMap<mlir::Operation *, unsigned> unionRank;
+
+  // --- scope-index maintenance (see ClassOpUnionFind.cpp) ---
+
+  /// Return the row for `root`, seeding it with `{root}` on first access.
+  SmallVector<equivalence::ClassOp> &rowFor(equivalence::ClassOp root);
+
+  /// Merge `loseRoot`'s row into `winRoot`'s, queueing same-scope collisions
+  /// into `sameScopeDups`. `winRoot` must enclose every entry.
+  void mergeScopeRows(equivalence::ClassOp winRoot,
+                      equivalence::ClassOp loseRoot);
+
+  /// Drop every trace of `c` from the index. Harmless if `c` is absent.
+  void forgetClass(equivalence::ClassOp c);
+
+  /// Fold same-scope `dup` into `survivor` and detach `dup` for erasure.
+  void fuseSameScope(HashConsPatternRewriter &rewriter,
+                     equivalence::ClassOp dup, equivalence::ClassOp survivor);
+
+  /// Point every non-outermost rep's leader at its nearest enclosing rep in
+  /// `row`; clear the outermost rep's leader.
+  void reorientComponent(SmallVectorImpl<equivalence::ClassOp> &row);
+
+  /// Move every user of `rep` to the deepest rep in `row` that still encloses
+  /// the user, queueing affected classes for congruence repair.
+  void retargetUsersToDeepest(equivalence::ClassOp rep,
+                              SmallVectorImpl<equivalence::ClassOp> &row);
+
+#ifndef NDEBUG
+  /// Consistency check on `scopeReps`.
+  void verifyIndex();
+#endif
 };
 
 } // namespace mlir::ematch
