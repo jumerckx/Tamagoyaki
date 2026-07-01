@@ -91,7 +91,7 @@ bool encloses(ScopeId outer, ScopeId inner) {
 }
 
 /// Find the (unique) rep of `row` living in scope `s`, or null. Linear scan;
-/// rows have at most (#scopes) entries, so this beats a nested map.
+/// rows have at most #scopes entries, so this beats a nested map.
 equivalence::ClassOp *findByScope(SmallVectorImpl<equivalence::ClassOp> &row,
                                   ScopeId s) {
   for (auto &c : row)
@@ -252,33 +252,6 @@ equivalence::ClassOp mlir::ematch::getClassOp(mlir::PatternRewriter &rewriter,
   assert(!val.getDefiningOp() ||
          !dyn_cast<equivalence::ClassOp>(val.getDefiningOp()));
   builder.setInsertionPointAfterValue(val);
-
-  // E-classes must never live outside a graph. If `val` is defined outside
-  // every graph (e.g. a function argument), hoist its class to the start of the
-  // outermost graph enclosing a use so it shares that graph's scope.
-  Region *defRegion = val.getParentRegion();
-  bool definedInGraph = false;
-  for (Region *r = defRegion; r; r = r->getParentRegion())
-    if (r->getParentOp() && isa<equivalence::GraphOp>(r->getParentOp())) {
-      definedInGraph = true;
-      break;
-    }
-  if (!definedInGraph) {
-    equivalence::GraphOp target;
-    for (Operation *user : val.getUsers()) {
-      equivalence::GraphOp outer;
-      for (Operation *p = user; p; p = p->getParentOp())
-        if (auto g = dyn_cast<equivalence::GraphOp>(p))
-          outer = g; // keep walking: ends on the outermost enclosing graph.
-      if (outer) {
-        target = outer;
-        break;
-      }
-    }
-    if (target)
-      builder.setInsertionPointToStart(&target.getBody().front());
-  }
-
   auto classOp = equivalence::ClassOp::create(
       builder, val.getLoc(), TypeRange{val.getType()}, ValueRange{val},
       /*leader=*/Value{}, /*min_cost_index=*/nullptr);
@@ -310,11 +283,11 @@ void ClassOpUnionFind::classUnion(mlir::PatternRewriter &rewriter,
   // enclose `other`: on a cross-scope union the outer (smaller-depth) class
   // becomes the parent. Within one scope the direction is free, so we fall back
   // to union-by-rank.
-  unsigned dl = depthOf(leader);
-  unsigned dor = depthOf(other);
+  unsigned depthLeader = depthOf(leader);
+  unsigned depthOther = depthOf(other);
 
-  if (dl != dor) {
-    if (dl > dor)
+  if (depthLeader != depthOther) {
+    if (depthLeader > depthOther)
       std::swap(leader, other);
   } else {
     if (unionRank.lookup(leader.getOperation()) <
@@ -332,7 +305,7 @@ void ClassOpUnionFind::classUnion(mlir::PatternRewriter &rewriter,
   // Inner -> outer (or same-scope): SSA-valid, never inward.
   other.getLeaderMutable().assign(leader.getResult());
 
-  if (dl == dor) {
+  if (depthLeader == depthOther) {
     unsigned &rankLeader = unionRank[leader.getOperation()];
     if (rankLeader == unionRank.lookup(other.getOperation()))
       ++rankLeader;

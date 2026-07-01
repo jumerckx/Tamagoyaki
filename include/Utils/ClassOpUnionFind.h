@@ -18,7 +18,7 @@
 #include "mlir/Support/LLVM.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
-#include "llvm/ADT/SmallVector.h"
+#include <utility>
 
 namespace mlir::ematch {
 
