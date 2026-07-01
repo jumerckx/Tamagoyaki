@@ -5,6 +5,8 @@
 # ============================================================================
 add_mlir_dialect_library(MLIREquivalence
   EquivalenceDialect.cpp
+  EquivalenceTransforms.cpp
+  EquivalencePasses.cpp
   PARTIAL_SOURCES_INTENDED
 
   ADDITIONAL_HEADER_DIRS
@@ -42,6 +44,8 @@ add_mlir_library(TamagoyakiTiming
 # ============================================================================
 add_mlir_dialect_library(MLIREmatch
   EmatchDialect.cpp
+  EmatchTransforms.cpp
+  EmatchPasses.cpp
   Utils/MutableScopedHashTable.cpp
   Utils/GraphScope.cpp
   Utils/ClassOpUtils.cpp
