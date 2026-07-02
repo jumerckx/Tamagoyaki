@@ -135,9 +135,22 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
   if (listener)
     hashconsRewriter.setListener(listener);
 
+  // Saturation operates on the regions of equivalence.graph ops: each graph
+  // registers a hash-cons scope that matching and rewriting depend on. Without
+  // any graph (e.g. the user forgot to run equivalence-insert-graph), the
+  // operations have no scope and the rewriter would assert. Bail out gracefully
+  // instead, leaving the IR untouched.
+  bool hasGraph = false;
   irModule.walk([&](equivalence::GraphOp graph) {
+    hasGraph = true;
     uf.hashconsGraph(hashconsRewriter, graph);
   });
+  if (!hasGraph) {
+    LLVM_DEBUG(llvm::dbgs()
+               << "runSaturation: no equivalence.graph found; nothing to "
+                  "saturate. Did you run equivalence-insert-graph?\n");
+    return false;
+  }
 
   registerEmatchRewrites(pdlPattern);
   pdlPattern.registerRewriteFunction("union", [&uf, eagerRewrite](
