@@ -324,7 +324,7 @@ public:
   void runOnOperation() final {
     ModuleOp module = getOperation();
 
-    module->walk([&](mlir::func::FuncOp funcOp) {
+    module->walk([&](FunctionOpInterface funcOp) {
       if (failed(insertGraphInFunction(funcOp, false))) {
         signalPassFailure();
       }
@@ -744,7 +744,7 @@ void insertNestedGraphs(Region &region, bool insertSingleElementEqs) {
     insertNestedGraphsInBlock(block, insertSingleElementEqs);
 }
 
-LogicalResult insertGraphInFunction(func::FuncOp funcOp,
+LogicalResult insertGraphInFunction(FunctionOpInterface funcOp,
                                     bool insertSingleElementEqs) {
   TAMAGOYAKI_SCOPED_TIMER("insertGraphInFunction");
   Region &funcBody = funcOp.getFunctionBody();
