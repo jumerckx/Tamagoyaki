@@ -4,6 +4,7 @@
 #include "EquivalenceDialect.h"
 
 #include "mlir/Dialect/Func/IR/FuncOps.h"
+#include "mlir/Interfaces/FunctionInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "llvm/ADT/StringRef.h"
@@ -26,7 +27,7 @@ void insertNestedGraphs(Region &region, bool insertSingleElementEqs);
 /// Transform a function by wrapping its body in a GraphOp.
 /// If insertSingleElementEqs is true, all values are wrapped in ClassOps.
 /// Returns success if the transformation was successful.
-LogicalResult insertGraphInFunction(func::FuncOp funcOp,
+LogicalResult insertGraphInFunction(FunctionOpInterface funcOp,
                                     bool insertSingleElementEqs);
 
 /// The size of a GraphOp, expressed as the number of e-classes and e-nodes it
