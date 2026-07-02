@@ -23,7 +23,7 @@
 
 namespace mlir::ematch {
 
-class ClassOpUnionFind;
+class CongruenceEngine;
 
 /// Allocator type for hash consing
 using AllocatorTy = llvm::RecyclingAllocator<
@@ -72,15 +72,17 @@ public:
   /// Set the current node count
   void setNodeCount(uint64_t count) { nodeCount = count; }
 
-  /// Register the union-find so that congruences discovered while re-keying
-  /// modified ops (see `finalizeOpModification`) can be turned into unions.
-  void setUnionFind(ClassOpUnionFind *uf) { unionFind = uf; }
+  /// Register the congruence engine so that congruences discovered while
+  /// re-keying modified ops (see `finalizeOpModification`) can be turned into
+  /// unions.
+  void setEngine(CongruenceEngine *e) { engine = e; }
 
 private:
   ScopedMapTy hashcons;
 
-  /// Union-find used to reconcile congruences detected during op modification.
-  ClassOpUnionFind *unionFind = nullptr;
+  /// Congruence engine used to reconcile congruences detected during op
+  /// modification.
+  CongruenceEngine *engine = nullptr;
 
   /// Maps regions to their corresponding hash-cons scopes
   llvm::DenseMap<Region *, std::unique_ptr<ScopedMapTy::ScopeTy>> scopeMap;

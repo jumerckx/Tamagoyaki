@@ -1,4 +1,4 @@
-//===- ClassOpUnionFind.h - Union-find data structure for ClassOp -----*- C++
+//===- CongruenceEngine.h - Scope-aware e-graph congruence engine ---*- C++
 //-*-===//
 //
 // This file is licensed under the Apache License v2.0 with LLVM Exceptions.
@@ -6,46 +6,41 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
+//
+// `CongruenceEngine` drives equality saturation over an `equivalence.graph`:
+// it unions e-classes, hash-conses e-nodes, and rebuilds congruence to a
+// fixpoint. The union-find itself is not a standalone structure — it lives in
+// the IR as the `leader` operand chain of `equivalence.class` ops (path
+// compression happens in `getCanonicalLeader`, see ClassOpUtils.h).
+//
+// Layering:
+//   GraphScope       (pure scope-tree queries)
+//   ClassOpUtils     (stateless ClassOp/value helpers)
+//   ScopeRepIndex    (per-component scope-rep bookkeeping)
+//   CongruenceEngine (this file: worklist, rebuild, hash-cons + rewriter glue)
+//
+//===----------------------------------------------------------------------===//
 
-#ifndef EQUIVALENCE_SRC_UTILS_CLASSOPUNIONFIND_H
-#define EQUIVALENCE_SRC_UTILS_CLASSOPUNIONFIND_H
+#ifndef TAMAGOYAKI_SRC_UTILS_CONGRUENCEENGINE_H
+#define TAMAGOYAKI_SRC_UTILS_CONGRUENCEENGINE_H
 
 #include "EquivalenceDialect.h"
+#include "Utils/ClassOpUtils.h"
 #include "Utils/HashConsPatternRewriter.h"
+#include "Utils/ScopeRepIndex.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Support/LLVM.h"
-#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallVector.h"
 #include <utility>
 
 namespace mlir::ematch {
 
-/// Helper function to get all values from a ClassOp
-SmallVector<mlir::Value> getClassVals(mlir::PatternRewriter &rewriter,
-                                      mlir::Value val);
-
-/// Helper function to get the first value from a ClassOp
-mlir::Value getClassRepresentative(mlir::PatternRewriter &rewriter,
-                                   mlir::Value val);
-
-/// Follow the leader chain of a ClassOp to find the canonical leader,
-/// performing path compression along the way.
-equivalence::ClassOp getCanonicalLeader(equivalence::ClassOp classOp);
-
-/// Helper function to get the result of a ClassOp
-mlir::Value getClassResult(mlir::PatternRewriter &rewriter, mlir::Value val);
-
-SmallVector<Value> getClassResults(mlir::PatternRewriter &rewriter,
-                                   mlir::ValueRange vals);
-
-/// Helper function to get or create a ClassOp for a value
-equivalence::ClassOp getClassOp(mlir::PatternRewriter &rewriter,
-                                mlir::Value val);
-
-/// Union-find data structure for managing equivalence classes of ClassOp
-class ClassOpUnionFind {
+/// Scope-aware congruence engine for equality saturation over
+/// `equivalence.graph` e-graphs.
+class CongruenceEngine {
 public:
   /// Union two individual values
   void classUnion(mlir::PatternRewriter &rewriter, mlir::Value a,
@@ -116,16 +111,8 @@ public:
   SmallVector<mlir::Operation *> worklist;
 
 private:
-  // Per-component scope index, keyed by the union-find root. Each row holds at
-  // most one ClassOp per scope (the reps); the keying root is the row's
-  // outermost entry. Rows are seeded lazily (see `rowFor`).
-  llvm::DenseMap<equivalence::ClassOp, SmallVector<equivalence::ClassOp>>
-      scopeReps;
-
-  // {dup, survivor} pairs that share a scope: dup is folded into survivor and
-  // erased during rebuild.
-  SmallVector<std::pair<equivalence::ClassOp, equivalence::ClassOp>>
-      sameScopeDups;
+  /// Per-component scope-rep bookkeeping (see ScopeRepIndex.h).
+  ScopeRepIndex index;
 
   // Component roots touched since the last rebuild. Entries may go stale;
   // rebuild re-canonicalizes and skips dead ops.
@@ -134,43 +121,16 @@ private:
   SmallVector<equivalence::ClassOp> pendingErase;
   SmallVector<std::pair<mlir::Value, mlir::Value>> pendingClassUnions;
 
-  // Union by rank by out-of-IR lookup map.
-  // Since this only affects the union-by-rank heuristic, not correctness,
-  // no special handling is required for deletes / modifies.
-  llvm::DenseMap<mlir::Operation *, unsigned> unionRank;
-
-  // --- scope-index maintenance (see ClassOpUnionFind.cpp) ---
-
-  /// Return the row for `root`, seeding it with `{root}` on first access.
-  SmallVector<equivalence::ClassOp> &rowFor(equivalence::ClassOp root);
-
-  /// Merge `loseRoot`'s row into `winRoot`'s, queueing same-scope collisions
-  /// into `sameScopeDups`. `winRoot` must enclose every entry.
-  void mergeScopeRows(equivalence::ClassOp winRoot,
-                      equivalence::ClassOp loseRoot);
-
-  /// Drop every trace of `c` from the index. Harmless if `c` is absent.
-  void forgetClass(equivalence::ClassOp c);
-
   /// Fold same-scope `dup` into `survivor` and detach `dup` for erasure.
   void fuseSameScope(HashConsPatternRewriter &rewriter,
                      equivalence::ClassOp dup, equivalence::ClassOp survivor);
-
-  /// Point every non-outermost rep's leader at its nearest enclosing rep in
-  /// `row`; clear the outermost rep's leader.
-  void reorientComponent(SmallVectorImpl<equivalence::ClassOp> &row);
 
   /// Move every user of `rep` to the deepest rep in `row` that still encloses
   /// the user, queueing affected classes for congruence repair.
   void retargetUsersToDeepest(equivalence::ClassOp rep,
                               SmallVectorImpl<equivalence::ClassOp> &row);
-
-#ifndef NDEBUG
-  /// Consistency check on `scopeReps`.
-  void verifyIndex();
-#endif
 };
 
 } // namespace mlir::ematch
 
-#endif // EQUIVALENCE_SRC_UTILS_CLASSOPUNIONFIND_H
+#endif // TAMAGOYAKI_SRC_UTILS_CONGRUENCEENGINE_H
