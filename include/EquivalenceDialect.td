@@ -226,17 +226,36 @@ def EquivalenceRestoreInvariants: Pass<"equivalence-restore-invariants", "::mlir
 def EquivalenceSelectIlp: Pass<"equivalence-select-ilp", "::mlir::ModuleOp"> {
   let summary = "Selects e-nodes via an ILP formulation solved with HiGHS.";
   let description = [{
-    Selects one e-node per e-class by solving an integer linear program (ILP).
-    The ILP is solved with the HiGHS solver (https://highs.dev).
+    Selects one e-node per e-class by solving an integer linear program (ILP),
+    then records the choice as a `min_cost_index` attribute on each `ClassOp`
+    (the same form the greedy selector produces, so `equivalence-extract`
+    consumes it unchanged).
 
-    This pass is only available when tamagoyaki is configured with
+    The model is the exact acyclic-extraction ILP: a binary selection variable
+    per e-node, a binary activation variable per e-class, level variables that
+    forbid cyclic selections, and an objective that minimises the summed cost of
+    the selected e-nodes (shared sub-terms counted once). Roots (the values
+    yielded by the graph) are forced active. E-nodes carrying an
+    `equivalence.pruned` marker, or whose cost is unresolvable, are excluded from
+    consideration. When warm-starting is enabled the greedy heuristic supplies an
+    initial feasible solution to seed the solver.
+
+    The ILP is solved with the HiGHS solver (https://highs.dev). This pass is
+    only available when tamagoyaki is configured with
     `-DTAMAGOYAKI_ENABLE_HIGHS=ON` (the default). When HiGHS support is disabled
     at build time the pass is still registered but fails with a diagnostic when
     run.
-
-    NOTE: the full selection model is not yet implemented; this currently only
-    exercises the HiGHS integration.
   }];
+  let options = [
+    Option<"defaultCost", "default-cost", "int", "-1",
+           "Default local cost for e-nodes without a cost attribute (-1 means "
+           "the e-node is unresolvable and is pruned)">,
+    Option<"costAttributeName", "attribute-name", "std::string",
+           "\"equivalence.cost\"",
+           "Name of the attribute holding the local cost of an operation">,
+    Option<"warmStart", "warm-start", "bool", "true",
+           "Seed the solver with the greedy heuristic solution as a warm start">
+  ];
   let dependentDialects = ["::mlir::equivalence::EquivalenceDialect"];
 }
 
