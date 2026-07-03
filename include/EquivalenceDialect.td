@@ -223,6 +223,23 @@ def EquivalenceRestoreInvariants: Pass<"equivalence-restore-invariants", "::mlir
   let dependentDialects = ["::mlir::equivalence::EquivalenceDialect"];
 }
 
+def EquivalenceSelectIlp: Pass<"equivalence-select-ilp", "::mlir::ModuleOp"> {
+  let summary = "Selects e-nodes via an ILP formulation solved with HiGHS.";
+  let description = [{
+    Selects one e-node per e-class by solving an integer linear program (ILP).
+    The ILP is solved with the HiGHS solver (https://highs.dev).
+
+    This pass is only available when tamagoyaki is configured with
+    `-DTAMAGOYAKI_ENABLE_HIGHS=ON` (the default). When HiGHS support is disabled
+    at build time the pass is still registered but fails with a diagnostic when
+    run.
+
+    NOTE: the full selection model is not yet implemented; this currently only
+    exercises the HiGHS integration.
+  }];
+  let dependentDialects = ["::mlir::equivalence::EquivalenceDialect"];
+}
+
 def EquivalenceGraphSize: Pass<"equivalence-graph-size", "::mlir::ModuleOp"> {
   let summary = "Prints the size of each equivalence graph in the module.";
   let description = [{

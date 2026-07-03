@@ -1,6 +1,13 @@
 # this configures the adjacent lit.site.cfg.py.in
 set(TAMAGOYAKI_BINARY_DIR ${PROJECT_BINARY_DIR})
 set(TAMAGOYAKI_SOURCE_DIR ${PROJECT_SOURCE_DIR})
+# Expose the HiGHS build option to lit as the `highs` feature so tests that
+# exercise the equivalence-select-ilp pass are skipped when HiGHS is disabled.
+if(TAMAGOYAKI_ENABLE_HIGHS)
+  set(TAMAGOYAKI_HIGHS_ENABLED "True")
+else()
+  set(TAMAGOYAKI_HIGHS_ENABLED "False")
+endif()
 set(TAMAGOYAKI_TEST_LIT_CFG ${CMAKE_CURRENT_SOURCE_DIR}/lit.cfg.py)
 configure_lit_site_cfg(
   ${CMAKE_CURRENT_SOURCE_DIR}/lit.site.cfg.py.in

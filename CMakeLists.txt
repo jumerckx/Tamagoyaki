@@ -18,6 +18,17 @@ if(ENABLE_ASAN)
   add_link_options(-fsanitize=address)
 endif()
 
+# The ILP-based extraction pass (equivalence-select-ilp) depends on the HiGHS
+# solver. Building it is optional: with TAMAGOYAKI_ENABLE_HIGHS=OFF the pass is
+# still registered but fails at run time, so the whole project builds without
+# the HiGHS dependency.
+option(TAMAGOYAKI_ENABLE_HIGHS
+       "Build the HiGHS-backed ILP selection pass" ON)
+if(TAMAGOYAKI_ENABLE_HIGHS)
+  find_package(highs REQUIRED CONFIG)
+  message(STATUS "Using highs-config.cmake in: ${highs_DIR}")
+endif()
+
 find_package(MLIR REQUIRED CONFIG)
 
 message(STATUS "Using MLIRConfig.cmake in: ${MLIR_DIR}")
