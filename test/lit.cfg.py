@@ -53,3 +53,8 @@ tool_dirs = [config.tamagoyaki_tools_dir, config.llvm_tools_dir]
 tools = ["tamagoyaki-opt"]
 
 llvm_config.add_tool_substitutions(tools, tool_dirs)
+
+# Gate tests that need the HiGHS-backed passes (e.g. equivalence-select-ilp)
+# behind the `highs` feature, mirroring the TAMAGOYAKI_ENABLE_HIGHS build option.
+if getattr(config, "tamagoyaki_highs_enabled", False):
+    config.available_features.add("highs")

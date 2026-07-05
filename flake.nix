@@ -333,6 +333,9 @@
                     libmpc
                     zlib
                     libffi
+                    # HiGHS solver for the equivalence-select-ilp pass. Disable
+                    # with -DTAMAGOYAKI_ENABLE_HIGHS=OFF to drop this dependency.
+                    highs
                   ]);
 
                   cmakeFlags = [
@@ -430,6 +433,7 @@
                     "${pkgs.gmp.dev}"
                     "${pkgs.mpfr.dev}"
                     "${pkgs.libmpc}"
+                    "${pkgs.highs}"
                   ];
                   CMAKE_BUILD_TYPE = buildType;
                   LLVM_EXTERNAL_LIT = "${pkgs.lit}/bin/lit";

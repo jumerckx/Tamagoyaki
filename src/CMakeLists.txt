@@ -7,6 +7,7 @@ add_mlir_dialect_library(MLIREquivalence
   EquivalenceDialect.cpp
   EquivalenceTransforms.cpp
   EquivalencePasses.cpp
+  EquivalenceSelectIlp.cpp
   PARTIAL_SOURCES_INTENDED
 
   ADDITIONAL_HEADER_DIRS
@@ -24,6 +25,27 @@ add_mlir_dialect_library(MLIREquivalence
   MLIRRegisterAllPasses
   TamagoyakiTiming
 )
+
+# The equivalence-select-ilp pass optionally links the HiGHS solver. When
+# disabled the pass source still compiles (so the pass stays registered) but
+# its body reports that HiGHS support is unavailable.
+#
+# add_mlir_dialect_library compiles the sources through an object library
+# (obj.MLIREquivalence when one is created), so the HiGHS include dirs and the
+# TAMAGOYAKI_HIGHS_ENABLED define have to be attached to that object target to
+# reach EquivalenceSelectIlp.cpp; the actual link is on the wrapper target.
+if(TAMAGOYAKI_ENABLE_HIGHS)
+  set(_equivalence_obj_target MLIREquivalence)
+  if(TARGET obj.MLIREquivalence)
+    set(_equivalence_obj_target obj.MLIREquivalence)
+  endif()
+  target_compile_definitions(${_equivalence_obj_target}
+                             PRIVATE TAMAGOYAKI_HIGHS_ENABLED)
+  # Propagates HiGHS's INTERFACE_INCLUDE_DIRECTORIES to the source compilation.
+  target_link_libraries(${_equivalence_obj_target} PRIVATE highs::highs)
+  # Propagates the actual libhighs link requirement to consumers.
+  target_link_libraries(MLIREquivalence PRIVATE highs::highs)
+endif()
 
 # ============================================================================
 # Tamagoyaki Timing Library
