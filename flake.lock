@@ -20,17 +20,17 @@
     "llvm-project-src": {
       "flake": false,
       "locked": {
-        "lastModified": 1781820214,
-        "narHash": "sha256-1hZOr9QkQ73VBocgcldg3x9ZEGjAqXbP/6j0hQal8b8=",
-        "owner": "llvm",
+        "lastModified": 1783411967,
+        "narHash": "sha256-oIv6IctFjQHWQoK7jluin9iTCrDti4R57E78l8EIE+0=",
+        "owner": "jumerckx",
         "repo": "llvm-project",
-        "rev": "040a641988f6ed6f4fab250706ca2b620c1de2d8",
+        "rev": "e7168c97319949caf408047cdb957687e6751a5b",
         "type": "github"
       },
       "original": {
-        "owner": "llvm",
+        "owner": "jumerckx",
         "repo": "llvm-project",
-        "rev": "040a641988f6ed6f4fab250706ca2b620c1de2d8",
+        "rev": "e7168c97319949caf408047cdb957687e6751a5b",
         "type": "github"
       }
     },
