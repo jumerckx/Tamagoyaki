@@ -16,9 +16,9 @@
 // the pass still registers but fails at run time with a diagnostic, so builds
 // that disable the dependency stay linkable and the pass is simply unavailable.
 //
-// The formulation is the exact acyclic-extraction ILP (see e.g. the topological
-// levels model of Goharshady et al.), with pruning and warm-starting layered on
-// top:
+// The formulation is the basic formulation as described in: Yin et al.'s
+// "e-boost: Boosted E-Graph Extraction with Adaptive Heuristics and Exact
+// Solving."
 //
 //   minimise   sum_i c_i s_i                                            (5a)
 //   s.t.  sum_{i in C_j} s_i = A_j          for every e-class j         (5b)
@@ -30,7 +30,8 @@
 //         s_n <- s_n^heu   (warm start)                                 (5h)
 //         s_i, A_j, Opp_i in {0,1}                                      (5i)
 //
-// with M = |C| + 1 and level variables L_j in [0, |C|].
+// with M = |C| + 1 and level variables L_j in [0, |C|]. Note that currently,
+// no e-nodes are being pruned (unless their cost is negative from the start).
 //
 // Mapping onto the equivalence dialect:
 //   * Every `equivalence.class` op is an explicit e-class; every op result that
@@ -42,8 +43,7 @@
 //   * The children of an e-node are the e-classes of its operands.
 //   * Roots R are the classes of the values yielded by the graph.
 //
-// The solution is written back as `min_cost_index` on each explicit class op,
-// exactly as the greedy selector does, so `equivalence-extract` is unchanged.
+// The solution is written back as `min_cost_index`.
 //
 //===----------------------------------------------------------------------===//
 
@@ -55,12 +55,20 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/raw_ostream.h"
 #include <algorithm>
 #include <cstdint>
 #include <initializer_list>
 #include <limits>
+#include <lp_data/HConst.h>
+#include <lp_data/HStruct.h>
+#include <lp_data/HighsLp.h>
+#include <lp_data/HighsStatus.h>
+#include <mlir/IR/Builders.h>
+#include <mlir/IR/Value.h>
+#include <mlir/Support/WalkResult.h>
+#include <model/HighsModel.h>
 #include <string>
+#include <util/HighsInt.h>
 #include <utility>
 #include <vector>
 
