@@ -285,4 +285,32 @@ def ConvertMatchToEmatchPass : Pass<"convert-match-to-ematch", "::mlir::ModuleOp
     ];
 }
 
+def EmatchCombineMatchersPass
+    : Pass<"ematch-combine-matchers", "::mlir::ModuleOp"> {
+    let summary = "Combine match.matcher ops into one matcher ordered for e-matching.";
+    let description = [{
+        Like `match-combine-matchers`, this merges every `match.matcher` in a
+        module into a single combined matcher whose failure spine is materialized
+        as `match.try` / `match.switch_op_name` / `match.switch_type` regions.
+        Unlike `match-combine-matchers`, it orders predicates by
+        operation-navigation position rather than by frequency, so the combined
+        matcher does not blow up exponentially once
+        `convert-match-to-ematch` turns each `match.get_defining_op` into a loop
+        over an equivalence class.
+
+        Concretely, predicates are emitted in a DFS over the tree of navigated
+        operations: after navigating to an operation, every predicate that
+        depends only on the operations navigated so far (e.g. `match.has_name`,
+        `match.check_operand_count`) is emitted before the next
+        `match.get_defining_op`. This makes each discriminating name check a
+        branch point *above* the next defining-op navigation, so the later
+        e-class loops only run for candidates that already passed the earlier
+        checks.
+
+        Intended pipeline: `ematch-combine-matchers` then
+        `convert-match-to-ematch`.
+    }];
+    let dependentDialects = ["::mlir::match::MatchDialect"];
+}
+
 #endif // EMATCH_DIALECT
