@@ -258,7 +258,7 @@ def ConvertEmatchToPDLInterpPass : Pass<"convert-ematch-to-pdl-interp", "::mlir:
     let dependentDialects = ["::mlir::pdl_interp::PDLInterpDialect"];
 }
 
-def ConvertMatchToEmatchPass : Pass<"convert-match-to-ematch", "::mlir::ModuleOp"> {
+def EmatchifyPass : Pass<"ematchify", "::mlir::ModuleOp"> {
     let summary = "Insert ematch operations into a match/pdl_interp rewrite pattern "
                   "to enable e-matching.";
     let description = [{
@@ -295,7 +295,7 @@ def EmatchCombineMatchersPass
         Unlike `match-combine-matchers`, it orders predicates by
         operation-navigation position rather than by frequency, so the combined
         matcher does not blow up exponentially once
-        `convert-match-to-ematch` turns each `match.get_defining_op` into a loop
+        `ematchify` turns each `match.get_defining_op` into a loop
         over an equivalence class.
 
         Concretely, predicates are emitted in a DFS over the tree of navigated
@@ -308,7 +308,7 @@ def EmatchCombineMatchersPass
         checks.
 
         Intended pipeline: `ematch-combine-matchers` then
-        `convert-match-to-ematch`.
+        `ematchify`.
     }];
     let dependentDialects = ["::mlir::match::MatchDialect"];
 }

@@ -19,7 +19,7 @@
 // the operations navigated so far (`has_name`, `check_*`, ...) before descending
 // to the next `match.get_defining_op`. That makes every discriminating name
 // check a branch point *above* the next defining-op navigation, so once
-// `convert-match-to-ematch` turns each `get_defining_op` into a loop over an
+// `ematchify` turns each `get_defining_op` into a loop over an
 // equivalence class, the later loops only run for candidates that already passed
 // the earlier checks — avoiding the multiplicative blow-up the frequency
 // ordering produces.
@@ -263,7 +263,7 @@ LogicalResult Combiner::buildCanonicalPool() {
 namespace {
 
 /// A navigation op that introduces a fresh operation (an e-class loop after
-/// convert-match-to-ematch): `get_defining_op`, or `get_each` whose element type
+/// ematchify): `get_defining_op`, or `get_each` whose element type
 /// is an operation (upward `get_users`+`get_each` navigation).
 static bool isOperationDefiningNav(Operation *op) {
   if (isa<GetDefiningOpOp>(op))

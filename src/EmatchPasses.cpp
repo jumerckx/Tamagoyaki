@@ -66,7 +66,7 @@ namespace mlir::ematch {
 #define GEN_PASS_DEF_EMATCHSATURATEPASS
 #define GEN_PASS_DEF_EMATCHSATURATEBENCHMARKPASS
 #define GEN_PASS_DEF_CONVERTEMATCHTOPDLINTERPPASS
-#define GEN_PASS_DEF_CONVERTMATCHTOEMATCHPASS
+#define GEN_PASS_DEF_EMATCHIFYPASS
 #define GEN_PASS_DEF_APPLYPDLINTERPPASS
 #define GEN_PASS_DEF_EQUIVALENCEGRAPHCONTAINSPASS
 #include "EmatchPasses.h.inc"
@@ -352,7 +352,7 @@ struct ConvertEmatchToPDLInterpPass
 };
 
 //===----------------------------------------------------------------------===//
-// convert-match-to-ematch
+// ematchify
 //
 // The four rewrites are expressed as OpRewritePatterns driven by the greedy
 // rewrite driver. Each pattern is idempotent: it declines to match once its
@@ -469,10 +469,10 @@ struct DedupCreateOperationPattern
   }
 };
 
-struct ConvertMatchToEmatchPass
-    : public impl::ConvertMatchToEmatchPassBase<ConvertMatchToEmatchPass> {
-  using impl::ConvertMatchToEmatchPassBase<
-      ConvertMatchToEmatchPass>::ConvertMatchToEmatchPassBase;
+struct EmatchifyPass
+    : public impl::EmatchifyPassBase<EmatchifyPass> {
+  using impl::EmatchifyPassBase<
+      EmatchifyPass>::EmatchifyPassBase;
 
   void runOnOperation() final {
     RewritePatternSet patterns(&getContext());

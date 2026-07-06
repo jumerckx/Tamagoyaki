@@ -1,5 +1,5 @@
 // RUN: tamagoyaki-opt --ematch-combine-matchers %s | FileCheck %s
-// RUN: tamagoyaki-opt --ematch-combine-matchers --convert-match-to-ematch %s \
+// RUN: tamagoyaki-opt --ematch-combine-matchers --ematchify %s \
 // RUN:   | FileCheck %s --check-prefix=EMATCH
 
 // ===----------------------------------------------------------------------===//
@@ -13,7 +13,7 @@
 // name check on the first defining op becomes a branch (folded into a
 // `switch_op_name`) *above* the navigation to the second defining op.
 //
-// After convert-match-to-ematch, each `get_defining_op` becomes an e-class loop
+// After ematchify, each `get_defining_op` becomes an e-class loop
 // (`get_class_vals` + `get_each`); grouping the name check first means the
 // second loop runs only for candidates that already matched the first name —
 // avoiding the multiplicative blow-up.

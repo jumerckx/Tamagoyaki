@@ -1,7 +1,7 @@
-// RUN: tamagoyaki-opt --convert-match-to-ematch %s | FileCheck %s
+// RUN: tamagoyaki-opt --ematchify %s | FileCheck %s
 
 // ===----------------------------------------------------------------------===//
-// Test the convert-match-to-ematch pass.
+// Test the ematchify pass.
 //
 // The pass inserts the ematch operations required for e-matching into a
 // match-dialect matcher and its pdl_interp rewriter:
