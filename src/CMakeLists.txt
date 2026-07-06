@@ -86,6 +86,9 @@ add_mlir_dialect_library(MLIREmatch
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRRegisterAllDialects
+  MLIRMatchDialect
+  MLIRPDLDialect
+  MLIRPDLInterpDialect
   MLIREquivalence
   TamagoyakiTiming
 )

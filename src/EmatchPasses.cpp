@@ -23,6 +23,9 @@
 #include "TamagoyakiTiming.h"
 #include "Utils/ClassOpUtils.h"
 #include "Utils/HashConsPatternRewriter.h"
+#include "mlir/Dialect/Match/IR/Match.h"
+#include "mlir/Dialect/Match/IR/MatchOps.h"
+#include "mlir/Dialect/PDL/IR/PDLTypes.h"
 #include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -62,6 +65,7 @@ namespace mlir::ematch {
 #define GEN_PASS_DEF_EMATCHSATURATEPASS
 #define GEN_PASS_DEF_EMATCHSATURATEBENCHMARKPASS
 #define GEN_PASS_DEF_CONVERTEMATCHTOPDLINTERPPASS
+#define GEN_PASS_DEF_CONVERTMATCHTOEMATCHPASS
 #define GEN_PASS_DEF_APPLYPDLINTERPPASS
 #define GEN_PASS_DEF_EQUIVALENCEGRAPHCONTAINSPASS
 #include "EmatchPasses.h.inc"
@@ -344,6 +348,109 @@ struct ConvertEmatchToPDLInterpPass
 
     convertEmatchOpsToApplyRewrites(patternsModule);
   }
+};
+
+//===----------------------------------------------------------------------===//
+// convert-match-to-ematch
+//===----------------------------------------------------------------------===//
+
+/// Insert the ematch operations required for e-matching into a match-dialect
+/// matcher and its pdl_interp rewriter. See the pass description for the exact
+/// set of rewrites. Ops are collected before mutation so that newly inserted
+/// ops are not re-processed.
+void convertMatchToEmatch(Operation *root) {
+  MLIRContext *ctx = root->getContext();
+  OpBuilder builder(ctx);
+  auto valueTy = pdl::ValueType::get(ctx);
+  auto valueRangeTy = pdl::RangeType::get(valueTy);
+  auto operationTy = pdl::OperationType::get(ctx);
+
+  // Rule 1: every `match.get_result`, once unwrapped by a following
+  // `match.is_not_null`, is followed by `ematch.get_class_result` on the
+  // unwrapped value; downstream uses of that value use the class result.
+  SmallVector<match::GetResultOp> getResults;
+  root->walk([&](match::GetResultOp op) { getResults.push_back(op); });
+  for (match::GetResultOp op : getResults) {
+    // Locate the is_not_null that unwraps the optional result into a value.
+    match::IsNotNullOp unwrap;
+    for (Operation *user : op->getUsers())
+      if (auto inn = dyn_cast<match::IsNotNullOp>(user)) {
+        unwrap = inn;
+        break;
+      }
+    if (!unwrap)
+      continue;
+    Value bareVal = unwrap.getUnwrapped();
+    // get_class_result operates on a single value.
+    if (!isa<pdl::ValueType>(bareVal.getType()))
+      continue;
+    builder.setInsertionPointAfter(unwrap);
+    auto classResult =
+        GetClassResultOp::create(builder, unwrap.getLoc(), valueTy, bareVal);
+    bareVal.replaceAllUsesExcept(classResult.getResult(), classResult);
+  }
+
+  // Rule 2: `match.get_defining_op %x` navigates from the whole e-class of `%x`:
+  // its operand becomes `match.get_each(ematch.get_class_vals %x)`.
+  SmallVector<match::GetDefiningOpOp> definingOps;
+  root->walk([&](match::GetDefiningOpOp op) { definingOps.push_back(op); });
+  for (match::GetDefiningOpOp op : definingOps) {
+    Value x = op.getValue();
+    // get_class_vals expects a single value.
+    if (!isa<pdl::ValueType>(x.getType()))
+      continue;
+    builder.setInsertionPoint(op);
+    auto classVals =
+        GetClassValsOp::create(builder, op.getLoc(), valueRangeTy, x);
+    auto each = match::GetEachOp::create(builder, op.getLoc(), valueTy,
+                                         classVals.getResult());
+    op.getValueMutable().assign(each.getResult());
+  }
+
+  // Rule 3: every `pdl_interp.replace` becomes an `ematch.union` merging the
+  // replaced operation with its replacement values.
+  SmallVector<pdl_interp::ReplaceOp> replaceOps;
+  root->walk([&](pdl_interp::ReplaceOp op) { replaceOps.push_back(op); });
+  for (pdl_interp::ReplaceOp op : replaceOps) {
+    ValueRange repl = op.getReplValues();
+    // Nothing to merge with: drop the (erasing) replace rather than union.
+    if (repl.empty()) {
+      op.erase();
+      continue;
+    }
+    builder.setInsertionPoint(op);
+    Value rhs;
+    if (repl.size() == 1 && isa<pdl::RangeType>(repl[0].getType())) {
+      rhs = repl[0];
+    } else {
+      // union merges an operation with a single range of values; collect the
+      // replacement values into one range.
+      rhs = pdl_interp::CreateRangeOp::create(builder, op.getLoc(),
+                                              valueRangeTy, repl)
+                .getResult();
+    }
+    UnionOp::create(builder, op.getLoc(), op.getInputOp(), rhs);
+    op.erase();
+  }
+
+  // Rule 4: every `pdl_interp.create_operation` is followed by an
+  // `ematch.dedup`; its uses are redirected to the deduped operation.
+  SmallVector<pdl_interp::CreateOperationOp> createOps;
+  root->walk([&](pdl_interp::CreateOperationOp op) { createOps.push_back(op); });
+  for (pdl_interp::CreateOperationOp op : createOps) {
+    builder.setInsertionPointAfter(op);
+    auto dedup =
+        DedupOp::create(builder, op.getLoc(), operationTy, op.getResultOp());
+    op.getResultOp().replaceAllUsesExcept(dedup.getResultOp(), dedup);
+  }
+}
+
+struct ConvertMatchToEmatchPass
+    : public impl::ConvertMatchToEmatchPassBase<ConvertMatchToEmatchPass> {
+  using impl::ConvertMatchToEmatchPassBase<
+      ConvertMatchToEmatchPass>::ConvertMatchToEmatchPassBase;
+
+  void runOnOperation() final { convertMatchToEmatch(getOperation()); }
 };
 
 struct EquivalenceGraphContainsPass

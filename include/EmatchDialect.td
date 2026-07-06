@@ -258,4 +258,31 @@ def ConvertEmatchToPDLInterpPass : Pass<"convert-ematch-to-pdl-interp", "::mlir:
     let dependentDialects = ["::mlir::pdl_interp::PDLInterpDialect"];
 }
 
+def ConvertMatchToEmatchPass : Pass<"convert-match-to-ematch", "::mlir::ModuleOp"> {
+    let summary = "Insert ematch operations into a match/pdl_interp rewrite pattern "
+                  "to enable e-matching.";
+    let description = [{
+        This pass rewrites a `match`-dialect matcher together with its
+        `pdl_interp` rewriter so that matching and rewriting operate over the
+        equivalence classes of an e-graph rather than over concrete values and
+        operations. It performs four local insertions/replacements:
+
+        * Every `match.get_result` (unwrapped by a following `match.is_not_null`)
+          is followed by an `ematch.get_class_result` on the unwrapped value, and
+          downstream uses of the value are redirected to the class result.
+        * Every `match.get_defining_op %x` navigates from the whole equivalence
+          class of `%x` instead of just `%x`: its operand becomes
+          `match.get_each(ematch.get_class_vals %x)`.
+        * Every `pdl_interp.replace` becomes an `ematch.union` merging the
+          replaced operation with its replacement values.
+        * Every `pdl_interp.create_operation` is followed by an `ematch.dedup`
+          against the hashcons, and its uses are redirected to the deduped op.
+    }];
+    let dependentDialects = [
+        "::mlir::ematch::EmatchDialect",
+        "::mlir::match::MatchDialect",
+        "::mlir::pdl_interp::PDLInterpDialect",
+    ];
+}
+
 #endif // EMATCH_DIALECT
