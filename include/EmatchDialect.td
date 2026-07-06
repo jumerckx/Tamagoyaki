@@ -285,6 +285,17 @@ def EmatchifyPass : Pass<"ematchify", "::mlir::ModuleOp"> {
     ];
 }
 
+def ConvertEmatchToMatchPass : Pass<"convert-ematch-to-match", "::mlir::ModuleOp"> {
+    let summary = "Convert ematch operations to match.apply_native_constraint operations.";
+    let description = [{
+        This pass converts operations in the ematch dialect into
+        match.apply_native_constraint operations.
+    }];
+    let dependentDialects = [
+        "::mlir::match::MatchDialect",
+    ];
+}
+
 def EmatchCombineMatchersPass
     : Pass<"ematch-combine-matchers", "::mlir::ModuleOp"> {
     let summary = "Combine match.matcher ops into one matcher ordered for e-matching.";

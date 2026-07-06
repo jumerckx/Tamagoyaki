@@ -53,6 +53,7 @@
 #include <cstdint>
 #include <llvm/ADT/STLExtras.h>
 #include <map>
+#include <mlir/IR/TypeRange.h>
 #include <string>
 #include <utility>
 
@@ -66,6 +67,7 @@ namespace mlir::ematch {
 #define GEN_PASS_DEF_EMATCHSATURATEPASS
 #define GEN_PASS_DEF_EMATCHSATURATEBENCHMARKPASS
 #define GEN_PASS_DEF_CONVERTEMATCHTOPDLINTERPPASS
+#define GEN_PASS_DEF_CONVERTEMATCHTOMATCHPASS
 #define GEN_PASS_DEF_EMATCHIFYPASS
 #define GEN_PASS_DEF_APPLYPDLINTERPPASS
 #define GEN_PASS_DEF_EQUIVALENCEGRAPHCONTAINSPASS
@@ -339,15 +341,19 @@ struct ConvertEmatchToPDLInterpPass
       ConvertEmatchToPDLInterpPass>::ConvertEmatchToPDLInterpPassBase;
 
   void runOnOperation() final {
-    ModuleOp module = getOperation();
+    convertEmatchOpsToApplyRewrites(getOperation());
+  }
+};
 
-    ModuleOp patternsModule = module.lookupSymbol<ModuleOp>(
-        StringAttr::get(module->getContext(), "patterns"));
 
-    if (!patternsModule)
-      return;
+struct ConvertEmatchToMatchPass
+    : public impl::ConvertEmatchToMatchPassBase<
+          ConvertEmatchToMatchPass> {
+  using impl::ConvertEmatchToMatchPassBase<
+      ConvertEmatchToMatchPass>::ConvertEmatchToMatchPassBase;
 
-    convertEmatchOpsToApplyRewrites(patternsModule);
+  void runOnOperation() final {
+    convertEmatchOpsToMatchConstraints(getOperation());
   }
 };
 
