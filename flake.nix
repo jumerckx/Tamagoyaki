@@ -28,11 +28,11 @@
     };
 
     llvm-project-src = {
-      url = "github:llvm/llvm-project/b7152ff7026a05282b6ae91ccf150ede0217b08a";
+      url = "github:llvm/llvm-project/040a641988f6ed6f4fab250706ca2b620c1de2d8";
       flake = false;
     };
     circt-src = {
-      url = "github:llvm/circt/13a483ce96d6e020db9c7a70ae2971fb5a25134e";
+      url = "github:llvm/circt/af5369d7ea19dafe8a48d58fa6577e80cde0e883";
       flake = false;
     };
     rival3-src = {
