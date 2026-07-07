@@ -5,7 +5,7 @@
 //
 // The matcher-side e-class navigation helpers (get_class_vals,
 // get_class_representative, get_class_result, get_class_results) become
-// match.apply_native_constraint ops with the same name and signature, so a
+// match.apply_native_rewrite ops with the same name and signature, so a
 // match.matcher navigating equivalence classes can be lowered by
 // MatchToPDLInterp. The rewriter-side ops (union, dedup) live in pdl_interp
 // rewriters and are left untouched here.
@@ -21,7 +21,7 @@ module {
   // CHECK:         %[[DEDUP:.*]] = ematch.dedup %[[OP]]
   // CHECK:         %[[RES:.*]] = pdl_interp.get_results of %[[DEDUP]]
   // CHECK:         ematch.union %[[ROOT:.*]] : !pdl.operation, %[[RES]] : !pdl.range<value>
-  // CHECK-NOT:     match.apply_native_constraint
+  // CHECK-NOT:     match.apply_native_rewrite
   module @rewriters {
     pdl_interp.func @r(%root : !pdl.operation) {
       %t = pdl_interp.create_type f32
@@ -33,19 +33,19 @@ module {
     }
   }
 
-  // Matcher side: the get_class_* helpers become native constraints.
+  // Matcher side: the get_class_* helpers become native rewrites.
   //
   // CHECK-LABEL: match.matcher @m
   // CHECK-SAME:    root (%[[MROOT:.*]]: !pdl.operation)
   // CHECK:         %[[GR:.*]] = get_result 0 of %[[MROOT]]
   // CHECK:         %[[RV:.*]] = is_not_null %[[GR]]{{.*}} -> !pdl.value
-  // Rule 1 helper: get_class_result -> apply_native_constraint.
-  // CHECK-NEXT:    %[[CR:.*]] = apply_native_constraint "get_class_result"(%[[RV]] : !pdl.value) : !pdl.value
+  // Rule 1 helper: get_class_result -> apply_native_rewrite.
+  // CHECK-NEXT:    %[[CR:.*]] = apply_native_rewrite "get_class_result"(%[[RV]] : !pdl.value) : !pdl.value
   // CHECK-NOT:     ematch.get_class_result
   // CHECK:         %[[GO:.*]] = get_operand 0 of %[[MROOT]]
   // CHECK:         %[[OV:.*]] = is_not_null %[[GO]]{{.*}} -> !pdl.value
-  // Rule 2 helper: get_class_vals -> apply_native_constraint.
-  // CHECK-NEXT:    %[[CV:.*]] = apply_native_constraint "get_class_vals"(%[[OV]] : !pdl.value) : !pdl.range<value>
+  // Rule 2 helper: get_class_vals -> apply_native_rewrite.
+  // CHECK-NEXT:    %[[CV:.*]] = apply_native_rewrite "get_class_vals"(%[[OV]] : !pdl.value) : !pdl.range<value>
   // CHECK-NOT:     ematch.get_class_vals
   // CHECK:         %[[EACH:.*]] = get_each %[[CV]] : !pdl.range<value> -> !pdl.value
   // CHECK:         equal %[[CR]], %[[OV]] : !pdl.value
@@ -72,7 +72,7 @@ module {
 // applies deep inside the nesting.
 //
 // CHECK-LABEL: match.matcher @nested
-// CHECK:         apply_native_constraint "get_class_vals"({{.*}} : !pdl.value) : !pdl.range<value>
+// CHECK:         apply_native_rewrite "get_class_vals"({{.*}} : !pdl.value) : !pdl.range<value>
 // CHECK-NOT:     ematch.get_class_vals
 module {
   module @patterns {

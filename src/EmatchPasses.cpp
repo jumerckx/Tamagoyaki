@@ -353,7 +353,7 @@ struct ConvertEmatchToMatchPass
       ConvertEmatchToMatchPass>::ConvertEmatchToMatchPassBase;
 
   void runOnOperation() final {
-    convertEmatchOpsToMatchConstraints(getOperation());
+    convertEmatchOpsToMatchRewrites(getOperation());
   }
 };
 
