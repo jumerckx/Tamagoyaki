@@ -296,8 +296,8 @@ def EmatchifyPass : Pass<"ematchify", "::mlir::ModuleOp"> {
 def ConvertEmatchToMatchPass : Pass<"convert-ematch-to-match", "::mlir::ModuleOp"> {
     let summary = "Convert ematch operations to match.apply_native_rewrite operations.";
     let description = [{
-        This pass converts operations in the ematch dialect into
-        match.apply_native_rewrite operations.
+        This pass converts operations in the ematch dialect into match.apply_native_rewrite
+        operations. It only considers ematch operations within match.matcher parent operations.
     }];
     let dependentDialects = [
         "::mlir::match::MatchDialect",

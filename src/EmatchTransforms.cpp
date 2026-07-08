@@ -88,6 +88,8 @@ struct EmatchToApplyNativeRewritePattern : public OpRewritePattern<OpTy> {
 
   LogicalResult matchAndRewrite(OpTy op,
                                 PatternRewriter &rewriter) const final {
+    if (!op->template getParentOfType<match::MatcherOp>())
+      return failure();
     StringRef name = op->getName().stripDialect();
     rewriter.replaceOpWithNewOp<match::ApplyNativeRewriteOp>(
         op, op->getResultTypes(), name, op->getOperands());
