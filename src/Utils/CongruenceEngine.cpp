@@ -27,7 +27,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include <cassert>
-#include <cstddef>
+#include <mlir/IR/Builders.h>
 #include <utility>
 
 #define DEBUG_TYPE "ematch"

@@ -16,11 +16,12 @@
 #include "EquivalenceDialect.h"
 #include "EquivalenceUtils.h"
 
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/Support/raw_ostream.h"
 #include <cstdint>
+#include <mlir/IR/Block.h>
+#include <mlir/Interfaces/FunctionInterfaces.h>
 #include <string>
 
 using namespace mlir;

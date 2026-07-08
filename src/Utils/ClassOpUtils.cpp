@@ -12,8 +12,12 @@
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/TypeRange.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/Support/Casting.h"
 #include <cassert>
+#include <llvm/ADT/SmallVector.h>
+#include <mlir/IR/PatternMatch.h>
+#include <mlir/IR/Value.h>
+#include <mlir/IR/ValueRange.h>
+#include <mlir/Support/LLVM.h>
 
 using namespace mlir;
 using namespace mlir::ematch;

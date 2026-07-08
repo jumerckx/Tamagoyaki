@@ -15,9 +15,8 @@
 #include "EmatchDialect.h"
 
 #include "mlir/IR/DialectImplementation.h"
-#include "mlir/IR/MLIRContext.h"
 #include "mlir/Support/LLVM.h"
-#include "llvm/ADT/StringRef.h"
+#include <mlir/IR/Types.h>
 
 using namespace mlir;
 using namespace mlir::ematch;
