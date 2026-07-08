@@ -277,10 +277,18 @@ def EmatchifyPass : Pass<"ematchify", "::mlir::ModuleOp"> {
           replaced operation with its replacement values.
         * Every `pdl_interp.create_operation` is followed by an `ematch.dedup`
           against the hashcons, and its uses are redirected to the deduped op.
+        * Every `match.get_operand` value (unwrapped by `match.is_not_null`)
+          forwarded to a `match.success` is wrapped in an
+          `ematch.get_class_representative`, so the rewriter receives a
+          representative of the operand's equivalence class rather than the
+          concrete matched value.
+        * In the pdl_interp rewriters, the `get_class_representative` applied to
+          !pdl.value arguments at every call site is undone by a
+          ematch.get_class_result. This operation is also inserted around every
+          pdl_interp.get_result.
     }];
     let dependentDialects = [
         "::mlir::ematch::EmatchDialect",
-        "::mlir::match::MatchDialect",
         "::mlir::pdl_interp::PDLInterpDialect",
     ];
 }

@@ -12,28 +12,38 @@
 //   * pdl_interp.replace becomes ematch.union;
 //   * pdl_interp.create_operation is followed by ematch.dedup, and its uses
 //     take the deduped op.
+//   * a get_operand value forwarded to match.success is wrapped in
+//     ematch.get_class_representative.
 // ===----------------------------------------------------------------------===//
 
 module {
-  // Rewriter side: rules 3 (replace -> union) and 4 (create_operation -> dedup).
+  // Rewriter side: rules 3 (replace -> union), 4 (create_operation -> dedup),
+  // 6 (value arg -> get_class_result) and 7 (get_result -> get_class_result).
   //
   // CHECK-LABEL: pdl_interp.func @r
-  // CHECK-SAME:    (%[[ROOT:.*]]: !pdl.operation)
+  // CHECK-SAME:    (%[[ROOT:.*]]: !pdl.operation, %[[ARG:.*]]: !pdl.value)
+  // Rule 6: the value argument is unwrapped into its e-class at function entry.
+  // CHECK-NEXT:    %[[CA:.*]] = ematch.get_class_result %[[ARG]]
   // CHECK:         %[[T:.*]] = pdl_interp.create_type f32
-  // CHECK:         %[[OP:.*]] = pdl_interp.create_operation "arith.constant"
-  // Rule 4: dedup follows create_operation, and get_results consumes the dedup.
+  // Rule 6: the constructed op references the class result, not the raw arg.
+  // CHECK:         %[[OP:.*]] = pdl_interp.create_operation "math.tan"(%[[CA]] : !pdl.value)
+  // Rule 4: dedup follows create_operation, and get_result consumes the dedup.
   // CHECK-NEXT:    %[[DEDUP:.*]] = ematch.dedup %[[OP]]
-  // CHECK-NEXT:    %[[RES:.*]] = pdl_interp.get_results of %[[DEDUP]] : !pdl.range<value>
+  // CHECK-NEXT:    %[[RES:.*]] = pdl_interp.get_result 0 of %[[DEDUP]]
+  // Rule 7: get_result is mapped into its e-class before being used.
+  // CHECK-NEXT:    %[[CR:.*]] = ematch.get_class_result %[[RES]]
+  // CHECK-NEXT:    %[[RANGE:.*]] = pdl_interp.create_range %[[CR]] : !pdl.value
   // Rule 3: replace becomes a union of the root op with its replacement range.
-  // CHECK-NEXT:    ematch.union %[[ROOT]] : !pdl.operation, %[[RES]] : !pdl.range<value>
+  // CHECK-NEXT:    ematch.union %[[ROOT]] : !pdl.operation, %[[RANGE]] : !pdl.range<value>
   // CHECK-NOT:     pdl_interp.replace
   // CHECK:         pdl_interp.finalize
   module @rewriters {
-    pdl_interp.func @r(%root : !pdl.operation) {
+    pdl_interp.func @r(%root : !pdl.operation, %arg : !pdl.value) {
       %t = pdl_interp.create_type f32
-      %op = pdl_interp.create_operation "arith.constant" -> (%t : !pdl.type)
-      %res = pdl_interp.get_results of %op : !pdl.range<value>
-      pdl_interp.replace %root with (%res : !pdl.range<value>)
+      %op = pdl_interp.create_operation "math.tan"(%arg : !pdl.value) -> (%t : !pdl.type)
+      %res = pdl_interp.get_result 0 of %op
+      %range = pdl_interp.create_range %res : !pdl.value
+      pdl_interp.replace %root with (%range : !pdl.range<value>)
       pdl_interp.finalize
     }
   }
@@ -56,7 +66,10 @@ module {
   // CHECK:         is_not_null %[[DEF]]
   // The equality now compares the class result (rule 1) against the raw operand.
   // CHECK:         equal %[[CR]], %[[OV]] : !pdl.value
-  // CHECK:         success @rewriters::@r
+  // Rule 5: the operand value forwarded to success becomes its class representative,
+  // while the operand's other (matcher-side) uses keep the raw value.
+  // CHECK:         %[[REP:.*]] = ematch.get_class_representative %[[OV]]
+  // CHECK:         success @rewriters::@r benefit(1) (%[[MROOT]], %[[REP]] : !pdl.operation, !pdl.value)
   match.matcher @m root(%root : !pdl.operation) {
     match.has_name %root, "arith.addf"
     %r0 = match.get_result 0 of %root : !match.optional<!pdl.value>
@@ -66,6 +79,6 @@ module {
     %d = match.get_defining_op of %ov : !pdl.value -> !match.optional<!pdl.operation>
     %dop = match.is_not_null %d : !match.optional<!pdl.operation> -> !pdl.operation
     match.equal %v, %ov : !pdl.value
-    match.success @rewriters::@r benefit(1) (%root : !pdl.operation)
+    match.success @rewriters::@r benefit(1) (%root, %ov : !pdl.operation, !pdl.value)
   }
 }

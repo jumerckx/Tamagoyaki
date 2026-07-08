@@ -359,10 +359,7 @@ struct ConvertEmatchToMatchPass
 
 //===----------------------------------------------------------------------===//
 // ematchify
-//
-// The four rewrites are expressed as OpRewritePatterns driven by the greedy
-// rewrite driver. Each pattern is idempotent: it declines to match once its
-// rewrite is already present, so the driver reaches a fixpoint.
+
 //===----------------------------------------------------------------------===//
 
 /// Rule 1: a `match.get_result` unwrapped by a `match.is_not_null` is followed
@@ -475,6 +472,104 @@ struct DedupCreateOperationPattern
   }
 };
 
+/// Rule 5: a `match.get_operand` value (unwrapped by a `match.is_not_null`)
+/// forwarded to a `match.success` is wrapped in an
+/// `ematch.get_class_representative`, so the rewriter receives a
+/// representative of the matched operand's e-class rather than the concrete
+/// matched value. Only the success operand is redirected; uses of the value in
+/// the matcher's own predicates are left untouched.
+struct InsertGetClassRepresentativePattern
+    : public OpRewritePattern<match::SuccessOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(match::SuccessOp op,
+                                PatternRewriter &rewriter) const final {
+    rewriter.setInsertionPoint(op);
+    // Reuse a single representative per distinct value in this success op.
+    llvm::DenseMap<Value, Value> representatives;
+    bool changed = false;
+    for (OpOperand &operand : op->getOpOperands()) {
+      Value input = operand.get();
+      // get_class_representative operates on a single value.
+      if (!isa<pdl::ValueType>(input.getType()))
+        continue;
+      // Only values that unwrap a get_operand are class-mapped.
+      // Once mapped, the operand points at the representative (not an
+      // is_not_null), so this check also gives the pattern its fixpoint.
+      auto unwrap = input.getDefiningOp<match::IsNotNullOp>();
+      if (!unwrap ||
+          !unwrap.getOptionalValue().getDefiningOp<match::GetOperandOp>())
+        continue;
+
+      Value &rep = representatives[input];
+      if (!rep)
+        rep = GetClassRepresentativeOp::create(rewriter, op.getLoc(),
+                                               input.getType(), input)
+                  .getResult();
+      rewriter.modifyOpInPlace(op, [&] { operand.set(rep); });
+      changed = true;
+    }
+    return success(changed);
+  }
+};
+
+/// Rule 6: in a rewriter, every `!pdl.value` block argument is a representative
+/// of a matched operand's e-class (produced by rule 5 on the matcher side). It
+/// is unwrapped to a concrete class member by an `ematch.get_class_result` so
+/// the constructed operations reference a concrete value; downstream uses take
+/// the class result. This is the rewriter-side inverse of rule 5.
+struct InsertGetClassResultForArgPattern
+    : public OpRewritePattern<pdl_interp::FuncOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(pdl_interp::FuncOp op,
+                                PatternRewriter &rewriter) const final {
+    Block &entry = op.getBody().front();
+    rewriter.setInsertionPointToStart(&entry);
+    bool changed = false;
+    for (BlockArgument arg : entry.getArguments()) {
+      // get_class_result operates on a single value.
+      if (!isa<pdl::ValueType>(arg.getType()))
+        continue;
+      // Idempotency: skip if the argument already feeds a class result.
+      if (llvm::any_of(arg.getUsers(),
+                       [](Operation *u) { return isa<GetClassResultOp>(u); }))
+        continue;
+
+      auto classResult =
+          GetClassResultOp::create(rewriter, op.getLoc(), arg.getType(), arg);
+      rewriter.replaceAllUsesExcept(arg, classResult.getResult(), classResult);
+      changed = true;
+    }
+    return success(changed);
+  }
+};
+
+/// Rule 7: in a rewriter, a `pdl_interp.get_result` yields a concrete result of
+/// a freshly built operation; it is followed by an `ematch.get_class_result`
+/// that maps it into its e-class, and downstream uses take the class result.
+/// This is the rewriter-side counterpart of rule 1.
+struct InsertGetClassResultForResultPattern
+    : public OpRewritePattern<pdl_interp::GetResultOp> {
+  using OpRewritePattern::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(pdl_interp::GetResultOp op,
+                                PatternRewriter &rewriter) const final {
+    Value result = op.getValue();
+    // Idempotency: skip if the result already feeds a class result.
+    if (llvm::any_of(result.getUsers(),
+                     [](Operation *u) { return isa<GetClassResultOp>(u); }))
+      return failure();
+
+    rewriter.setInsertionPointAfter(op);
+    auto classResult =
+        GetClassResultOp::create(rewriter, op.getLoc(), result.getType(),
+                                 result);
+    rewriter.replaceAllUsesExcept(result, classResult.getResult(), classResult);
+    return success();
+  }
+};
+
 struct EmatchifyPass
     : public impl::EmatchifyPassBase<EmatchifyPass> {
   using impl::EmatchifyPassBase<
@@ -483,7 +578,10 @@ struct EmatchifyPass
   void runOnOperation() final {
     RewritePatternSet patterns(&getContext());
     patterns.add<InsertGetClassResultPattern, WrapGetDefiningOpPattern,
-                 ReplaceToUnionPattern, DedupCreateOperationPattern>(
+                 ReplaceToUnionPattern, DedupCreateOperationPattern,
+                 InsertGetClassRepresentativePattern,
+                 InsertGetClassResultForArgPattern,
+                 InsertGetClassResultForResultPattern>(
         &getContext());
     GreedyRewriteConfig config;
     config.enableConstantCSE(false);
