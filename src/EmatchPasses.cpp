@@ -48,7 +48,9 @@
 #include <cassert>
 #include <chrono>
 #include <cstdint>
+#include <llvm/ADT/STLExtras.h>
 #include <map>
+#include <mlir/IR/TypeRange.h>
 #include <string>
 #include <utility>
 

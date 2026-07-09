@@ -7,7 +7,10 @@
 //===----------------------------------------------------------------------===//
 
 #include "Utils/GraphScope.h"
-#include "llvm/Support/Casting.h"
+#include "EquivalenceDialect.h"
+#include <mlir/IR/Operation.h>
+#include <mlir/IR/Region.h>
+#include <mlir/Support/LLVM.h>
 
 using namespace mlir;
 using namespace mlir::ematch;

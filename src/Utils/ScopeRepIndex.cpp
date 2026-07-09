@@ -7,9 +7,11 @@
 //===----------------------------------------------------------------------===//
 
 #include "Utils/ScopeRepIndex.h"
+#include "EquivalenceDialect.h"
 #include "Utils/GraphScope.h"
 #include <cassert>
 #include <cstddef>
+#include <mlir/Support/LLVM.h>
 #include <utility>
 
 using namespace mlir;

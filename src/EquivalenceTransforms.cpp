@@ -20,9 +20,7 @@
 #include "EquivalenceDialect.h"
 #include "TamagoyakiTiming.h"
 #include "mlir/Analysis/TopologicalSortUtils.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
-#include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Matchers.h"
 #include "mlir/IR/TypeRange.h"
 #include "mlir/IR/Value.h"
@@ -32,7 +30,6 @@
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "mlir/Transforms/GreedyPatternRewriteDriver.h"
-#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
@@ -40,7 +37,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <string>
+#include <mlir/IR/Attributes.h>
+#include <mlir/IR/Location.h>
+#include <mlir/IR/OperationSupport.h>
+#include <mlir/Interfaces/FunctionInterfaces.h>
 #include <utility>
 
 using namespace mlir;
