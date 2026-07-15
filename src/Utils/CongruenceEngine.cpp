@@ -17,6 +17,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "vendor/mlir/SimpleOperationInfo.h"
 #include "llvm/ADT/STLExtras.h"
@@ -400,6 +401,10 @@ void CongruenceEngine::repair(HashConsPatternRewriter &rewriter,
         continue;
       }
     }
+    // Non-speculatable users are never hash-consed, so they must not be merged
+    // here either: collapsing two side-effecting users would drop side effects.
+    if (!mlir::isSpeculatable(op1))
+      continue;
     Operation *op2 = uniqueParents.lookup(op1);
 
     if (op2) {
