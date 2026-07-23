@@ -1,7 +1,7 @@
 // RUN: tamagoyaki-opt --ematch-saturate="max-iters=3" %s -allow-unregistered-dialect | FileCheck %s
 
 // A muli sits inside a nested graph and one of its operands (%arg0) is wrapped
-// by a class in the OUTER graph. The (synthetic) pattern below unions the
+// by a class in the OUTER graph. The pattern below unions the
 // inner muli's result with that outer operand, i.e. an equivalence that
 // crosses a graph-scope boundary. The union-find must:
 //   * keep every e-class inside a graph (never the func body),
@@ -54,7 +54,7 @@ module @patterns {
             %6 = pdl_interp.get_attribute "value" of %op
             pdl_interp.is_not_null %6 : !pdl.attribute -> ^bb14, ^bb_continue
         ^bb14:  // pred: ^bb13
-            pdl_interp.check_attribute %6 is 2 : i32 -> ^bb15, ^bb_continue
+            pdl_interp.check_attribute %6 is 1 : i32 -> ^bb15, ^bb_continue
         ^bb15:  // pred: ^bb14
             %orig_7 = pdl_interp.get_result 0 of %op
              
@@ -97,10 +97,10 @@ module @ir {
   func.func @nested(%arg0: i32) -> i32 {
     %0 = equivalence.graph -> (i32) {
       %xc = equivalence.class %arg0 : i32
-      %c2 = arith.constant 2 : i32
-      %c2c = equivalence.class %c2 : i32
+      %c1 = arith.constant 1 : i32
+      %c1c = equivalence.class %c1 : i32
       %inner = equivalence.graph -> (i32) {
-        %m = arith.muli %xc, %c2c : i32
+        %m = arith.muli %xc, %c1c : i32
         equivalence.yield %m : i32
       }
       %ic = equivalence.class %inner : i32
