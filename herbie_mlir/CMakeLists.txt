@@ -44,11 +44,20 @@ if(HERBIE_MLIR_BUILD_HERBIE)
     UPDATE_COMMAND ""
     SOURCE_DIR     ${CMAKE_CURRENT_BINARY_DIR}/herbie-src
     CONFIGURE_COMMAND ""
+    # Herbie's default `make install` target also builds `egglog-herbie`
+    # (`cargo install ... --branch main egglog-experimental`), the experimental
+    # egglog backend. The eval runs with default flags where `generate:egglog`
+    # is off (it is a debug flag), so it uses the egg backend and never invokes
+    # the egglog-experimental binary. Building it is not only unnecessary but
+    # fragile: the unpinned `cargo install` re-resolves transitive deps and
+    # currently fails to compile egglog ("enable syn's features=[\"full\"]").
+    # So we build only the egg backend and (re)install the Racket package,
+    # skipping the `egglog-herbie` target entirely.
     BUILD_COMMAND     ${CMAKE_COMMAND} -E env
                         "PLTADDONDIR=${HERBIE_RACKET_PREFIX}"
                         "DYLD_FALLBACK_LIBRARY_PATH=$ENV{DYLD_FALLBACK_LIBRARY_PATH}"
                         "PATH=${_RACKET_BIN_DIR}:$ENV{PATH}"
-                        make -C <SOURCE_DIR> install
+                        make -C <SOURCE_DIR> clean egg-herbie update
     INSTALL_COMMAND   ""
     BUILD_IN_SOURCE   TRUE
     LOG_BUILD         TRUE
