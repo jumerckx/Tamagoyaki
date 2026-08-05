@@ -160,9 +160,17 @@
             fi
 
             echo "herbie-eval: running Snakemake pipeline (build_dir=$abs_build, cores=$cores) ..." >&2
+            # Deterministic PDF metadata: matplotlib stamps SOURCE_DATE_EPOCH
+            # into the PDF CreationDate instead of "now", so figures are
+            # byte-stable across runs. Fixed epoch (1980-01-01) by default.
+            export SOURCE_DATE_EPOCH="''${SOURCE_DATE_EPOCH:-315532800}"
             cd "$repo_root/herbie_mlir/eval"
-            exec snakemake -j"$cores" --config build_dir="$abs_build" "$@"
-          '';
+            # --resources bench=1 serialises the measured rules (timing +
+            # herbie) so concurrent jobs never contend for CPU; cheap prep and
+            # plotting still parallelise up to -j$cores. Baked in here so it
+            # can't be forgotten. Args pass through: `herbie-eval paper`, etc.
+            exec snakemake -j"$cores" --resources bench=1 --forceall \
+                --config build_dir="$abs_build" "$@"          '';
 
           # `nix run .#herbie-eval` re-enters the default dev shell (so racket,
           # rust, the Python env and the MLIR/rival env are present) and runs the
@@ -209,12 +217,6 @@
             '';
           };
 
-          # The whole Python toolchain, built from pyproject.toml + uv.lock via
-          # uv2nix. One source of truth shared with `uv`: the runtime deps
-          # (xdsl, numpy, pandas, matplotlib, snakemake), the dev tooling (lit,
-          # pre-commit, cmake-format) and the docs group (sphinx, furo, breathe,
-          # ...) all come from the lockfile. `deps.all` pulls in every
-          # optional-dependency group, so the docs build needs no separate env.
           python = pkgs.python313;
           uvWorkspace = uv2nix.lib.workspace.loadWorkspace { workspaceRoot = ./.; };
           uvOverlay = uvWorkspace.mkPyprojectOverlay {
@@ -241,7 +243,6 @@
                 uvOverlay
                 pyprojectOverrides
               ]);
-          # Single venv used by every shell that needs Python.
           pythonEnv = pythonSet.mkVirtualEnv "tamagoyaki-env" uvWorkspace.deps.all;
 
           mkVariant =
@@ -309,8 +310,6 @@
                     "-DMLIR_INCLUDE_TESTS=OFF"
                     "-DMLIR_INCLUDE_INTEGRATION_TESTS=OFF"
                     "-DMLIR_BUILD_MLIR_C_DYLIB=OFF"
-                    # Install FileCheck/count/not into $out/bin for our lit
-                    # suites. Defaults to OFF, so it must be set explicitly.
                     "-DLLVM_INSTALL_UTILS=ON"
                   ];
                   meta.platforms = lib.platforms.unix;
@@ -441,13 +440,6 @@
 
                   inputsFrom = [ tamagoyaki ];
 
-                  # mkShell does not propagate hardeningDisable from inputsFrom,
-                  # so re-apply the variant's hardening overrides here. Without
-                  # this, in-shell incremental builds (`ninja -C build`) get
-                  # nix's default flags even though `nix build .#tamagoyaki-*`
-                  # would not. In debug, dropping libcxxhardeningfast lets the
-                  # _LIBCPP_HARDENING_MODE_EXTENSIVE define that LLVM exports
-                  # (when assertions are on) apply without -Wmacro-redefined.
                   inherit (variantAttrs) hardeningDisable;
 
                   packages = [

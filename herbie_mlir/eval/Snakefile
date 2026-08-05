@@ -1,5 +1,8 @@
 import os
 import glob
+import subprocess
+import platform
+import datetime
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -17,6 +20,16 @@ if not BUILD_DIR.is_absolute():
 herbie_mlir_opt_path = str(BUILD_DIR / "bin" / "herbie-mlir-opt")
 herbie_racket_prefix = str(BUILD_DIR / "herbie_mlir" / "racket-pkgs")
 
+# ---------------------------------------------------------------------------
+# Evaluation parameters. Single source of truth: used in the rules *and*
+# recorded in the provenance manifest, and overridable for sensitivity runs
+# (e.g. `snakemake --config seed=7 max_nodes=8000`).
+# ---------------------------------------------------------------------------
+SEED             = int(config.get("seed", 42))
+MAX_SAT_ITERS    = int(config.get("max_saturation_iters", 20))
+MAX_NODES        = int(config.get("max_nodes", 4000))
+HERBIE_NUM_ITERS = int(config.get("herbie_num_iters", 1))
+
 # Get all benchmark names from fpcore files (sorted for reproducibility)
 benchmark_names = sorted([
     os.path.splitext(os.path.basename(f))[0]
@@ -33,14 +46,22 @@ HERBIE_EVAL_DIR = f"{OUT_DIR}/herbie_eval"
 PLOTS_DIR = f"{OUT_DIR}/plots"
 SATURATION_TIMING_DIR = f"{OUT_DIR}/saturation_timing"
 OPTIMIZE_TIMING_DIR = f"{OUT_DIR}/optimize_timing"
+PAPER_DIR = f"{OUT_DIR}/paper-artifact"
+
+PLOTS = [
+    f"{PLOTS_DIR}/accuracy_comparison.pdf",
+    f"{PLOTS_DIR}/accuracy_comparison_compact.pdf",
+    f"{PLOTS_DIR}/timing_comparison.pdf",
+    f"{PLOTS_DIR}/timing_comparison_no_pdl.pdf",
+    f"{PLOTS_DIR}/matcher_speedup.pdf",
+]
+
+# Cheap, non-measuring rules: never worth scheduling as separate cluster jobs.
+localrules: all, paper, provenance, clean, concatenate_merged_fpcores
 
 rule all:
     input:
-        f"{PLOTS_DIR}/accuracy_comparison.pdf",
-        f"{PLOTS_DIR}/accuracy_comparison_compact.pdf",
-        f"{PLOTS_DIR}/timing_comparison.pdf",
-        f"{PLOTS_DIR}/timing_comparison_no_pdl.pdf",
-        f"{PLOTS_DIR}/matcher_speedup.pdf",
+        PLOTS,
 
 # ============ Rules Processing Pipeline ============
 
@@ -48,7 +69,7 @@ rule convert_rules_to_pdl:
     output:
         f"{RULES_DIR}/rules_pdl.mlir"
     shell:
-        "uv run herbie-pdl ../rules.rkt > {output}"
+        "herbie-pdl ../rules.rkt > {output}"
 
 rule convert_pdl_to_pdl_interp:
     input:
@@ -56,7 +77,7 @@ rule convert_pdl_to_pdl_interp:
     output:
         f"{RULES_DIR}/rules_pdl_interp.mlir"
     shell:
-        "uv run xdsl-opt -p 'convert-pdl-to-pdl-interp{{optimize_for_eqsat=true}}' {input} -o {output}"
+        "xdsl-opt -p 'convert-pdl-to-pdl-interp{{optimize_for_eqsat=true}}' {input} -o {output}"
 
 rule convert_pdl_to_pdl_interp_individual:
     input:
@@ -64,7 +85,7 @@ rule convert_pdl_to_pdl_interp_individual:
     output:
         f"{RULES_DIR}/rules_pdl_interp_individual.mlir"
     shell:
-        "uv run xdsl-opt -p 'convert-pdl-to-pdl-interp{{optimize_for_eqsat=true convert-individually=true}}' {input} -o {output}"
+        "xdsl-opt -p 'convert-pdl-to-pdl-interp{{optimize_for_eqsat=true convert-individually=true}}' {input} -o {output}"
 
 # ============ Benchmark Processing Pipeline ============
 
@@ -74,8 +95,10 @@ rule fpcore_to_mlir:
     output:
         f"{MLIR_DIR}/{{benchmark}}.mlir"
     shell:
-        "uv run fpcore-mlir {input} > {output}"
+        "fpcore-mlir {input} > {output}"
 
+# Produces the optimized MLIR *and* its wall-clock measurement. bench=1 keeps
+# it from running concurrently with any other measured rule (see note below).
 rule optimize:
     input:
         mlir = f"{MLIR_DIR}/{{benchmark}}.mlir",
@@ -83,8 +106,10 @@ rule optimize:
     output:
         mlir = f"{OPTIMIZED_DIR}/{{benchmark}}.mlir",
         timing = f"{OPTIMIZE_TIMING_DIR}/{{benchmark}}.json"
+    resources:
+        bench = 1
     shell:
-        'mkdir -p {OPTIMIZE_TIMING_DIR} && {herbie_mlir_opt_path} -herbie-optimize="max-saturation-iters=20 max-nodes=4000 patterns-file={input.pdl_interp}" --remove-dead-values {input.mlir} -tamagoyaki-timing -tamagoyaki-timing-output=json 2> {output.timing} > {output.mlir}'
+        '{herbie_mlir_opt_path} -herbie-optimize="max-saturation-iters={MAX_SAT_ITERS} max-nodes={MAX_NODES} patterns-file={input.pdl_interp}" --remove-dead-values {input.mlir} -tamagoyaki-timing -tamagoyaki-timing-output=json 2> {output.timing} > {output.mlir}'
 
 # ============ Saturation Timing Pipeline ============
 
@@ -94,8 +119,10 @@ rule saturation_timing_joint:
         pdl_interp = f"{RULES_DIR}/rules_pdl_interp.mlir"
     output:
         f"{SATURATION_TIMING_DIR}/{{benchmark}}_joint.json"
+    resources:
+        bench = 1
     shell:
-        'mkdir -p {SATURATION_TIMING_DIR} && {herbie_mlir_opt_path} -equivalence-insert-graph -ematch-saturate="patterns-file={input.pdl_interp} max-iters=20 max-nodes=4000 eager-rewrite=false" {input.mlir} -tamagoyaki-timing -tamagoyaki-timing-output=json 2> {output} > /dev/null'
+        '{herbie_mlir_opt_path} -equivalence-insert-graph -ematch-saturate="patterns-file={input.pdl_interp} max-iters={MAX_SAT_ITERS} max-nodes={MAX_NODES} eager-rewrite=false" {input.mlir} -tamagoyaki-timing -tamagoyaki-timing-output=json 2> {output} > /dev/null'
 
 rule saturation_timing_individual:
     input:
@@ -103,8 +130,10 @@ rule saturation_timing_individual:
         pdl_interp = f"{RULES_DIR}/rules_pdl_interp_individual.mlir"
     output:
         f"{SATURATION_TIMING_DIR}/{{benchmark}}_individual.json"
+    resources:
+        bench = 1
     shell:
-        'mkdir -p {SATURATION_TIMING_DIR} && {herbie_mlir_opt_path} -equivalence-insert-graph -ematch-saturate="patterns-file={input.pdl_interp} max-iters=20 max-nodes=4000 eager-rewrite=false" {input.mlir} -tamagoyaki-timing -tamagoyaki-timing-output=json 2> {output} > /dev/null'
+        '{herbie_mlir_opt_path} -equivalence-insert-graph -ematch-saturate="patterns-file={input.pdl_interp} max-iters={MAX_SAT_ITERS} max-nodes={MAX_NODES} eager-rewrite=false" {input.mlir} -tamagoyaki-timing -tamagoyaki-timing-output=json 2> {output} > /dev/null'
 
 rule optimized_mlir_to_fpcore:
     input:
@@ -112,7 +141,7 @@ rule optimized_mlir_to_fpcore:
     output:
         f"{OPTIMIZED_FPCORE_DIR}/{{benchmark}}.fpcore"
     shell:
-        "uv run mlir-fpcore {input} > {output}"
+        "mlir-fpcore {input} > {output}"
 
 # ============ FPCore Merging Pipeline ============
 
@@ -123,7 +152,7 @@ rule insert_fpcore_alternatives:
     output:
         f"{FPCORE_MERGED_DIR}/{{benchmark}}.fpcore"
     shell:
-        "uv run insert-fpcore-alternative {input.original} {input.optimized} > {output}"
+        "insert-fpcore-alternative {input.original} {input.optimized} > {output}"
 
 rule concatenate_merged_fpcores:
     input:
@@ -135,13 +164,17 @@ rule concatenate_merged_fpcores:
 
 # ============ Herbie Evaluation Pipeline ============
 
+# Accuracy, not timing — but it is CPU-heavy, so it also takes bench=1 to keep
+# it from stealing cores from a concurrently-running measured rule.
 rule run_herbie_report:
     input:
         f"{OUT_DIR}/herbie_input.fpcore"
     output:
         directory(f"{HERBIE_EVAL_DIR}/herbie_report")
+    resources:
+        bench = 1
     shell:
-        'PLTADDONDIR={herbie_racket_prefix} racket -l herbie report --disable setup:preprocess --disable reduce:regimes --disable generate:taylor --disable generate:proofs  --platform math --num-iters 1 --seed 42 --threads 1 {input} {output}'
+        'PLTADDONDIR={herbie_racket_prefix} racket -l herbie report --disable setup:preprocess --disable reduce:regimes --disable generate:taylor --disable generate:proofs  --platform math --num-iters {HERBIE_NUM_ITERS} --seed {SEED} --threads 1 {input} {output}'
 
 # ============ Evaluation Export Pipeline ============
 
@@ -154,7 +187,7 @@ rule extract_evaluation_csv:
     output:
         f"{OUT_DIR}/evaluation.csv"
     shell:
-        "uv run extract-accuracies {input.report}/results.json {OPTIMIZE_TIMING_DIR} {SATURATION_TIMING_DIR} > {output}"
+        "extract-accuracies {input.report}/results.json {OPTIMIZE_TIMING_DIR} {SATURATION_TIMING_DIR} > {output}"
 
 # ============ Plotting Pipeline ============
 
@@ -164,7 +197,7 @@ rule generate_accuracy_plot:
     output:
         f"{PLOTS_DIR}/accuracy_comparison.pdf"
     shell:
-        "uv run plot-accuracies {input} -o {output}"
+        "plot-accuracies {input} -o {output}"
 
 rule generate_accuracy_plot_compact:
     input:
@@ -172,7 +205,7 @@ rule generate_accuracy_plot_compact:
     output:
         f"{PLOTS_DIR}/accuracy_comparison_compact.pdf"
     shell:
-        "uv run plot-accuracies {input} -o {output} --compact"
+        "plot-accuracies {input} -o {output} --compact"
 
 rule generate_matcher_speedup_plot:
     input:
@@ -180,7 +213,7 @@ rule generate_matcher_speedup_plot:
     output:
         f"{PLOTS_DIR}/matcher_speedup.pdf"
     shell:
-        "uv run plot-matcher-speedup {input} -o {output}"
+        "plot-matcher-speedup {input} -o {output}"
 
 rule generate_timing_plot:
     input:
@@ -188,7 +221,7 @@ rule generate_timing_plot:
     output:
         f"{PLOTS_DIR}/timing_comparison.pdf"
     shell:
-        "uv run plot-timing {input} -o {output}"
+        "plot-timing {input} -o {output}"
 
 rule generate_timing_plot_no_pdl:
     input:
@@ -196,7 +229,81 @@ rule generate_timing_plot_no_pdl:
     output:
         f"{PLOTS_DIR}/timing_comparison_no_pdl.pdf"
     shell:
-        "uv run plot-timing {input} -o {output} --no-pdl-loading"
+        "plot-timing {input} -o {output} --no-pdl-loading"
+
+# ============ Provenance + Paper Artifact ============
+
+# Records the environment behind a run so a figure can always be traced back to
+# a commit, a toolchain and a parameter set. Depends on evaluation.csv so it is
+# regenerated whenever the data is; delete out/provenance.txt to force a fresh
+# capture without recomputing.
+rule provenance:
+    input:
+        csv = f"{OUT_DIR}/evaluation.csv",
+    output:
+        f"{OUT_DIR}/provenance.txt",
+    run:
+        def cmd(args):
+            try:
+                r = subprocess.run(args, capture_output=True, text=True)
+                return (r.stdout or r.stderr).strip().splitlines()[0] if (r.stdout or r.stderr) else ""
+            except Exception as e:
+                return f"<unavailable: {e}>"
+
+        def cpu_model():
+            try:
+                for line in open("/proc/cpuinfo"):
+                    if line.startswith("model name"):
+                        return line.split(":", 1)[1].strip()
+            except Exception:
+                pass
+            return cmd(["sysctl", "-n", "machdep.cpu.brand_string"]) or "<unknown>"
+
+        git_rev = cmd(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"])
+        dirty = cmd(["git", "-C", str(REPO_ROOT), "status", "--porcelain"])
+
+        lines = [
+            "# Tamagoyaki / Herbie-MLIR evaluation provenance",
+            f"generated_utc:        {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
+            f"git_rev:              {git_rev}{'  (DIRTY WORKING TREE)' if dirty else ''}",
+            f"host:                 {platform.node()}",
+            f"platform:             {platform.platform()}",
+            f"cpu:                  {cpu_model()}  x{os.cpu_count()}",
+            f"python:               {platform.python_version()}",
+            f"snakemake:            {cmd(['snakemake', '--version'])}",
+            f"racket:               {cmd(['racket', '--version'])}",
+            f"herbie_mlir_opt:      {herbie_mlir_opt_path}",
+            f"herbie_mlir_opt_ver:  {cmd([herbie_mlir_opt_path, '--version'])}",
+            f"build_dir:            {BUILD_DIR}",
+            f"benchmarks:           {len(benchmark_names)}",
+            "",
+            "[parameters]",
+            f"seed:                 {SEED}",
+            f"max_saturation_iters: {MAX_SAT_ITERS}",
+            f"max_nodes:            {MAX_NODES}",
+            f"herbie_num_iters:     {HERBIE_NUM_ITERS}",
+            "",
+        ]
+        with open(output[0], "w") as fh:
+            fh.write("\n".join(lines))
+        print("\n".join(lines))
+
+# Everything a reviewer needs in one directory: the five figures, the raw CSV
+# and the manifest. `snakemake paper` builds it; the tarball is one file to ship.
+rule paper:
+    input:
+        plots = PLOTS,
+        csv = f"{OUT_DIR}/evaluation.csv",
+        provenance = f"{OUT_DIR}/provenance.txt",
+    output:
+        directory(PAPER_DIR),
+    shell:
+        r"""
+        mkdir -p {output}/plots
+        cp {input.csv} {input.provenance} {output}/
+        cp {input.plots} {output}/plots/
+        ( cd {OUT_DIR} && tar -czf paper-artifact.tar.gz paper-artifact )
+        """
 
 # ============ Utility Rules ============
 
