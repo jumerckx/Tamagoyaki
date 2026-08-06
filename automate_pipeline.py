@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import csv
 import string
 import subprocess
 import sys
@@ -36,7 +37,26 @@ def run_circt_synth(name, input_file, output_dir):
 def run_comparison(benchmark_filenames):
     # Paths
 
+    eclasses = {"rover": [], "multi": [], "multi_persist": []}
+    enodes = {"rover": [], "multi": [], "multi_persist": []}
+
+    # Extract graph stats from ematch debug output for any iteration.
+    iter_pat = re.compile(
+        r"Graph has\s+(\d+)\s+e-classes\s+and\s+(\d+)\s+e-nodes\s+\(iteration\s+(\d+)\)\."
+    )
+
+    def append_latest_iter_stats(name, stderr_text):
+        matches = list(iter_pat.finditer(stderr_text))
+        if matches:
+            best_match = max(matches, key=lambda m: int(m.group(3)))
+            eclasses[name].append(int(best_match.group(1)))
+            enodes[name].append(int(best_match.group(2)))
+        else:
+            eclasses[name].append(None)
+            enodes[name].append(None)
+
     root_dir = os.getcwd()
+    csv_path = os.path.join(root_dir, 'rover-mlir', 'results', 'egraph_comparisons.csv')
     for benchmark_filename in benchmark_filenames:
         # print(benchmark_filename)
         input_file = os.path.join(root_dir, 'rover-mlir', 'benchmarks', benchmark_filename)
@@ -55,6 +75,7 @@ def run_comparison(benchmark_filenames):
             f'--rover-saturate=patterns-file={rover_patterns} max-iters=4',
             '--rover-extract=delay',
             '--remove-dead-values',
+            '--debug-only=ematch',
             input_file,
             '--mlir-print-op-generic',
             '--mlir-timing',
@@ -69,6 +90,7 @@ def run_comparison(benchmark_filenames):
         rover_time = 0.0
         if match:
             rover_time = float(match.group(1))
+        append_latest_iter_stats("rover", rover.stderr)
         (rover_area, rover_delay) = run_circt_synth("rover-synth", rover_mlir, output_dir)
         
         # MULTI ----------------------------------------------------------------
@@ -77,6 +99,7 @@ def run_comparison(benchmark_filenames):
             os.path.join(root_dir, 'build', 'bin', 'rover-mlir-opt'),
             f'--rover-saturate=patterns-file={tamago_patterns} max-iters=4',
             '--remove-dead-values',
+            '--debug-only=ematch',
             input_file,
             '-o',
             os.path.join(output_dir, 'multi_synth_egraph.mlir'),
@@ -84,7 +107,7 @@ def run_comparison(benchmark_filenames):
             '--mlir-timing'
         ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
 
-        # print(multi.stderr)
+        append_latest_iter_stats("multi", multi.stderr)
 
         match = re.search(pattern, multi.stderr)  # Search in stderr instead of stdout
         multi_time = 0.0
@@ -104,19 +127,33 @@ def run_comparison(benchmark_filenames):
 
         # MULTI PERSIST --------------------------------------------------------
         start_time = time.time()
-        subprocess.run([
+        multi_persist = subprocess.run([
             os.path.join(root_dir, 'build', 'bin', 'rover-mlir-opt'),
             f'--rover-saturate=patterns-file={tamago_patterns} max-iters=4',
             '--remove-dead-values',
+            '--debug-only=ematch',
             input_file,
             '-o',
             os.path.join(output_dir, 'multi_persist_synth_egraph.mlir'),
             '--mlir-print-op-generic'
-        ], check=True)
+        ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        append_latest_iter_stats("multi_persist", multi_persist.stderr)
         
         persist_circt = subprocess.run(['circt-opt', '--canonicalize', '--allow-unregistered-dialect', '--comb-int-range-narrowing', os.path.join(output_dir, 'multi_persist_synth_egraph.mlir'), '-o', os.path.join(output_dir, 'multi_persist_synth_egraph_canon.mlir'), '--mlir-timing'], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         
         multi_persist_time = multi_time
+
+        multi_persist = subprocess.run([
+            os.path.join(root_dir, 'build', 'bin', 'rover-mlir-opt'),
+            f'--rover-saturate=patterns-file={tamago_patterns} max-iters=0',
+            '--remove-dead-values',
+            '--debug-only=ematch',
+            os.path.join(output_dir, 'multi_persist_synth_egraph.mlir'),
+            '-o',
+            os.path.join(output_dir, 'tmp.mlir'),
+            '--mlir-print-op-generic'
+        ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        append_latest_iter_stats("multi_persist", multi_persist.stderr)
 
         pattern = r'(\d+\.\d+)\s*\([^)]+\)\s*Canonicalizer'
         match = re.search(pattern, persist_circt.stderr)  # Search in stderr instead of stdout
@@ -163,6 +200,92 @@ def run_comparison(benchmark_filenames):
         multi_time = int(multi_time * 1000)
         multi_persist_time = int(multi_persist_time * 1000)
         print(f"{benchmark_filename} & {circt_area} & {circt_delay} & {rover_area} & {rover_delay}& {rover_time} & {multi_area} & {multi_delay} & {multi_time} & {multi_persist_area} & {multi_persist_delay} & {multi_persist_time} \\\\")
+
+    print("\nE-graph change summary at latest matched iteration")
+    print(
+        "benchmark & rover_eclasses & multi_eclasses & multi_persist_eclasses & "
+        "rover_to_multi_eclasses & multi_to_multi_persist_eclasses & "
+        "rover_enodes & multi_enodes & multi_persist_enodes & "
+        "rover_to_multi_enodes & multi_to_multi_persist_enodes"
+    )
+
+    csv_rows = []
+    for i, benchmark_filename in enumerate(benchmark_filenames):
+        rover_ec = eclasses["rover"][i]
+        multi_ec = eclasses["multi"][i]
+        persist_ec = eclasses["multi_persist"][i]
+        rover_en = enodes["rover"][i]
+        multi_en = enodes["multi"][i]
+        persist_en = enodes["multi_persist"][i]
+
+        delta_ec_rover_to_multi = (
+            multi_ec - rover_ec
+            if rover_ec is not None and multi_ec is not None
+            else "NA"
+        )
+        delta_ec_multi_to_persist = (
+            persist_ec - multi_ec
+            if multi_ec is not None and persist_ec is not None
+            else "NA"
+        )
+        delta_en_rover_to_multi = (
+            multi_en - rover_en
+            if rover_en is not None and multi_en is not None
+            else "NA"
+        )
+        delta_en_multi_to_persist = (
+            persist_en - multi_en
+            if multi_en is not None and persist_en is not None
+            else "NA"
+        )
+
+        rover_ec_str = rover_ec if rover_ec is not None else "NA"
+        multi_ec_str = multi_ec if multi_ec is not None else "NA"
+        persist_ec_str = persist_ec if persist_ec is not None else "NA"
+        rover_en_str = rover_en if rover_en is not None else "NA"
+        multi_en_str = multi_en if multi_en is not None else "NA"
+        persist_en_str = persist_en if persist_en is not None else "NA"
+
+        csv_rows.append([
+            benchmark_filename,
+            rover_ec_str,
+            multi_ec_str,
+            persist_ec_str,
+            delta_ec_rover_to_multi,
+            delta_ec_multi_to_persist,
+            rover_en_str,
+            multi_en_str,
+            persist_en_str,
+            delta_en_rover_to_multi,
+            delta_en_multi_to_persist,
+        ])
+
+        print(
+            f"{benchmark_filename} & {rover_ec_str} & {multi_ec_str} & {persist_ec_str} & "
+            f"{delta_ec_rover_to_multi} & {delta_ec_multi_to_persist} & "
+            f"{rover_en_str} & {multi_en_str} & {persist_en_str} & "
+            f"{delta_en_rover_to_multi} & {delta_en_multi_to_persist} \\\\" 
+        )
+
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+    with open(csv_path, 'w', newline='') as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow([
+            'benchmark',
+            'rover_eclasses',
+            'multi_eclasses',
+            'multi_persist_eclasses',
+            'rover_to_multi_eclasses',
+            'multi_to_multi_persist_eclasses',
+            'rover_enodes',
+            'multi_enodes',
+            'multi_persist_enodes',
+            'rover_to_multi_enodes',
+            'multi_to_multi_persist_enodes',
+        ])
+        writer.writerows(csv_rows)
+
+    print(f"Wrote e-graph comparison CSV: {csv_path}")
 
 if __name__ == "__main__":
 
