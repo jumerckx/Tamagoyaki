@@ -33,6 +33,8 @@ __pycache__
 /mlir/
 build/
 build-eval/
+# Herbie-MLIR evaluation results (`nix run .#herbie-eval`)
+/eval-out/
 .cache
 _deps
 CMakeFiles

@@ -15,7 +15,12 @@ add_subdirectory(test)
 
 # ============ Herbie (Racket) installation from source ============
 option(HERBIE_MLIR_BUILD_HERBIE "Clone and install Herbie from source (requires Racket and Rust)" OFF)
-set(HERBIE_GIT_TAG "main" CACHE STRING "Git tag/branch/commit of Herbie to use")
+# Keep this in sync with the `herbie-src` flake input: the flake builds the same
+# Herbie into a store path (the `herbie-racket` derivation) for the evaluation,
+# so a default of "main" here would silently give an in-tree build a different
+# Herbie than `nix run .#herbie-eval` measures.
+set(HERBIE_GIT_TAG "5500c9684c044bdaca03aee415605f9ac2f05687"
+    CACHE STRING "Git tag/branch/commit of Herbie to use")
 if(HERBIE_MLIR_BUILD_HERBIE)
   find_program(RACKET racket REQUIRED)
   find_program(RACO raco REQUIRED)
@@ -44,11 +49,20 @@ if(HERBIE_MLIR_BUILD_HERBIE)
     UPDATE_COMMAND ""
     SOURCE_DIR     ${CMAKE_CURRENT_BINARY_DIR}/herbie-src
     CONFIGURE_COMMAND ""
+    # Herbie's default `make install` target also builds `egglog-herbie`
+    # (`cargo install ... --branch main egglog-experimental`), the experimental
+    # egglog backend. The eval runs with default flags where `generate:egglog`
+    # is off (it is a debug flag), so it uses the egg backend and never invokes
+    # the egglog-experimental binary. Building it is not only unnecessary but
+    # fragile: the unpinned `cargo install` re-resolves transitive deps and
+    # currently fails to compile egglog ("enable syn's features=[\"full\"]").
+    # So we build only the egg backend and (re)install the Racket package,
+    # skipping the `egglog-herbie` target entirely.
     BUILD_COMMAND     ${CMAKE_COMMAND} -E env
                         "PLTADDONDIR=${HERBIE_RACKET_PREFIX}"
                         "DYLD_FALLBACK_LIBRARY_PATH=$ENV{DYLD_FALLBACK_LIBRARY_PATH}"
                         "PATH=${_RACKET_BIN_DIR}:$ENV{PATH}"
-                        make -C <SOURCE_DIR> install
+                        make -C <SOURCE_DIR> clean egg-herbie update
     INSTALL_COMMAND   ""
     BUILD_IN_SOURCE   TRUE
     LOG_BUILD         TRUE
@@ -57,11 +71,17 @@ if(HERBIE_MLIR_BUILD_HERBIE)
   # Pre-install rackunit-lib (not included in racket-minimal) before
   # the Herbie Makefile runs `raco pkg install ./egg-herbie`, which
   # would otherwise prompt interactively and fail on EOF.
+  #
+  # Only install it when it isn't already available: the full nixpkgs `racket`
+  # ships rackunit-lib at *installation* scope, and `raco pkg install` at the
+  # default *user* scope then aborts with "package is currently installed in a
+  # wider scope" rather than skipping. Guarding on whether `rackunit` already
+  # loads makes this work for both full racket and racket-minimal.
   ExternalProject_Add_Step(herbie install_racket_deps
     COMMAND ${CMAKE_COMMAND} -E env
               "PLTADDONDIR=${HERBIE_RACKET_PREFIX}"
               "PATH=${_RACKET_BIN_DIR}:$ENV{PATH}"
-              raco pkg install --auto --skip-installed rackunit-lib
+              sh -c "racket -e '(require rackunit)' >/dev/null 2>&1 || raco pkg install --auto --skip-installed rackunit-lib"
     DEPENDEES patch
     DEPENDERS build
     LOG TRUE
