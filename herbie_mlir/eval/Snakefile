@@ -54,24 +54,39 @@ benchmark_names = sorted([
     for f in glob.glob("fpcore/*.fpcore")
 ])
 
-OUT_DIR = "out"
-RULES_DIR = f"{OUT_DIR}/rules"
-MLIR_DIR = f"{OUT_DIR}/mlir"
-OPTIMIZED_DIR = f"{OUT_DIR}/optimized"
-OPTIMIZED_FPCORE_DIR = f"{OUT_DIR}/optimized_fpcore"
-FPCORE_MERGED_DIR = f"{OUT_DIR}/fpcore_merged"
-HERBIE_EVAL_DIR = f"{OUT_DIR}/herbie_eval"
-PLOTS_DIR = f"{OUT_DIR}/plots"
-SATURATION_TIMING_DIR = f"{OUT_DIR}/saturation_timing"
-OPTIMIZE_TIMING_DIR = f"{OUT_DIR}/optimize_timing"
-PAPER_DIR = f"{OUT_DIR}/paper-artifact"
+# ---------------------------------------------------------------------------
+# Output layout. Results go to a directory at the top level of the repository
+# (not under herbie_mlir/eval), overridable with `--config out_dir=...`; a
+# relative value is taken relative to the repo root.
+#
+# Every generated directory and file carries a two-digit stage prefix, so a
+# plain `ls` of the output tree reads in pipeline order rather than
+# alphabetically. Keep the numbers in step with the rule order below.
+# ---------------------------------------------------------------------------
+OUT_DIR = str(_resolve_dir(config.get("out_dir", "eval-out")))
+
+RULES_DIR             = f"{OUT_DIR}/01-rules"
+MLIR_DIR              = f"{OUT_DIR}/02-mlir"
+OPTIMIZED_DIR         = f"{OUT_DIR}/03-optimized"
+OPTIMIZE_TIMING_DIR   = f"{OUT_DIR}/04-optimize_timing"
+SATURATION_TIMING_DIR = f"{OUT_DIR}/05-saturation_timing"
+OPTIMIZED_FPCORE_DIR  = f"{OUT_DIR}/06-optimized_fpcore"
+FPCORE_MERGED_DIR     = f"{OUT_DIR}/07-fpcore_merged"
+HERBIE_INPUT          = f"{OUT_DIR}/08-herbie_input.fpcore"
+HERBIE_EVAL_DIR       = f"{OUT_DIR}/09-herbie_eval"
+EVALUATION_CSV        = f"{OUT_DIR}/10-evaluation.csv"
+PLOTS_DIR             = f"{OUT_DIR}/11-plots"
+PROVENANCE            = f"{OUT_DIR}/12-provenance.txt"
+PAPER_NAME            = "13-paper-artifact"
+PAPER_DIR             = f"{OUT_DIR}/{PAPER_NAME}"
+PAPER_TARBALL         = f"{OUT_DIR}/{PAPER_NAME}.tar.gz"
 
 PLOTS = [
-    f"{PLOTS_DIR}/accuracy_comparison.pdf",
-    f"{PLOTS_DIR}/accuracy_comparison_compact.pdf",
-    f"{PLOTS_DIR}/timing_comparison.pdf",
-    f"{PLOTS_DIR}/timing_comparison_no_pdl.pdf",
-    f"{PLOTS_DIR}/matcher_speedup.pdf",
+    f"{PLOTS_DIR}/1-accuracy_comparison.pdf",
+    f"{PLOTS_DIR}/2-accuracy_comparison_compact.pdf",
+    f"{PLOTS_DIR}/3-timing_comparison.pdf",
+    f"{PLOTS_DIR}/4-timing_comparison_no_pdl.pdf",
+    f"{PLOTS_DIR}/5-matcher_speedup.pdf",
 ]
 
 # Cheap, non-measuring rules: never worth scheduling as separate cluster jobs.
@@ -176,7 +191,7 @@ rule concatenate_merged_fpcores:
     input:
         expand(f"{FPCORE_MERGED_DIR}/{{benchmark}}.fpcore", benchmark=benchmark_names)
     output:
-        f"{OUT_DIR}/herbie_input.fpcore"
+        HERBIE_INPUT
     shell:
         "cat {input} > {output}"
 
@@ -186,7 +201,7 @@ rule concatenate_merged_fpcores:
 # it from stealing cores from a concurrently-running measured rule.
 rule run_herbie_report:
     input:
-        f"{OUT_DIR}/herbie_input.fpcore"
+        HERBIE_INPUT
     output:
         directory(f"{HERBIE_EVAL_DIR}/herbie_report")
     resources:
@@ -203,7 +218,7 @@ rule extract_evaluation_csv:
         timing_joint = expand(f"{SATURATION_TIMING_DIR}/{{benchmark}}_joint.json", benchmark=benchmark_names),
         timing_individual = expand(f"{SATURATION_TIMING_DIR}/{{benchmark}}_individual.json", benchmark=benchmark_names),
     output:
-        f"{OUT_DIR}/evaluation.csv"
+        EVALUATION_CSV
     shell:
         "extract-accuracies {input.report}/results.json {OPTIMIZE_TIMING_DIR} {SATURATION_TIMING_DIR} > {output}"
 
@@ -211,41 +226,41 @@ rule extract_evaluation_csv:
 
 rule generate_accuracy_plot:
     input:
-        f"{OUT_DIR}/evaluation.csv"
+        EVALUATION_CSV
     output:
-        f"{PLOTS_DIR}/accuracy_comparison.pdf"
+        PLOTS[0]
     shell:
         "plot-accuracies {input} -o {output}"
 
 rule generate_accuracy_plot_compact:
     input:
-        f"{OUT_DIR}/evaluation.csv"
+        EVALUATION_CSV
     output:
-        f"{PLOTS_DIR}/accuracy_comparison_compact.pdf"
+        PLOTS[1]
     shell:
         "plot-accuracies {input} -o {output} --compact"
 
 rule generate_matcher_speedup_plot:
     input:
-        f"{OUT_DIR}/evaluation.csv"
+        EVALUATION_CSV
     output:
-        f"{PLOTS_DIR}/matcher_speedup.pdf"
+        PLOTS[4]
     shell:
         "plot-matcher-speedup {input} -o {output}"
 
 rule generate_timing_plot:
     input:
-        f"{OUT_DIR}/evaluation.csv"
+        EVALUATION_CSV
     output:
-        f"{PLOTS_DIR}/timing_comparison.pdf"
+        PLOTS[2]
     shell:
         "plot-timing {input} -o {output}"
 
 rule generate_timing_plot_no_pdl:
     input:
-        f"{OUT_DIR}/evaluation.csv"
+        EVALUATION_CSV
     output:
-        f"{PLOTS_DIR}/timing_comparison_no_pdl.pdf"
+        PLOTS[3]
     shell:
         "plot-timing {input} -o {output} --no-pdl-loading"
 
@@ -257,9 +272,9 @@ rule generate_timing_plot_no_pdl:
 # capture without recomputing.
 rule provenance:
     input:
-        csv = f"{OUT_DIR}/evaluation.csv",
+        csv = EVALUATION_CSV,
     output:
-        f"{OUT_DIR}/provenance.txt",
+        PROVENANCE,
     run:
         def cmd(args):
             try:
@@ -294,6 +309,7 @@ rule provenance:
             f"herbie_mlir_opt_ver:  {cmd([herbie_mlir_opt_path, '--version'])}",
             f"build_dir:            {BUILD_DIR}",
             f"racket_prefix:        {RACKET_PREFIX}",
+            f"out_dir:              {OUT_DIR}",
             f"herbie:               {cmd(['env', f'PLTADDONDIR={herbie_racket_prefix}', 'racket', '-l', 'herbie', '--', '--version'])}",
             f"benchmarks:           {len(benchmark_names)}",
             "",
@@ -313,8 +329,8 @@ rule provenance:
 rule paper:
     input:
         plots = PLOTS,
-        csv = f"{OUT_DIR}/evaluation.csv",
-        provenance = f"{OUT_DIR}/provenance.txt",
+        csv = EVALUATION_CSV,
+        provenance = PROVENANCE,
     output:
         directory(PAPER_DIR),
     shell:
@@ -322,7 +338,7 @@ rule paper:
         mkdir -p {output}/plots
         cp {input.csv} {input.provenance} {output}/
         cp {input.plots} {output}/plots/
-        ( cd {OUT_DIR} && tar -czf paper-artifact.tar.gz paper-artifact )
+        ( cd {OUT_DIR} && tar -czf {PAPER_NAME}.tar.gz {PAPER_NAME} )
         """
 
 # ============ Utility Rules ============

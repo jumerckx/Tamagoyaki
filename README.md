@@ -114,10 +114,31 @@ herbie-eval                   # same thing; extra args pass through to snakemake
 herbie-eval -n                # dry-run the pipeline
 ```
 
-Knobs are environment variables: `BUILD_DIR` (default `build-eval`),
-`HERBIE_GIT_TAG`, `CORES` (default `1`), and `HERBIE_EVAL_BUILD_ONLY=1` to stop
-after the build. The `make eval` / `make eval-build` targets wrap the same
-command. Outputs (plots, `evaluation.csv`) land in `herbie_mlir/eval/out/`.
+Knobs are environment variables: `BUILD_DIR` (default `build-eval`), `OUT_DIR`
+(default `eval-out`, relative to the repo root), `HERBIE_GIT_TAG`, `CORES`
+(default `1`), and `HERBIE_EVAL_BUILD_ONLY=1` to stop after the build. The
+`make eval` / `make eval-build` targets wrap the same command.
+
+Outputs land in `eval-out/` at the top level of the checkout. Each generated
+directory and file is prefixed with its pipeline stage, so the tree reads in
+execution order:
+
+```
+eval-out/
+  01-rules/               PDL and PDL-interp rule sets
+  02-mlir/                benchmarks lowered from FPCore to MLIR
+  03-optimized/           after equality saturation
+  04-optimize_timing/     per-benchmark wall clock for the above
+  05-saturation_timing/   joint vs. individual matcher timings
+  06-optimized_fpcore/    optimized MLIR back to FPCore
+  07-fpcore_merged/       original + optimized alternative per benchmark
+  08-herbie_input.fpcore  all merged benchmarks, concatenated
+  09-herbie_eval/         Herbie report
+  10-evaluation.csv       accuracies + timings extracted from the report
+  11-plots/               the five figures
+  12-provenance.txt       commit, toolchain versions, parameters
+  13-paper-artifact/      figures + CSV + manifest (and .tar.gz alongside)
+```
 
 ## About
 

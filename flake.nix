@@ -607,12 +607,15 @@
                 text = ''
                   build_dir="''${BUILD_DIR:-${tamagoyaki-eval}}"
                   racket_prefix="''${RACKET_PREFIX:-${herbie-racket}}"
+                  # Relative values are resolved against the repo root by the
+                  # Snakefile, so results land at the top level of the checkout.
+                  out_dir="''${OUT_DIR:-eval-out}"
                   cores="''${CORES:-1}"
 
                   if ! repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
                     echo "herbie-eval: not inside a Tamagoyaki checkout." >&2
                     echo "  The pipeline reads herbie_mlir/eval/fpcore and writes" >&2
-                    echo "  herbie_mlir/eval/out, so run it from a clone." >&2
+                    echo "  the output directory ($out_dir), so run it from a clone." >&2
                     exit 1
                   fi
 
@@ -623,6 +626,7 @@
                   cd "$repo_root/herbie_mlir/eval"
                   echo "herbie-eval: build_dir=$build_dir" >&2
                   echo "herbie-eval: racket_prefix=$racket_prefix" >&2
+                  echo "herbie-eval: out_dir=$out_dir" >&2
                   # A second --config would *replace* ours rather than merge
                   # (argparse overwrites the dest), taking build_dir with it, so
                   # extra entries for sensitivity runs go through EXTRA_CONFIG:
@@ -630,7 +634,7 @@
                   # shellcheck disable=SC2086
                   exec snakemake -j"$cores" --forceall "$@" --resources bench=1 \
                     --config build_dir="$build_dir" racket_prefix="$racket_prefix" \
-                      ''${EXTRA_CONFIG:-}
+                      out_dir="$out_dir" ''${EXTRA_CONFIG:-}
                 '';
               };
 
