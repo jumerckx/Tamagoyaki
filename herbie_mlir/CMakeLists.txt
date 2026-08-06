@@ -15,7 +15,12 @@ add_subdirectory(test)
 
 # ============ Herbie (Racket) installation from source ============
 option(HERBIE_MLIR_BUILD_HERBIE "Clone and install Herbie from source (requires Racket and Rust)" OFF)
-set(HERBIE_GIT_TAG "main" CACHE STRING "Git tag/branch/commit of Herbie to use")
+# Keep this in sync with the `herbie-src` flake input: the flake builds the same
+# Herbie into a store path (the `herbie-racket` derivation) for the evaluation,
+# so a default of "main" here would silently give an in-tree build a different
+# Herbie than `nix run .#herbie-eval` measures.
+set(HERBIE_GIT_TAG "5500c9684c044bdaca03aee415605f9ac2f05687"
+    CACHE STRING "Git tag/branch/commit of Herbie to use")
 if(HERBIE_MLIR_BUILD_HERBIE)
   find_program(RACKET racket REQUIRED)
   find_program(RACO raco REQUIRED)

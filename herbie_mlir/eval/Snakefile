@@ -6,19 +6,37 @@ import datetime
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# Resolve the build directory.
-# Usage: snakemake --config build_dir=...
+# Resolve the two inputs the pipeline needs from outside this directory:
+# the compiler (herbie-mlir-opt) and the Racket prefix Herbie is installed into.
+#
+# Usage: snakemake --config build_dir=... [racket_prefix=...]
+#
+# They are separate config keys because they do not always come from the same
+# place. An in-tree CMake build configured with -DHERBIE_MLIR_BUILD_HERBIE=ON
+# produces both under one build directory, so `racket_prefix` can be left
+# unset. Under Nix they are two independent store paths (`nix run
+# .#herbie-eval` passes both), because a Racket prefix built by cloning Herbie
+# and resolving packages from the catalog cannot be produced inside the
+# network-less build sandbox -- it is its own derivation with pinned sources.
 # ---------------------------------------------------------------------------
 EVAL_DIR   = Path(workflow.basedir).resolve()
 REPO_ROOT  = EVAL_DIR.parents[1]
 
-_build_cfg = config.get("build_dir", "build-eval")
-BUILD_DIR  = Path(_build_cfg)
-if not BUILD_DIR.is_absolute():
-    BUILD_DIR = (REPO_ROOT / BUILD_DIR).resolve()
+def _resolve_dir(value):
+    """Interpret a config path relative to the repo root, as an absolute Path."""
+    path = Path(value)
+    return path if path.is_absolute() else (REPO_ROOT / path).resolve()
+
+BUILD_DIR = _resolve_dir(config.get("build_dir", "build-eval"))
+
+# Defaults to where the CMake build puts it (HERBIE_RACKET_PREFIX in
+# herbie_mlir/CMakeLists.txt), so a plain source build needs only build_dir.
+RACKET_PREFIX = _resolve_dir(
+    config.get("racket_prefix", BUILD_DIR / "herbie_mlir" / "racket-pkgs")
+)
 
 herbie_mlir_opt_path = str(BUILD_DIR / "bin" / "herbie-mlir-opt")
-herbie_racket_prefix = str(BUILD_DIR / "herbie_mlir" / "racket-pkgs")
+herbie_racket_prefix = str(RACKET_PREFIX)
 
 # ---------------------------------------------------------------------------
 # Evaluation parameters. Single source of truth: used in the rules *and*
@@ -275,6 +293,8 @@ rule provenance:
             f"herbie_mlir_opt:      {herbie_mlir_opt_path}",
             f"herbie_mlir_opt_ver:  {cmd([herbie_mlir_opt_path, '--version'])}",
             f"build_dir:            {BUILD_DIR}",
+            f"racket_prefix:        {RACKET_PREFIX}",
+            f"herbie:               {cmd(['env', f'PLTADDONDIR={herbie_racket_prefix}', 'racket', '-l', 'herbie', '--', '--version'])}",
             f"benchmarks:           {len(benchmark_names)}",
             "",
             "[parameters]",

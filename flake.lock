@@ -17,6 +17,23 @@
         "type": "github"
       }
     },
+    "herbie-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1774650633,
+        "narHash": "sha256-iO/C8bJVQbnxsxj+b7szWwbOyz5QBV5IeMSKIPg94C0=",
+        "owner": "herbie-fp",
+        "repo": "herbie",
+        "rev": "5500c9684c044bdaca03aee415605f9ac2f05687",
+        "type": "github"
+      },
+      "original": {
+        "owner": "herbie-fp",
+        "repo": "herbie",
+        "rev": "5500c9684c044bdaca03aee415605f9ac2f05687",
+        "type": "github"
+      }
+    },
     "llvm-project-src": {
       "flake": false,
       "locked": {
@@ -96,6 +113,91 @@
         "type": "github"
       }
     },
+    "racket-fmt-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1776085491,
+        "narHash": "sha256-zwcjNvK2qcKfsXb2mlQQNOHI2niMMPI9wx9YeEz+XTo=",
+        "owner": "sorawee",
+        "repo": "fmt",
+        "rev": "4e1ed68e596e656960b44a8244bb33eb4e65ec64",
+        "type": "github"
+      },
+      "original": {
+        "owner": "sorawee",
+        "repo": "fmt",
+        "rev": "4e1ed68e596e656960b44a8244bb33eb4e65ec64",
+        "type": "github"
+      }
+    },
+    "racket-fpbench-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1775751730,
+        "narHash": "sha256-sTnKCjqUu+UvGbZB6ubrvKULDx8xoRyjfJvH0pNdWrk=",
+        "owner": "FPBench",
+        "repo": "FPBench",
+        "rev": "7e2b76b1c3b55f923753e23ddfc979f847c50dbb",
+        "type": "github"
+      },
+      "original": {
+        "owner": "FPBench",
+        "repo": "FPBench",
+        "rev": "7e2b76b1c3b55f923753e23ddfc979f847c50dbb",
+        "type": "github"
+      }
+    },
+    "racket-generic-flonum-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1733767715,
+        "narHash": "sha256-BoUz2U9qImV+AcPRCYxEWqiszn/0ACbqd1aK2R2f5vQ=",
+        "owner": "herbie-fp",
+        "repo": "generic-flonum",
+        "rev": "e2226376ed7b9bb543ec21606327d52e4077818a",
+        "type": "github"
+      },
+      "original": {
+        "owner": "herbie-fp",
+        "repo": "generic-flonum",
+        "rev": "e2226376ed7b9bb543ec21606327d52e4077818a",
+        "type": "github"
+      }
+    },
+    "racket-pretty-expressive-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1776084854,
+        "narHash": "sha256-k8hRrWRceUrySrTa7e2NI/n2qwSuXtx5NT6ekNavJ64=",
+        "owner": "sorawee",
+        "repo": "pretty-expressive",
+        "rev": "9ad7077188c0ab7ac4088a6ee052c64e8eb21925",
+        "type": "github"
+      },
+      "original": {
+        "owner": "sorawee",
+        "repo": "pretty-expressive",
+        "rev": "9ad7077188c0ab7ac4088a6ee052c64e8eb21925",
+        "type": "github"
+      }
+    },
+    "racket-rival-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1770500837,
+        "narHash": "sha256-BLuDujXVscyVXdCajerA73Iq7xoEVc/A0qBe7CIq5lA=",
+        "owner": "herbie-fp",
+        "repo": "rival",
+        "rev": "4d2334a05338be8df9c6924e30534d693f83267d",
+        "type": "github"
+      },
+      "original": {
+        "owner": "herbie-fp",
+        "repo": "rival",
+        "rev": "4d2334a05338be8df9c6924e30534d693f83267d",
+        "type": "github"
+      }
+    },
     "rival3-src": {
       "flake": false,
       "locked": {
@@ -116,10 +218,16 @@
     "root": {
       "inputs": {
         "circt-src": "circt-src",
+        "herbie-src": "herbie-src",
         "llvm-project-src": "llvm-project-src",
         "nixpkgs": "nixpkgs",
         "pyproject-build-systems": "pyproject-build-systems",
         "pyproject-nix": "pyproject-nix",
+        "racket-fmt-src": "racket-fmt-src",
+        "racket-fpbench-src": "racket-fpbench-src",
+        "racket-generic-flonum-src": "racket-generic-flonum-src",
+        "racket-pretty-expressive-src": "racket-pretty-expressive-src",
+        "racket-rival-src": "racket-rival-src",
         "rival3-src": "rival3-src",
         "rust-overlay": "rust-overlay",
         "uv2nix": "uv2nix"
