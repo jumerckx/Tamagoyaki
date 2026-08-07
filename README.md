@@ -140,6 +140,75 @@ eval-out/
   13-paper-artifact/      figures + CSV + manifest (and .tar.gz alongside)
 ```
 
+## Rover Datapath Evaluation
+
+The Rover evaluation (Snakemake pipeline in
+[`rover-mlir/eval/Snakefile`](rover-mlir/eval/Snakefile)) compares four
+configurations of the same five datapath circuits on ASAP7-mapped area and
+delay, plus the wall clock the e-graph cost:
+
+| configuration | pipeline |
+|---|---|
+| `baseline` | `circt-synth` on the input as written — no e-graph |
+| `rover` | saturate with the base rewrites (comb/hw only), extract |
+| `multi` | saturate with base + datapath rewrites, extract |
+| `multi-persist` | as `multi`, but run `--canonicalize` and `--comb-int-range-narrowing` over the *persisted e-graph* before extracting |
+
+Every configuration goes through the same backend — `circt-synth` →
+`circt-translate --export-aiger` → `abc` technology mapping — so only the input
+IR differs.
+
+```shell
+nix run .#rover-eval          # from a checkout; builds + runs end-to-end
+```
+
+or, from inside the dev shell:
+
+```shell
+nix develop
+rover-eval                    # same thing; extra args pass through to snakemake
+rover-eval -n                 # dry-run the pipeline
+```
+
+Knobs are environment variables: `BUILD_DIR` (defaults to the Nix-built
+`tamagoyaki-rover-eval`; point it at an in-tree `build` to test a local
+compiler), `OUT_DIR` (default `rover-eval-out`, relative to the repo root),
+`CIRCT_BIN`, `ABC`, `CORES` (default `1`), and `EXTRA_CONFIG` for Snakefile
+parameters, e.g.:
+
+```shell
+EXTRA_CONFIG='max_iters=8 synth_until=mapping' rover-eval
+EXTRA_CONFIG='genlib=/path/to/other.genlib' rover-eval
+```
+
+`make rover-eval` / `make rover-eval-clean` wrap the same command.
+
+Inputs: the benchmarks are plain `hw.module` in
+[`rover-mlir/eval/benchmarks/`](rover-mlir/eval/benchmarks) (the e-graph comes
+from `--rover-insert-graph`, and the lit suite drives these same files), the
+rewrite rules are [`rover-mlir/rules/`](rover-mlir/rules) — `rewrites_base.mlir`
+alone for `rover`, concatenated with `rewrites_datapath.mlir` for the rest — and
+the cell library is a vendored ASAP7 `genlib`, see
+[`rover-mlir/eval/lib/README.md`](rover-mlir/eval/lib/README.md) for its
+provenance and the citation it requires.
+
+Outputs land in `rover-eval-out/`, stage-prefixed like the Herbie tree:
+
+```
+rover-eval-out/
+  01-rules/               base and full rule sets, PDL and PDL-interp
+  02-input/               benchmarks as fed to the pipeline
+  03-egraph/              persisted e-graph, before and after the CIRCT passes
+  04-extracted/           per-configuration IR handed to the backend
+  05-timing/              saturation (and, for multi-persist, CIRCT pass) times
+  06-synth/               circt-synth output
+  07-aiger/               AIGER netlists
+  08-abc/                 raw abc print_stats reports
+  09-results.csv          area, delay and e-graph time per benchmark+config
+  10-table.tex            the comparison table, best area/delay in bold
+  11-provenance.txt       commit, toolchain versions, genlib hash, parameters
+```
+
 ## About
 
 This project's build configuration is based on [Max Levental](https://makslevental.github.io/about/)'s [mmlir](https://github.com/makslevental/mmlir) example repository.

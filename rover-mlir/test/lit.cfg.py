@@ -10,9 +10,11 @@ config.suffixes = ['.mlir']
 config.test_source_root = os.path.dirname(__file__)
 config.test_exec_root = os.path.join(config.tamagoyaki_obj_root, "rover-mlir", "test")
 
-# Pattern/fixture files in this directory are inputs to tests, not tests
-# themselves -- skip them so lit doesn't complain about missing RUN lines.
-config.excludes = ["basic.comb.mlir", "rewrites.mlir", "rewrites_pdl_interp.mlir"]
+# Fixture files in this directory are inputs to tests, not tests themselves --
+# skip them so lit doesn't complain about missing RUN lines. (The rewrite rule
+# sets now live in rover-mlir/rules/, outside test_source_root, so they need no
+# entry here.)
+config.excludes = ["basic.comb.mlir"]
 
 llvm_config.use_default_substitutions()
 

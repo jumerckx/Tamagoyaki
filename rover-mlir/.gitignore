@@ -25,5 +25,6 @@ Thumbs.db
 target/
 Cargo.lock
 
-# Benchmarking
-results/
+# Evaluation (`nix run .#rover-eval`); results go to /rover-eval-out/
+# at the repo root, but snakemake keeps its state next to the Snakefile.
+eval/.snakemake/

@@ -35,6 +35,9 @@ build/
 build-eval/
 # Herbie-MLIR evaluation results (`nix run .#herbie-eval`)
 /eval-out/
+# Rover datapath evaluation results (`nix run .#rover-eval`)
+/rover-eval-out/
+build-eval-rover/
 .cache
 _deps
 CMakeFiles

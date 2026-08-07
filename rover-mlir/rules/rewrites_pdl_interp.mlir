@@ -1,3 +1,12 @@
+// Generated from rewrites_base.mlir + rewrites_datapath.mlir by xDSL:
+//   cat rewrites_base.mlir rewrites_datapath.mlir |
+//     xdsl-opt -p 'convert-pdl-to-pdl-interp{optimize_for_eqsat=true}' \
+//       -o rewrites_pdl_interp.mlir
+// Do not edit by hand; edit the two PDL sources and regenerate.
+//
+// Only the lit tests read this file. The evaluation
+// (`nix run .#rover-eval`) regenerates both the base-only and the full matcher
+// into its output tree, so it cannot be affected by this copy going stale.
 builtin.module {
   pdl_interp.func @matcher(%0: !pdl.operation) {
     pdl_interp.switch_operation_name of %0 to ["comb.shl", "comb.mul", "comb.mux", "comb.add", "comb.shru"](^bb0, ^bb1, ^bb2, ^bb3, ^bb4) -> ^bb5
