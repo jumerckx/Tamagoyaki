@@ -271,13 +271,15 @@ rule provenance:
                 ("racket", provenance.cmd(["racket", "--version"])),
                 ("herbie_mlir_opt", herbie_mlir_opt_path),
                 ("herbie_mlir_opt_ver",
-                 provenance.cmd([herbie_mlir_opt_path, "--version"])),
+                 provenance.cmd([herbie_mlir_opt_path, "--version"],
+                                drop=provenance.LLVM_BANNER)),
                 ("build_dir", BUILD_DIR),
                 ("racket_prefix", RACKET_PREFIX),
                 ("out_dir", OUT_DIR),
+                # keep=1: a missing collection answers with a backtrace.
                 ("herbie", provenance.cmd([
                     "env", f"PLTADDONDIR={herbie_racket_prefix}",
-                    "racket", "-l", "herbie", "--", "--version"])),
+                    "racket", "-l", "herbie", "--", "--version"], keep=1)),
                 ("benchmarks", len(benchmark_names)),
             ],
             parameters=[

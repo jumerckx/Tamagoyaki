@@ -40,15 +40,35 @@ def field(name: str, value: object) -> str:
     return f"{name + ':':<{FIELD_WIDTH}}{value}"
 
 
-def cmd(args: list[str]) -> str:
-    """First line of a command's output, for version probes. Tools disagree on
-    which stream a ``--version`` goes to, so both are accepted."""
+def cmd(args: list[str], *, drop: int = 0, keep: int | None = None) -> str:
+    """A command's output as one manifest field.
+
+    Tools disagree on which stream a ``--version`` goes to, so both are read,
+    and on how much preamble to print before the version itself:
+
+      * LLVM-based tools (``*-mlir-opt``, ``circt-*``) open with a bare
+        ``LLVM (http://llvm.org/):`` banner and put the version, the build type
+        and any downstream project's version on the lines *after* it.
+      * ABC echoes the command it was given (``======== ABC command line
+        "version"``) before answering it.
+
+    So `drop` skips that many leading lines. What remains is stripped and
+    joined onto one line, since the manifest is one field per line; `keep`
+    bounds how many lines are taken, for probes that answer a failure with a
+    backtrace rather than a version.
+    """
     try:
         r = subprocess.run(args, capture_output=True, text=True)
         out = r.stdout or r.stderr
-        return out.strip().splitlines()[0] if out.strip() else ""
+        lines = [ln.strip() for ln in out.strip().splitlines() if ln.strip()]
+        lines = lines[drop:][:keep]
+        return "; ".join(lines)
     except Exception as e:
         return f"<unavailable: {e}>"
+
+
+#: Leading lines to drop from an LLVM tool's --version (the banner).
+LLVM_BANNER = 1
 
 
 def cpu_model() -> str:
