@@ -1,6 +1,5 @@
+import sys
 from pathlib import Path
-
-from tamagoyaki_eval import dir_resolver, provenance
 
 # ---------------------------------------------------------------------------
 # Resolve the two inputs the pipeline needs from outside this directory:
@@ -18,6 +17,12 @@ from tamagoyaki_eval import dir_resolver, provenance
 # ---------------------------------------------------------------------------
 EVAL_DIR   = Path(workflow.basedir).resolve()
 REPO_ROOT  = EVAL_DIR.parents[1]
+
+# The shared evaluation code comes from the checkout, not from wherever
+# tamagoyaki_eval is installed -- see tamagoyaki_eval/__init__.py for why.
+sys.path.insert(0, str(REPO_ROOT))
+
+from tamagoyaki_eval import dir_resolver, provenance
 
 _resolve_dir = dir_resolver(REPO_ROOT)
 

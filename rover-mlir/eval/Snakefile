@@ -1,7 +1,6 @@
 import re
+import sys
 from pathlib import Path
-
-from tamagoyaki_eval import dir_resolver, provenance
 
 # ---------------------------------------------------------------------------
 # The Rover datapath evaluation: four configurations of the same five circuits,
@@ -21,6 +20,12 @@ from tamagoyaki_eval import dir_resolver, provenance
 EVAL_DIR  = Path(workflow.basedir).resolve()
 REPO_ROOT = EVAL_DIR.parents[1]
 RULES_SRC = REPO_ROOT / "rover-mlir" / "rules"
+
+# The shared evaluation code comes from the checkout, not from wherever
+# tamagoyaki_eval is installed -- see tamagoyaki_eval/__init__.py for why.
+sys.path.insert(0, str(REPO_ROOT))
+
+from tamagoyaki_eval import dir_resolver, provenance
 
 _resolve_dir = dir_resolver(REPO_ROOT)
 

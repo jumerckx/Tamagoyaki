@@ -10,15 +10,31 @@ tidy CSV plus a provenance manifest. What is genuinely common lives here:
   :mod:`tamagoyaki_eval.provenance`  the manifest's shared environment prefix
   ``common.smk``                     the rules neither pipeline owns alone
 
-``common.smk`` is part of a workflow rather than an importable module, and each
-Snakefile includes it by checkout path::
+Two consumers, resolved from two places
+---------------------------------------
 
-    include: str(REPO_ROOT / "tamagoyaki_eval" / "common.smk")
+There is no editable install of this package: what lands in the environment is
+a *copy* of the checkout, rebuilt only when Nix rebuilds the environment. So a
+Snakefile read from the checkout paired with a module imported from the
+environment is two versions of the same thing, and they drift apart the moment
+either is edited -- an edit here does nothing until a rebuild, and after a
+rebuild a stale shell sees a Snakefile calling something its copy lacks.
 
-not from wherever this package is installed. The wrappers already run the
-pipelines out of a checkout -- the main Snakefile, the rule sources and the
-benchmarks all come from there -- so a fragment of the same workflow has to as
-well, or editing it would have no effect until the environment was rebuilt.
+The split is therefore drawn where it does not hurt, at a stable boundary:
+
+  *The workflow* -- the Snakefile, ``common.smk`` it includes, and the helpers
+  they call -- is one unit, and all of it comes from the checkout. Snakemake
+  already reads the main Snakefile from there, so the rest follows::
+
+      sys.path.insert(0, str(REPO_ROOT))
+      from tamagoyaki_eval import dir_resolver, provenance
+      ...
+      include: str(REPO_ROOT / "tamagoyaki_eval" / "common.smk")
+
+  *The tools* -- ``herbie-pdl``, ``fpcore-mlir``, ``rover-results-csv`` and the
+  rest -- stay installed, as they have always been. They are separate processes
+  whose interface to the workflow is their command line, so an installed tool
+  and a checkout Snakefile cannot disagree about a Python signature.
 
 Rover's result-analysis tools live in :mod:`tamagoyaki_eval.rover` -- they are
 here rather than under ``rover-mlir/eval`` only because ``rover-mlir`` has a
