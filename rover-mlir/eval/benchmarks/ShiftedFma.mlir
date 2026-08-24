@@ -7,24 +7,23 @@
 //     input logic [$clog2(BW)-1:0] s,
 //     input logic [2*BW-1:0] c,
 //     output logic [2*BW:0] out
-// );  
-// 
+// );
+//
 // wire [ 2*BW : 0 ] d, e;
-// wire [$clog2(BW):0] sum;
-// 
+//
 // assign d = a * b;
 // assign e = d << s;
 // assign out = e + c;
-// 
-// // Optimized
+//
+// // Optimized -- the rewrite the e-graph is expected to find:
 // // assign d = (a << s);
 // // assign e = d * b;
 // // assign out = e + c;
-// 
+//
 // endmodule
 
 module @ir {
-  func.func @ShiftedFma(%a : i32, %b : i32, %s : i5, %c : i64) -> i65 {
+  hw.module @ShiftedFma(in %a : i32, in %b : i32, in %s : i5, in %c : i64, out result : i65) {
     %false = hw.constant false
     %c0_i60 = hw.constant 0 : i60
     %c0_i33 = hw.constant 0 : i33
@@ -35,6 +34,6 @@ module @ir {
     %4 = comb.shl %2, %3 {sv.namehint = "e"} : i65
     %5 = comb.concat %false, %c : i1, i64
     %6 = comb.add %4, %5 : i65
-    func.return %6 : i65
+    hw.output %6 : i65
   }
 }

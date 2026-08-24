@@ -8,8 +8,13 @@ set(ROVER_MLIR_OPT_LIBS
   ${conversion_libs}
   MLIROptLib
   CIRCTComb
+  # Transform libs: --comb-int-range-narrowing over a persisted e-graph is part
+  # of the rover evaluation, and circt-opt cannot run it (no equivalence
+  # dialect), so rover-mlir-opt registers the CIRCT passes itself.
+  CIRCTCombTransforms
   CIRCTHW
   CIRCTDatapath
+  CIRCTDatapathTransforms
   RoverDialect
   MLIREquivalence
   MLIREmatch

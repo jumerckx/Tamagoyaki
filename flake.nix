@@ -638,6 +638,69 @@
                 '';
               };
 
+              # The mirror image of tamagoyaki-eval for the Rover datapath
+              # evaluation: rover-mlir-opt and nothing else. herbie brings the
+              # Rival/Racket half of the tree along with it and cranelift is
+              # unused here, so both are switched off; CIRCT stays, since rover
+              # links it and the evaluation's backend is circt-synth.
+              tamagoyaki-rover-eval = tamagoyaki.overrideAttrs (old: {
+                pname = "tamagoyaki-rover-eval";
+                cmakeFlags = old.cmakeFlags ++ [
+                  "-DBUILD_HERBIE_MLIR=OFF"
+                  "-DBUILD_ROVER_MLIR=ON"
+                  "-DBUILD_CRANELIFT_MLIR=OFF"
+                ];
+              });
+
+              rover-eval = pkgs.writeShellApplication {
+                name = "rover-eval";
+                runtimeInputs = [
+                  tamagoyaki-rover-eval
+                  circt # circt-synth, circt-translate
+                  pythonEnv # snakemake, xdsl-opt
+                  pkgs.abc-verifier # technology mapping against ASAP7
+                  pkgs.git
+                  pkgs.coreutils
+                ];
+                text = ''
+                  build_dir="''${BUILD_DIR:-${tamagoyaki-rover-eval}}"
+                  circt_bin="''${CIRCT_BIN:-${circt}/bin}"
+                  abc_bin="''${ABC:-${pkgs.abc-verifier}/bin/abc}"
+                  # Relative values are resolved against the repo root by the
+                  # Snakefile, so results land at the top level of the checkout.
+                  out_dir="''${OUT_DIR:-rover-eval-out}"
+                  cores="''${CORES:-1}"
+
+                  if ! repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+                    echo "rover-eval: not inside a Tamagoyaki checkout." >&2
+                    echo "  The pipeline reads rover-mlir/eval/benchmarks and" >&2
+                    echo "  rover-mlir/rules, and writes the output directory" >&2
+                    echo "  ($out_dir), so run it from a clone." >&2
+                    exit 1
+                  fi
+
+                  export SOURCE_DATE_EPOCH="''${SOURCE_DATE_EPOCH:-315532800}"
+                  ${exportLoaderPath}
+
+                  cd "$repo_root/rover-mlir/eval"
+                  echo "rover-eval: build_dir=$build_dir" >&2
+                  echo "rover-eval: circt_bin=$circt_bin" >&2
+                  echo "rover-eval: abc=$abc_bin" >&2
+                  echo "rover-eval: out_dir=$out_dir" >&2
+                  # A second --config would *replace* ours rather than merge
+                  # (argparse overwrites the dest), taking build_dir with it, so
+                  # extra entries for sensitivity runs go through EXTRA_CONFIG:
+                  #   EXTRA_CONFIG='max_iters=8 synth_until=mapping' rover-eval
+                  # The cell library is deliberately not passed: it defaults to
+                  # the vendored rover-mlir/eval/lib/asap7.genlib in the
+                  # checkout, and EXTRA_CONFIG='genlib=...' overrides it.
+                  # shellcheck disable=SC2086
+                  exec snakemake -j"$cores" --forceall "$@" --resources bench=1 \
+                    --config build_dir="$build_dir" out_dir="$out_dir" \
+                      circt_bin="$circt_bin" abc="$abc_bin" ''${EXTRA_CONFIG:-}
+                '';
+              };
+
               # `tamagoyaki-configure [build-dir] [extra cmake args...]`, using
               # the env the shells below export (CMAKE_PREFIX_PATH, etc.).
               tamagoyaki-configure = pkgs.writeShellScriptBin "tamagoyaki-configure" ''
@@ -682,12 +745,16 @@
                       rustToolchain
                       herbie-setup
                       herbie-eval
+                      rover-eval
                       # The full Python toolchain from uv.lock (xdsl, snakemake,
                       # lit, pre-commit, cmake-format, plotting + docs deps).
                       pythonEnv
                     ]
                     ++ (with pkgs; [
                       racket
+                      # The rover evaluation's technology mapper; also lets you
+                      # drive the backend by hand inside the shell.
+                      abc-verifier
                       # uv stays for lockfile maintenance (`uv lock`); the
                       # environment itself is the nix-built pythonEnv above.
                       uv
@@ -722,6 +789,7 @@
                     ${lib.optionalString (!ci) ''
                       echo "  herbie:    herbie-setup  (once; then racket -l herbie -- web --quiet)"
                       echo "  eval:      herbie-eval   (run the Herbie-MLIR evaluation; builds nothing)"
+                      echo "             rover-eval    (run the Rover datapath evaluation; builds nothing)"
                     ''}
                   '';
                 }
@@ -742,8 +810,10 @@
                 circt
                 tamagoyaki
                 tamagoyaki-eval
+                tamagoyaki-rover-eval
                 tamagoyaki-configure
                 herbie-eval
+                rover-eval
                 shell
                 ciShell
                 docsShell
@@ -763,7 +833,9 @@
             circt = release.circt;
             circt-debug = debug.circt;
             tamagoyaki-eval = release.tamagoyaki-eval;
+            tamagoyaki-rover-eval = release.tamagoyaki-rover-eval;
             herbie-eval = release.herbie-eval;
+            rover-eval = release.rover-eval;
             inherit
               rival-ffi
               pythonEnv
@@ -781,6 +853,10 @@
             herbie-eval = {
               type = "app";
               program = "${release.herbie-eval}/bin/herbie-eval";
+            };
+            rover-eval = {
+              type = "app";
+              program = "${release.rover-eval}/bin/rover-eval";
             };
           };
         };

@@ -1,0 +1,378 @@
+import datetime
+import hashlib
+import os
+import platform
+import re
+import subprocess
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# The Rover datapath evaluation: four configurations of the same five circuits,
+# each synthesized through the same backend, compared on ASAP7-mapped area and
+# delay plus the wall clock the e-graph cost.
+#
+#   baseline       circt-synth on the input as written -- no e-graph at all.
+#   rover          saturate with the base rewrite set (comb/hw only), extract.
+#   multi          saturate with base + datapath rewrites, extract.
+#   multi-persist  as multi, but run CIRCT's --canonicalize and
+#                  --comb-int-range-narrowing over the *persisted e-graph*
+#                  before extracting from it.
+#
+# Usage: snakemake --config build_dir=... [out_dir=...] [genlib=...]
+# `nix run .#rover-eval` fills in build_dir, circt_bin and abc from the store.
+# ---------------------------------------------------------------------------
+EVAL_DIR  = Path(workflow.basedir).resolve()
+REPO_ROOT = EVAL_DIR.parents[1]
+TOOLS_DIR = EVAL_DIR / "tools"
+RULES_SRC = REPO_ROOT / "rover-mlir" / "rules"
+
+
+def _resolve_dir(value):
+    """Interpret a config path relative to the repo root, as an absolute Path."""
+    path = Path(value)
+    return path if path.is_absolute() else (REPO_ROOT / path).resolve()
+
+
+BUILD_DIR = _resolve_dir(config.get("build_dir", "build-eval-rover"))
+rover_opt = str(BUILD_DIR / "bin" / "rover-mlir-opt")
+
+# CIRCT and ABC come from the Nix store under `nix run`, from PATH otherwise.
+CIRCT_BIN = config.get("circt_bin", "")
+def _circt(name):
+    return str(Path(CIRCT_BIN) / name) if CIRCT_BIN else name
+
+circt_synth     = _circt("circt-synth")
+circt_translate = _circt("circt-translate")
+abc             = config.get("abc", "abc")
+
+# The vendored ASAP7 library; see lib/README.md for provenance.
+GENLIB = str(_resolve_dir(config.get("genlib", EVAL_DIR / "lib" / "asap7.genlib")))
+
+# ---------------------------------------------------------------------------
+# Evaluation parameters. Single source of truth: used in the rules *and*
+# recorded in the provenance manifest, and overridable for sensitivity runs
+# (e.g. `EXTRA_CONFIG='max_iters=8' rover-eval`).
+# ---------------------------------------------------------------------------
+MAX_ITERS = int(config.get("max_iters", 4))
+MAX_NODES = int(config.get("max_nodes", 0))
+
+# circt-synth knobs. The defaults reproduce the plain `circt-synth in -o out`
+# invocation the original automate_pipeline.py used, so the numbers stay
+# comparable; synth_until can stop the pipeline early (e.g. "mapping" to hand
+# ABC a pre-mapping AIG).
+SYNTH_STRATEGY = config.get("synthesis_strategy", "")
+SYNTH_UNTIL    = config.get("synth_until", "")
+SYNTH_FLAGS    = " ".join(filter(None, [
+    f"--synthesis-strategy={SYNTH_STRATEGY}" if SYNTH_STRATEGY else "",
+    f"--until-before={SYNTH_UNTIL}" if SYNTH_UNTIL else "",
+]))
+
+# Configurations, and which rule set each saturates with. Keep in step with
+# CONFIGS in tools/latex_table.py, which owns the column order.
+CONFIGS = ["baseline", "rover", "multi", "multi-persist"]
+RULESET = {"rover": "base", "multi": "full", "multi-persist": "full"}
+
+BENCHMARKS = sorted(p.stem for p in (EVAL_DIR / "benchmarks").glob("*.mlir"))
+
+# `multi-persist` contains a hyphen and the intermediate files carry .sat/.canon
+# infixes, so without these Snakemake mis-splits paths like
+# 05-timing/multi-persist/MulSel.canon.json.
+wildcard_constraints:
+    config = "|".join(re.escape(c) for c in CONFIGS),
+    bench  = "|".join(re.escape(b) for b in BENCHMARKS),
+    set    = "base|full",
+
+# ---------------------------------------------------------------------------
+# Output layout. Results go to a directory at the top level of the repository
+# (not under rover-mlir/eval), overridable with `--config out_dir=...`; a
+# relative value is taken relative to the repo root.
+#
+# Every generated directory and file carries a two-digit stage prefix, so a
+# plain `ls` of the output tree reads in pipeline order rather than
+# alphabetically. Keep the numbers in step with the rule order below.
+# ---------------------------------------------------------------------------
+OUT_DIR = str(_resolve_dir(config.get("out_dir", "rover-eval-out")))
+
+RULES_DIR     = f"{OUT_DIR}/01-rules"
+INPUT_DIR     = f"{OUT_DIR}/02-input"
+EGRAPH_DIR    = f"{OUT_DIR}/03-egraph"
+EXTRACTED_DIR = f"{OUT_DIR}/04-extracted"
+TIMING_DIR    = f"{OUT_DIR}/05-timing"
+SYNTH_DIR     = f"{OUT_DIR}/06-synth"
+AIGER_DIR     = f"{OUT_DIR}/07-aiger"
+ABC_DIR       = f"{OUT_DIR}/08-abc"
+RESULTS_CSV   = f"{OUT_DIR}/09-results.csv"
+TABLE_TEX     = f"{OUT_DIR}/10-table.tex"
+PROVENANCE    = f"{OUT_DIR}/11-provenance.txt"
+
+# Cheap, non-measuring rules: never worth scheduling as separate cluster jobs.
+localrules: all, clean, provenance, copy_input, baseline_passthrough, \
+            rules_base_pdl, rules_full_pdl, results_csv, latex_table
+
+rule all:
+    input:
+        TABLE_TEX,
+        PROVENANCE,
+
+# ---------------------------------------------------------------------------
+# 01 -- rule sets
+#
+# The two PDL sources concatenate directly: the patterns sit at the top level
+# of each file (implicit module), so `cat` is a valid pattern set. Regenerating
+# both matchers here is what keeps the evaluation independent of the checked-in
+# rover-mlir/rules/rewrites_pdl_interp.mlir, which only the lit tests read.
+# ---------------------------------------------------------------------------
+rule rules_base_pdl:
+    input:
+        RULES_SRC / "rewrites_base.mlir"
+    output:
+        f"{RULES_DIR}/base_pdl.mlir"
+    shell:
+        "cp {input} {output}"
+
+rule rules_full_pdl:
+    input:
+        base = RULES_SRC / "rewrites_base.mlir",
+        datapath = RULES_SRC / "rewrites_datapath.mlir"
+    output:
+        f"{RULES_DIR}/full_pdl.mlir"
+    shell:
+        "cat {input.base} {input.datapath} > {output}"
+
+rule pdl_to_pdl_interp:
+    input:
+        f"{RULES_DIR}/{{set}}_pdl.mlir"
+    output:
+        f"{RULES_DIR}/{{set}}_pdl_interp.mlir"
+    shell:
+        "xdsl-opt -p 'convert-pdl-to-pdl-interp{{optimize_for_eqsat=true}}' {input} -o {output}"
+
+# ---------------------------------------------------------------------------
+# 02 -- inputs
+#
+# Plain hw.module, no equivalence.graph: the baseline needs un-wrapped IR, and
+# the rover configurations get the wrapper from --rover-insert-graph. The lit
+# suite drives these same files (rover-mlir/test/benchmarks).
+# ---------------------------------------------------------------------------
+rule copy_input:
+    input:
+        EVAL_DIR / "benchmarks" / "{bench}.mlir"
+    output:
+        f"{INPUT_DIR}/{{bench}}.mlir"
+    shell:
+        "cp {input} {output}"
+
+# ---------------------------------------------------------------------------
+# 04/05 -- e-graph configurations
+#
+# On timing: `-tamagoyaki-timing` and `-mlir-timing` both write JSON to stderr,
+# so enabling both in one process concatenates two documents into something
+# unparseable. Only one timing writer per invocation -- which is why
+# multi-persist below is three processes rather than one pipeline.
+# ---------------------------------------------------------------------------
+rule baseline_passthrough:
+    input:
+        f"{INPUT_DIR}/{{bench}}.mlir"
+    output:
+        mlir = f"{EXTRACTED_DIR}/baseline/{{bench}}.mlir",
+        timing = f"{TIMING_DIR}/baseline/{{bench}}.json"
+    shell:
+        # An empty report keeps the CSV builder uniform; it reports 0 ms.
+        "cp {input} {output.mlir} && echo '[]' > {output.timing}"
+
+rule saturate_extract:
+    input:
+        mlir = f"{INPUT_DIR}/{{bench}}.mlir",
+        rules = lambda w: f"{RULES_DIR}/{RULESET[w.config]}_pdl_interp.mlir"
+    output:
+        mlir = f"{EXTRACTED_DIR}/{{config}}/{{bench}}.mlir",
+        timing = f"{TIMING_DIR}/{{config}}/{{bench}}.json"
+    wildcard_constraints:
+        config = "rover|multi"
+    resources:
+        bench = 1
+    shell:
+        '{rover_opt} --rover-insert-graph {input.mlir}'
+        ' --rover-saturate="patterns-file={input.rules} max-iters={MAX_ITERS} max-nodes={MAX_NODES}"'
+        ' --rover-extract=delay --remove-dead-values'
+        ' -tamagoyaki-timing -tamagoyaki-timing-output=json'
+        ' 2> {output.timing} > {output.mlir}'
+
+rule persist_saturate:
+    input:
+        mlir = f"{INPUT_DIR}/{{bench}}.mlir",
+        rules = f"{RULES_DIR}/full_pdl_interp.mlir"
+    output:
+        mlir = f"{EGRAPH_DIR}/{{bench}}.sat.mlir",
+        timing = f"{TIMING_DIR}/multi-persist/{{bench}}.json"
+    resources:
+        bench = 1
+    shell:
+        '{rover_opt} --rover-insert-graph {input.mlir}'
+        ' --rover-saturate="patterns-file={input.rules} max-iters={MAX_ITERS} max-nodes={MAX_NODES}"'
+        ' -tamagoyaki-timing -tamagoyaki-timing-output=json'
+        ' 2> {output.timing} > {output.mlir}'
+
+# CIRCT passes over the persisted e-graph. Run in rover-mlir-opt, not circt-opt:
+# circt-opt does not know the equivalence dialect and cannot parse the graph.
+rule persist_canonicalize:
+    input:
+        f"{EGRAPH_DIR}/{{bench}}.sat.mlir"
+    output:
+        mlir = f"{EGRAPH_DIR}/{{bench}}.canon.mlir",
+        timing = f"{TIMING_DIR}/multi-persist/{{bench}}.canon.json"
+    resources:
+        bench = 1
+    shell:
+        '{rover_opt} {input} --canonicalize --comb-int-range-narrowing'
+        ' -mlir-timing -mlir-timing-display=tree -mlir-output-format=json'
+        ' 2> {output.timing} > {output.mlir}'
+
+rule persist_extract:
+    input:
+        f"{EGRAPH_DIR}/{{bench}}.canon.mlir"
+    output:
+        f"{EXTRACTED_DIR}/multi-persist/{{bench}}.mlir"
+    resources:
+        bench = 1
+    shell:
+        '{rover_opt} {input} --rover-extract=delay --remove-dead-values -o {output}'
+
+# ---------------------------------------------------------------------------
+# 06/07/08 -- the shared synthesis backend
+#
+# Identical for all four configurations; only the input IR differs. circt-synth
+# lowers comb to AIG (including any datapath ops rover produced -- it runs
+# ConvertDatapathToComb itself), circt-translate exports AIGER, and ABC does the
+# ASAP7 technology mapping the reported numbers come from. The ABC command is
+# kept byte-identical to the original automate_pipeline.py.
+# ---------------------------------------------------------------------------
+rule synth:
+    input:
+        f"{EXTRACTED_DIR}/{{config}}/{{bench}}.mlir"
+    output:
+        f"{SYNTH_DIR}/{{config}}/{{bench}}.mlir"
+    resources:
+        bench = 1
+    shell:
+        "{circt_synth} {input} -o {output} --abc-path={abc} {SYNTH_FLAGS}"
+
+rule export_aiger:
+    input:
+        f"{SYNTH_DIR}/{{config}}/{{bench}}.mlir"
+    output:
+        f"{AIGER_DIR}/{{config}}/{{bench}}.aig"
+    shell:
+        "{circt_translate} --export-aiger {input} -o {output}"
+
+rule abc_map:
+    input:
+        f"{AIGER_DIR}/{{config}}/{{bench}}.aig"
+    output:
+        f"{ABC_DIR}/{{config}}/{{bench}}.txt"
+    shell:
+        '{abc} -c "read_genlib {GENLIB}; read {input}; strash; map; print_stats" > {output}'
+
+# ---------------------------------------------------------------------------
+# 09/10/11 -- results
+# ---------------------------------------------------------------------------
+rule results_csv:
+    input:
+        abc = expand(f"{ABC_DIR}/{{config}}/{{bench}}.txt",
+                     config=CONFIGS, bench=BENCHMARKS),
+        timing = expand(f"{TIMING_DIR}/{{config}}/{{bench}}.json",
+                        config=CONFIGS, bench=BENCHMARKS),
+        canon = expand(f"{TIMING_DIR}/multi-persist/{{bench}}.canon.json",
+                       bench=BENCHMARKS),
+    output:
+        RESULTS_CSV
+    params:
+        configs = " ".join(CONFIGS),
+        benchmarks = " ".join(BENCHMARKS),
+    shell:
+        "python {TOOLS_DIR}/results_csv.py"
+        " --abc-dir {ABC_DIR} --timing-dir {TIMING_DIR}"
+        " --configs {params.configs} --benchmarks {params.benchmarks}"
+        " -o {output}"
+
+rule latex_table:
+    input:
+        RESULTS_CSV
+    output:
+        TABLE_TEX
+    shell:
+        "python {TOOLS_DIR}/latex_table.py {input} -o {output}"
+
+rule provenance:
+    input:
+        csv = RESULTS_CSV,
+    output:
+        PROVENANCE,
+    run:
+        def cmd(args):
+            try:
+                r = subprocess.run(args, capture_output=True, text=True)
+                out = r.stdout or r.stderr
+                return out.strip().splitlines()[0] if out.strip() else ""
+            except Exception as e:
+                return f"<unavailable: {e}>"
+
+        def cpu_model():
+            try:
+                for line in open("/proc/cpuinfo"):
+                    if line.startswith("model name"):
+                        return line.split(":", 1)[1].strip()
+            except Exception:
+                pass
+            return cmd(["sysctl", "-n", "machdep.cpu.brand_string"]) or "<unknown>"
+
+        def sha256(path):
+            try:
+                return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+            except Exception as e:
+                return f"<unavailable: {e}>"
+
+        git_rev = cmd(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"])
+        dirty = cmd(["git", "-C", str(REPO_ROOT), "status", "--porcelain"])
+
+        lines = [
+            "# Tamagoyaki / Rover datapath evaluation provenance",
+            f"generated_utc:        {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
+            f"git_rev:              {git_rev}{'  (DIRTY WORKING TREE)' if dirty else ''}",
+            f"host:                 {platform.node()}",
+            f"platform:             {platform.platform()}",
+            f"cpu:                  {cpu_model()}  x{os.cpu_count()}",
+            f"python:               {platform.python_version()}",
+            f"snakemake:            {cmd(['snakemake', '--version'])}",
+            f"rover_mlir_opt:       {rover_opt}",
+            f"rover_mlir_opt_ver:   {cmd([rover_opt, '--version'])}",
+            f"circt_synth:          {circt_synth}",
+            f"circt_synth_ver:      {cmd([circt_synth, '--version'])}",
+            f"circt_translate:      {circt_translate}",
+            f"abc:                  {abc}",
+            f"abc_ver:              {cmd([abc, '-c', 'version'])}",
+            f"xdsl_opt:             {cmd(['xdsl-opt', '--version'])}",
+            f"genlib:               {GENLIB}",
+            f"genlib_sha256:        {sha256(GENLIB)}",
+            "genlib_upstream:      github.com/cowardsa/DatapathBench"
+            "@fe5941cf234bd543c45e8ccea5c10f8c95232b6f (libraries/asap7.genlib)",
+            f"build_dir:            {BUILD_DIR}",
+            f"out_dir:              {OUT_DIR}",
+            f"benchmarks:           {len(BENCHMARKS)} ({', '.join(BENCHMARKS)})",
+            f"configurations:       {', '.join(CONFIGS)}",
+            "",
+            "[parameters]",
+            f"max_iters:            {MAX_ITERS}",
+            f"max_nodes:            {MAX_NODES}",
+            f"synthesis_strategy:   {SYNTH_STRATEGY or '<circt-synth default>'}",
+            f"synth_until:          {SYNTH_UNTIL or '<full pipeline>'}",
+            f"circt_synth_flags:    {SYNTH_FLAGS or '<none>'}",
+            "",
+        ]
+        with open(output[0], "w") as fh:
+            fh.write("\n".join(lines))
+        print("\n".join(lines))
+
+rule clean:
+    shell:
+        f"rm -rf {OUT_DIR}"
