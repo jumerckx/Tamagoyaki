@@ -97,10 +97,10 @@ ninja -C build check-tamagoyaki   # or `check-all`
 
 The full Herbie-MLIR evaluation (Snakemake pipeline in
 [`herbie_mlir/eval/Snakefile`](herbie_mlir/eval/Snakefile)) is wrapped by a
-single reproducible command. It configures and builds an evaluation tree with
-Herbie compiled from a pinned source revision — so `racket -l herbie report`
-runs against a known Herbie — and then runs the pipeline (fpcore → MLIR →
-equality saturation → fpcore → Herbie report → plots):
+single reproducible command. The compiler and the Racket prefix Herbie is
+installed into are both pinned Nix derivations — so `racket -l herbie report`
+runs against a known Herbie — and the command runs the pipeline over them
+(fpcore → MLIR → equality saturation → fpcore → Herbie report → plots):
 
 ```shell
 nix run .#herbie-eval         # from a checkout; builds + runs end-to-end
@@ -114,10 +114,14 @@ herbie-eval                   # same thing; extra args pass through to snakemake
 herbie-eval -n                # dry-run the pipeline
 ```
 
-Knobs are environment variables: `BUILD_DIR` (default `build-eval`), `OUT_DIR`
-(default `eval-out`, relative to the repo root), `HERBIE_GIT_TAG`, `CORES`
-(default `1`), and `HERBIE_EVAL_BUILD_ONLY=1` to stop after the build. The
-`make eval` / `make eval-build` targets wrap the same command.
+Knobs are environment variables: `BUILD_DIR` (defaults to the Nix-built
+`tamagoyaki-eval`; point it at an in-tree `build` to measure a local compiler),
+`RACKET_PREFIX`, `OUT_DIR` (default `eval-out`, relative to the repo root),
+`CORES` (default `1`), and `EXTRA_CONFIG` for Snakefile parameters, e.g.:
+
+```shell
+EXTRA_CONFIG='seed=7 max_nodes=8000' herbie-eval
+```
 
 Outputs land in `eval-out/` at the top level of the checkout. Each generated
 directory and file is prefixed with its pipeline stage, so the tree reads in
@@ -183,8 +187,6 @@ EXTRA_CONFIG='max_iters=8 synth_until=mapping' rover-eval
 EXTRA_CONFIG='genlib=/path/to/other.genlib' rover-eval
 ```
 
-`make rover-eval` / `make rover-eval-clean` wrap the same command.
-
 Inputs: the benchmarks are plain `hw.module` in
 [`rover-mlir/eval/benchmarks/`](rover-mlir/eval/benchmarks) (the e-graph comes
 from `--rover-insert-graph`, and the lit suite drives these same files), the
@@ -228,10 +230,31 @@ have in common lives in [`tamagoyaki_eval/`](tamagoyaki_eval):
 | `common.smk` | the PDL-to-PDL-interp rules, the paper artifact, `clean` |
 | `rover/` | Rover's result tools, as console scripts (`rover-results-csv`, ...) |
 
-Each Snakefile includes `common.smk` from the checkout at its bottom, where
-everything the workflow defines is already in scope. The `mkEval` function in
+Each Snakefile includes `common.smk` at its bottom, where everything the
+workflow defines is already in scope, and imports the helpers from the checkout
+rather than from the installed package — the workflow is one unit and there is
+no editable install, so mixing the two would let them drift apart (see
+[`tamagoyaki_eval/__init__.py`](tamagoyaki_eval/__init__.py)). The `mkEval` function in
 [`flake.nix`](flake.nix) builds both wrappers, so a third evaluation needs a
 Snakefile of its own stages and little else.
+
+The [`Makefile`](Makefile) wraps both commands, and can run them back to back:
+
+```shell
+make eval           # both, one after the other
+make herbie-eval    # just the Herbie-MLIR pipeline    -> eval-out/
+make rover-eval     # just the Rover datapath pipeline -> rover-eval-out/
+make eval-clean     # remove both output trees
+```
+
+The environment variables above are exposed as `CORES`, `SNAKEMAKE_ARGS`, and a
+`HERBIE_`/`ROVER_`-prefixed `*_BUILD_DIR` and `*_OUT_DIR` per pipeline, so
+`make eval` can drive both without their settings colliding:
+
+```shell
+make eval CORES=4 SNAKEMAKE_ARGS='-n'
+make rover-eval ROVER_BUILD_DIR=build
+```
 
 ## About
 
