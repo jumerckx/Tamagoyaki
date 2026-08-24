@@ -268,9 +268,16 @@ static int64_t getNodeBaseCost(Operation *op, const NodeCostFn &nodeCostFn,
   return nodeCostFn(op);
 }
 
+// Values outside of the graph do not carry a cost.
+static bool isFreeLeaf(Value v, Region *graphRegion) {
+  Operation *defOp = v.getDefiningOp();
+  return !defOp || !graphRegion->isAncestor(defOp->getParentRegion());
+}
+
 // Compute the total cost of a non-class operation given current known costs.
 // Returns -1 if any dependency is unresolved.
-static int64_t computeNodeCost(Operation *op, const NodeCostFn &nodeCostFn,
+static int64_t computeNodeCost(Operation *op, Region *graphRegion,
+                               const NodeCostFn &nodeCostFn,
                                DenseMap<Operation *, int64_t> &opCosts,
                                const CostReductionFn &reductionFn,
                                llvm::StringRef costAttributeName) {
@@ -280,10 +287,9 @@ static int64_t computeNodeCost(Operation *op, const NodeCostFn &nodeCostFn,
 
   SmallVector<int64_t> childCosts;
   for (Value dep : op->getOperands()) {
-    Operation *defOp = dep.getDefiningOp();
-    if (!defOp)
-      continue; // block argument — free
-    auto it = opCosts.find(defOp);
+    if (isFreeLeaf(dep, graphRegion))
+      continue;
+    auto it = opCosts.find(dep.getDefiningOp());
     if (it == opCosts.end() || it->second == -1)
       return -1;
     childCosts.push_back(it->second);
@@ -318,6 +324,8 @@ computeGraphCosts(GraphOp graphOp, const NodeCostFn &nodeCostFn,
       otherTrackedOps.push_back(op);
   });
 
+  Region *graphRegion = &graphOp.getBody();
+
   DenseMap<Operation *, int64_t> opCosts;
   bool changed = true;
   int maxIterations = 100;
@@ -332,22 +340,20 @@ computeGraphCosts(GraphOp graphOp, const NodeCostFn &nodeCostFn,
       int64_t minCost = std::numeric_limits<int64_t>::max();
 
       for (Value operand : classOp.getInputs()) {
-        Operation *candidate = operand.getDefiningOp();
-        // Block arguments have no defining op and are free (cost 0).
+        // Free leaves are free, and get no entry in the cost map.
         int64_t cost = 0;
-        if (candidate) {
-          cost = computeNodeCost(candidate, nodeCostFn, opCosts, reductionFn,
-                                 costAttributeName);
+        if (!isFreeLeaf(operand, graphRegion)) {
+          Operation *candidate = operand.getDefiningOp();
+          cost = computeNodeCost(candidate, graphRegion, nodeCostFn, opCosts,
+                                 reductionFn, costAttributeName);
+          if (cost == -1)
+            continue;
           // Store candidate cost so callers can look it up.
-          if (cost >= 0) {
-            auto it = opCosts.find(candidate);
-            if (it == opCosts.end() || cost < it->second) {
-              opCosts[candidate] = cost;
-            }
+          auto it = opCosts.find(candidate);
+          if (it == opCosts.end() || cost < it->second) {
+            opCosts[candidate] = cost;
           }
         }
-        if (cost == -1)
-          continue;
 
         minCost = std::min(minCost, cost);
       }
@@ -363,8 +369,8 @@ computeGraphCosts(GraphOp graphOp, const NodeCostFn &nodeCostFn,
 
     // ---- Process other tracked (non-class) ops ----
     for (Operation *op : otherTrackedOps) {
-      int64_t totalCost = computeNodeCost(op, nodeCostFn, opCosts, reductionFn,
-                                          costAttributeName);
+      int64_t totalCost = computeNodeCost(op, graphRegion, nodeCostFn, opCosts,
+                                          reductionFn, costAttributeName);
       if (totalCost >= 0) {
         auto it = opCosts.find(op);
         if (it == opCosts.end() || totalCost < it->second) {
@@ -386,6 +392,8 @@ void selectGreedy(GraphOp graphOp, const NodeCostFn &nodeCostFn,
   DenseMap<Operation *, int64_t> opCosts =
       computeGraphCosts(graphOp, nodeCostFn, costAttributeName, reductionFn);
 
+  Region *graphRegion = &graphOp.getBody();
+
   // Set min_cost_index on each ClassOp based on the computed costs.
   graphOp.walk([&](ClassOp classOp) {
     int64_t minCost = std::numeric_limits<int64_t>::max();
@@ -393,15 +401,13 @@ void selectGreedy(GraphOp graphOp, const NodeCostFn &nodeCostFn,
 
     for (size_t i = 0; i < classOp.getInputs().size(); ++i) {
       Value operand = classOp.getInputs()[i];
-      Operation *candidate = operand.getDefiningOp();
+      // Free leaves are free, and the cost map only tracks graph nodes.
       int64_t cost = 0;
-      if (candidate) {
-        auto it = opCosts.find(candidate);
-        if (it == opCosts.end())
+      if (!isFreeLeaf(operand, graphRegion)) {
+        auto it = opCosts.find(operand.getDefiningOp());
+        if (it == opCosts.end() || it->second == -1)
           continue;
         cost = it->second;
-        if (cost == -1)
-          continue;
       }
 
       if (cost < minCost) {
