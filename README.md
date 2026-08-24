@@ -140,6 +140,8 @@ eval-out/
   13-paper-artifact/      figures + CSV + manifest (and .tar.gz alongside)
 ```
 
+The paper artifact is not built by default; ask for it with `herbie-eval paper`.
+
 ## Rover Datapath Evaluation
 
 The Rover evaluation (Snakemake pipeline in
@@ -207,7 +209,29 @@ rover-eval-out/
   09-results.csv          area, delay and e-graph time per benchmark+config
   10-table.tex            the comparison table, best area/delay in bold
   11-provenance.txt       commit, toolchain versions, genlib hash, parameters
+  12-paper-artifact/      table + CSV + manifest (and .tar.gz alongside)
 ```
+
+The paper artifact is not built by default; ask for it with `rover-eval paper`.
+
+## Shared Evaluation Infrastructure
+
+The two pipelines are the same skeleton with different payloads -- rule set to
+matcher, opt tool over a benchmark corpus capturing IR and a timing report,
+domain-specific backend, one tidy CSV, a provenance manifest -- so what they
+have in common lives in [`tamagoyaki_eval/`](tamagoyaki_eval):
+
+| | |
+|---|---|
+| `timing.py` | reading the JSON that `-tamagoyaki-timing` and `-mlir-timing` emit |
+| `provenance.py` | the manifest's shared environment block |
+| `common.smk` | the PDL-to-PDL-interp rules, the paper artifact, `clean` |
+| `rover/` | Rover's result tools, as console scripts (`rover-results-csv`, ...) |
+
+Each Snakefile includes `common.smk` from the checkout at its bottom, where
+everything the workflow defines is already in scope. The `mkEval` function in
+[`flake.nix`](flake.nix) builds both wrappers, so a third evaluation needs a
+Snakefile of its own stages and little else.
 
 ## About
 

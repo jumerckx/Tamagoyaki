@@ -573,132 +573,146 @@
                 }
               );
 
-              # The build the evaluation actually needs: herbie-mlir-opt, and
-              # nothing else. rover (and with it the whole CIRCT dependency) and
-              # cranelift are dead weight for the eval, so they are switched off
-              # -- the point of a separate package is that `nix run .#herbie-eval`
-              # gets a cached store path instead of re-configuring and rebuilding
-              # a tree every time.
-              #
-              # Note there is deliberately no -DHERBIE_MLIR_BUILD_HERBIE=ON here:
-              # that option clones Herbie and runs `raco pkg install` + `cargo`,
-              # none of which work in the network-less Nix sandbox. The Racket
-              # side is the `herbie-racket` derivation instead.
-              tamagoyaki-eval = tamagoyaki.overrideAttrs (old: {
-                pname = "tamagoyaki-eval";
-                cmakeFlags = old.cmakeFlags ++ [
-                  "-DBUILD_HERBIE_MLIR=ON"
-                  "-DBUILD_ROVER_MLIR=OFF"
-                  "-DBUILD_CRANELIFT_MLIR=OFF"
-                ];
+              # Each evaluation gets a build with only the dialect it measures
+              # turned on: the point of a separate package is that `nix run
+              # .#<x>-eval` gets a cached store path instead of re-configuring
+              # and rebuilding a tree every time.
+              mkEvalBuild = pname: flags: tamagoyaki.overrideAttrs (old: {
+                inherit pname;
+                cmakeFlags = old.cmakeFlags ++ flags;
               });
 
-              herbie-eval = pkgs.writeShellApplication {
-                name = "herbie-eval";
-                runtimeInputs = [
-                  tamagoyaki-eval
-                  pythonEnv
-                  pkgs.racket
-                  pkgs.git
-                  pkgs.coreutils
-                  pkgs.gnutar
-                  pkgs.gzip
-                ];
-                text = ''
-                  build_dir="''${BUILD_DIR:-${tamagoyaki-eval}}"
-                  racket_prefix="''${RACKET_PREFIX:-${herbie-racket}}"
-                  # Relative values are resolved against the repo root by the
-                  # Snakefile, so results land at the top level of the checkout.
-                  out_dir="''${OUT_DIR:-eval-out}"
-                  cores="''${CORES:-1}"
+              # Note there is deliberately no -DHERBIE_MLIR_BUILD_HERBIE=ON
+              # here: that option clones Herbie and runs `raco pkg install` +
+              # `cargo`, none of which work in the network-less Nix sandbox.
+              # The Racket side is the `herbie-racket` derivation instead.
+              # rover (and with it the whole CIRCT dependency) and cranelift are
+              # dead weight for this one, so they are switched off.
+              tamagoyaki-eval = mkEvalBuild "tamagoyaki-eval" [
+                "-DBUILD_HERBIE_MLIR=ON"
+                "-DBUILD_ROVER_MLIR=OFF"
+                "-DBUILD_CRANELIFT_MLIR=OFF"
+              ];
 
-                  if ! repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-                    echo "herbie-eval: not inside a Tamagoyaki checkout." >&2
-                    echo "  The pipeline reads herbie_mlir/eval/fpcore and writes" >&2
-                    echo "  the output directory ($out_dir), so run it from a clone." >&2
-                    exit 1
-                  fi
-
-                  export SOURCE_DATE_EPOCH="''${SOURCE_DATE_EPOCH:-315532800}"
-                  export PLT_COMPILED_FILE_CHECK=exists
-                  ${exportLoaderPath}
-
-                  cd "$repo_root/herbie_mlir/eval"
-                  echo "herbie-eval: build_dir=$build_dir" >&2
-                  echo "herbie-eval: racket_prefix=$racket_prefix" >&2
-                  echo "herbie-eval: out_dir=$out_dir" >&2
-                  # A second --config would *replace* ours rather than merge
-                  # (argparse overwrites the dest), taking build_dir with it, so
-                  # extra entries for sensitivity runs go through EXTRA_CONFIG:
-                  #   EXTRA_CONFIG='seed=7 max_nodes=8000' herbie-eval
-                  # shellcheck disable=SC2086
-                  exec snakemake -j"$cores" --forceall "$@" --resources bench=1 \
-                    --config build_dir="$build_dir" racket_prefix="$racket_prefix" \
-                      out_dir="$out_dir" ''${EXTRA_CONFIG:-}
-                '';
-              };
-
-              # The mirror image of tamagoyaki-eval for the Rover datapath
-              # evaluation: rover-mlir-opt and nothing else. herbie brings the
-              # Rival/Racket half of the tree along with it and cranelift is
+              # The mirror image: rover-mlir-opt and nothing else. herbie brings
+              # the Rival/Racket half of the tree along with it and cranelift is
               # unused here, so both are switched off; CIRCT stays, since rover
               # links it and the evaluation's backend is circt-synth.
-              tamagoyaki-rover-eval = tamagoyaki.overrideAttrs (old: {
-                pname = "tamagoyaki-rover-eval";
-                cmakeFlags = old.cmakeFlags ++ [
-                  "-DBUILD_HERBIE_MLIR=OFF"
-                  "-DBUILD_ROVER_MLIR=ON"
-                  "-DBUILD_CRANELIFT_MLIR=OFF"
-                ];
-              });
+              tamagoyaki-rover-eval = mkEvalBuild "tamagoyaki-rover-eval" [
+                "-DBUILD_HERBIE_MLIR=OFF"
+                "-DBUILD_ROVER_MLIR=ON"
+                "-DBUILD_CRANELIFT_MLIR=OFF"
+              ];
 
-              rover-eval = pkgs.writeShellApplication {
+              # Both evaluations are driven the same way: resolve the compiler
+              # and the output directory from the environment, insist on a
+              # checkout (the pipelines read their benchmarks, rule sources and
+              # Snakefile from one, and write results into it), then hand the
+              # lot to snakemake.
+              #
+              #   evalDir    the pipeline's directory, relative to the checkout
+              #   inputs     what has to be on PATH beyond snakemake and git
+              #   defaults   shell lines setting any extra `*_dir`-style vars
+              #   configArgs extra `--config` entries, referring to those vars
+              #   reads      what the pipeline reads from the checkout, for the
+              #              error message when it is not run inside one
+              #   env        extra exports the pipeline needs
+              #
+              # A second --config would *replace* ours rather than merge
+              # (argparse overwrites the dest), taking build_dir with it, so
+              # extra entries for sensitivity runs go through EXTRA_CONFIG:
+              #   EXTRA_CONFIG='seed=7 max_nodes=8000' herbie-eval
+              mkEval =
+                { name
+                , pkg
+                , evalDir
+                , defaultOutDir
+                , inputs ? [ ]
+                , defaults ? ""
+                , configArgs ? ""
+                , reads
+                , env ? ""
+                }:
+                pkgs.writeShellApplication {
+                  inherit name;
+                  runtimeInputs = [
+                    pkg
+                    pythonEnv # snakemake, xdsl-opt, the eval tools
+                    pkgs.git
+                    pkgs.coreutils
+                    # `snakemake paper` tars the artifact up; shared, so both
+                    # pipelines can build one.
+                    pkgs.gnutar
+                    pkgs.gzip
+                  ]
+                  ++ inputs;
+                  text = ''
+                    build_dir="''${BUILD_DIR:-${pkg}}"
+                    # Relative values are resolved against the repo root by the
+                    # Snakefile, so results land at the top level of the checkout.
+                    out_dir="''${OUT_DIR:-${defaultOutDir}}"
+                    cores="''${CORES:-1}"
+                    ${defaults}
+                    if ! repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+                      echo "${name}: not inside a Tamagoyaki checkout." >&2
+                      echo "  The pipeline reads ${reads}" >&2
+                      echo "  and writes $out_dir, so run it from a clone." >&2
+                      exit 1
+                    fi
+
+                    export SOURCE_DATE_EPOCH="''${SOURCE_DATE_EPOCH:-315532800}"
+                    ${env}
+                    ${exportLoaderPath}
+
+                    cd "$repo_root/${evalDir}"
+                    echo "${name}: build_dir=$build_dir" >&2
+                    echo "${name}: out_dir=$out_dir" >&2
+                    # shellcheck disable=SC2086
+                    exec snakemake -j"$cores" --forceall "$@" --resources bench=1 \
+                      --config build_dir="$build_dir" out_dir="$out_dir" \
+                        ${configArgs} ''${EXTRA_CONFIG:-}
+                  '';
+                };
+
+              herbie-eval = mkEval {
+                name = "herbie-eval";
+                pkg = tamagoyaki-eval;
+                evalDir = "herbie_mlir/eval";
+                defaultOutDir = "eval-out";
+                reads = "herbie_mlir/eval/fpcore and herbie_mlir/rules.rkt";
+                inputs = [ pkgs.racket ];
+                # racket_prefix is a separate knob from build_dir because the
+                # two do not always come from the same place: an in-tree CMake
+                # build with -DHERBIE_MLIR_BUILD_HERBIE=ON produces both, but
+                # under Nix they are independent store paths.
+                defaults = ''
+                  racket_prefix="''${RACKET_PREFIX:-${herbie-racket}}"
+                  echo "herbie-eval: racket_prefix=$racket_prefix" >&2
+                '';
+                env = "export PLT_COMPILED_FILE_CHECK=exists";
+                configArgs = ''racket_prefix="$racket_prefix"'';
+              };
+
+              rover-eval = mkEval {
                 name = "rover-eval";
-                runtimeInputs = [
-                  tamagoyaki-rover-eval
+                pkg = tamagoyaki-rover-eval;
+                evalDir = "rover-mlir/eval";
+                defaultOutDir = "rover-eval-out";
+                reads = "rover-mlir/eval/benchmarks and rover-mlir/rules";
+                inputs = [
                   circt # circt-synth, circt-translate
-                  pythonEnv # snakemake, xdsl-opt
                   pkgs.abc-verifier # technology mapping against ASAP7
-                  pkgs.git
-                  pkgs.coreutils
                 ];
-                text = ''
-                  build_dir="''${BUILD_DIR:-${tamagoyaki-rover-eval}}"
+                # The cell library is deliberately not passed: it defaults to
+                # the vendored rover-mlir/eval/lib/asap7.genlib in the checkout,
+                # and EXTRA_CONFIG='genlib=...' overrides it.
+                defaults = ''
                   circt_bin="''${CIRCT_BIN:-${circt}/bin}"
                   abc_bin="''${ABC:-${pkgs.abc-verifier}/bin/abc}"
-                  # Relative values are resolved against the repo root by the
-                  # Snakefile, so results land at the top level of the checkout.
-                  out_dir="''${OUT_DIR:-rover-eval-out}"
-                  cores="''${CORES:-1}"
-
-                  if ! repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-                    echo "rover-eval: not inside a Tamagoyaki checkout." >&2
-                    echo "  The pipeline reads rover-mlir/eval/benchmarks and" >&2
-                    echo "  rover-mlir/rules, and writes the output directory" >&2
-                    echo "  ($out_dir), so run it from a clone." >&2
-                    exit 1
-                  fi
-
-                  export SOURCE_DATE_EPOCH="''${SOURCE_DATE_EPOCH:-315532800}"
-                  ${exportLoaderPath}
-
-                  cd "$repo_root/rover-mlir/eval"
-                  echo "rover-eval: build_dir=$build_dir" >&2
                   echo "rover-eval: circt_bin=$circt_bin" >&2
                   echo "rover-eval: abc=$abc_bin" >&2
-                  echo "rover-eval: out_dir=$out_dir" >&2
-                  # A second --config would *replace* ours rather than merge
-                  # (argparse overwrites the dest), taking build_dir with it, so
-                  # extra entries for sensitivity runs go through EXTRA_CONFIG:
-                  #   EXTRA_CONFIG='max_iters=8 synth_until=mapping' rover-eval
-                  # The cell library is deliberately not passed: it defaults to
-                  # the vendored rover-mlir/eval/lib/asap7.genlib in the
-                  # checkout, and EXTRA_CONFIG='genlib=...' overrides it.
-                  # shellcheck disable=SC2086
-                  exec snakemake -j"$cores" --forceall "$@" --resources bench=1 \
-                    --config build_dir="$build_dir" out_dir="$out_dir" \
-                      circt_bin="$circt_bin" abc="$abc_bin" ''${EXTRA_CONFIG:-}
                 '';
+                configArgs = ''circt_bin="$circt_bin" abc="$abc_bin"'';
               };
 
               # `tamagoyaki-configure [build-dir] [extra cmake args...]`, using
