@@ -36,8 +36,8 @@ import csv
 import sys
 from pathlib import Path
 
-import abc_stats
-import timing
+from tamagoyaki_eval import timing
+from tamagoyaki_eval.rover import abc_stats
 
 # Pass names as they appear in the two timing reports. CanonicalizerPass is the
 # MLIR pass-manager's name for --canonicalize (not "Canonicalizer").

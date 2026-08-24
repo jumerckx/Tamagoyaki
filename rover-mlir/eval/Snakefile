@@ -23,7 +23,6 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 EVAL_DIR  = Path(workflow.basedir).resolve()
 REPO_ROOT = EVAL_DIR.parents[1]
-TOOLS_DIR = EVAL_DIR / "tools"
 RULES_SRC = REPO_ROOT / "rover-mlir" / "rules"
 
 
@@ -68,7 +67,7 @@ SYNTH_FLAGS    = " ".join(filter(None, [
 ]))
 
 # Configurations, and which rule set each saturates with. Keep in step with
-# CONFIGS in tools/latex_table.py, which owns the column order.
+# CONFIGS in tamagoyaki_eval/rover/latex_table.py, which owns the column order.
 CONFIGS = ["baseline", "rover", "multi", "multi-persist"]
 RULESET = {"rover": "base", "multi": "full", "multi-persist": "full"}
 
@@ -290,7 +289,7 @@ rule results_csv:
         configs = " ".join(CONFIGS),
         benchmarks = " ".join(BENCHMARKS),
     shell:
-        "python {TOOLS_DIR}/results_csv.py"
+        "rover-results-csv"
         " --abc-dir {ABC_DIR} --timing-dir {TIMING_DIR}"
         " --configs {params.configs} --benchmarks {params.benchmarks}"
         " -o {output}"
@@ -301,7 +300,7 @@ rule latex_table:
     output:
         TABLE_TEX
     shell:
-        "python {TOOLS_DIR}/latex_table.py {input} -o {output}"
+        "rover-latex-table {input} -o {output}"
 
 rule provenance:
     input:
