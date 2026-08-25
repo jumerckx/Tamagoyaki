@@ -10,23 +10,14 @@ multi-persist) and writes::
 numbers, so the sub-unit part is noise).
 
 `egraph_ms` is the e-graph time in milliseconds, kept to microsecond precision.
-The original automate_pipeline.py reported `int(seconds * 1000)`, which was fine
-for the workloads it measured but destroys these: saturation on these circuits
-takes well under 2 ms, so integer milliseconds quantized almost everything to
-"1". Note the floor is not here but upstream -- MLIR's JSON timing writer prints
-seconds with four decimals, i.e. 0.1 ms granularity -- so the third decimal
-below is headroom rather than signal today.
 
 What counts as `egraph_ms`:
-
   baseline       0 -- no e-graph is built.
   rover, multi   runSaturation.
   multi-persist  runSaturation + CanonicalizerPass + CombIntRangeNarrowing,
                  summed across the two timing files, because the CIRCT passes
                  run over the persisted e-graph are part of what that
                  configuration costs.
-
-Extraction time is excluded everywhere, matching the original script.
 """
 
 from __future__ import annotations
@@ -36,8 +27,8 @@ import csv
 import sys
 from pathlib import Path
 
-import abc_stats
-import timing
+from tamagoyaki_eval import timing
+from tamagoyaki_eval.rover import abc_stats
 
 # Pass names as they appear in the two timing reports. CanonicalizerPass is the
 # MLIR pass-manager's name for --canonicalize (not "Canonicalizer").

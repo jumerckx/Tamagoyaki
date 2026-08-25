@@ -141,14 +141,6 @@
                 pkgs.lldb
               ];
 
-          # nixpkgs Racket reports its platform subpath as "<arch>-darwin", but
-          # Herbie's `egg-herbie` package is a redirect that gates its prebuilt
-          # binary dependency on the upstream Racket string ("<arch>-macosx").
-          # That guard never matches under nixpkgs Racket on macOS, so
-          # `raco pkg install herbie` silently omits the binary package and the
-          # `egg-herbie` collection ends up missing. Naming the prebuilt package
-          # for this system explicitly sidesteps the guard. On Linux the strings
-          # agree, so the default dependency resolution already works ("").
           eggHerbiePkg =
             if system == "aarch64-darwin" then
               "egg-herbie-macosm1"
@@ -166,10 +158,6 @@
           # A shell line prepending nativeLoaderPath to whatever is already set.
           exportLoaderPath = "export ${loaderPathVar}=\"${nativeLoaderPath}\${${loaderPathVar}:+:\$${loaderPathVar}}\"";
 
-          # One-shot, idempotent helper: install Herbie into the user's Racket
-          # package scope together with the correct prebuilt egg-herbie for this
-          # system, then confirm the `egg-herbie` collection actually loads (it
-          # dlopen's a Rust cdylib via FFI). Run once per machine.
           herbie-setup = pkgs.writeShellScriptBin "herbie-setup" ''
             set -euo pipefail
             want="herbie ${eggHerbiePkg}"
@@ -183,14 +171,6 @@
             fi
           '';
 
-          # The Racket `rival3` package, pinned by release tag. v1.0.2 is the
-          # release the catalog resolved to for the pinned Herbie (its zip hashes
-          # to the checksum recorded in pkgs.rktd), so this reproduces the same
-          # prefix a source build produced rather than tracking whatever
-          # `releases/latest` points at today.
-          #
-          # The zip has its package files at the root (info.rkt, main.rkt,
-          # private/), hence stripRoot = false.
           racket-rival3-src = pkgs.fetchzip {
             url = "https://github.com/herbie-fp/rival3/releases/download/v1.0.2/rival3-racket.zip";
             hash = "sha256-WwmuJSyEN+/bbvVdw6e0pQ7rjX+87nr387Yug5vAsUg=";
@@ -211,10 +191,6 @@
             cargoHash = "sha256-jzRiXE7GEYRLlUwbOMwbOS2s3ciPN3tkHkyl0YwIJdY=";
             doCheck = false;
 
-            # Only the cdylib: a `libegg_math.*` glob would also pick up cargo's
-            # .rlib and .d, which nothing on the Racket side ever loads. The
-            # release dir is target/release or target/<triple>/release depending
-            # on whether the build is cross-ish, so search rather than guess.
             installPhase = ''
               runHook preInstall
               mkdir -p $out/lib
@@ -230,17 +206,6 @@
             '';
           };
 
-          # Herbie plus its Racket package closure, installed into a
-          # self-contained PLTADDONDIR prefix. This is the `racket -l herbie
-          # report` half of the evaluation, and the reason the eval used to need
-          # an in-tree CMake build: -DHERBIE_MLIR_BUILD_HERBIE=ON produces the
-          # same prefix under <build>/herbie_mlir/racket-pkgs, but by cloning
-          # Herbie and letting `raco` resolve the rest from the package catalog.
-          # Here every source is a pinned flake input and egg-herbie's cdylib is
-          # prebuilt, so nothing reaches the network and the result is cached.
-          #
-          # Use it by pointing PLTADDONDIR at the store path (that is what the
-          # Snakefile's `racket_prefix` config does).
           herbie-racket = pkgs.stdenv.mkDerivation {
             pname = "herbie-racket";
             version = "2.3";
@@ -252,8 +217,6 @@
               runHook preBuild
               export HOME="$TMPDIR/home"
               mkdir -p "$HOME"
-              # Some of these packages run code at compile time, which can reach
-              # the same dlopen'd libraries the install check needs.
               ${exportLoaderPath}
 
               # Install directly into $out rather than staging and copying: raco
@@ -262,10 +225,6 @@
               export PLTADDONDIR="$out"
               mkdir -p "$PLTADDONDIR"
 
-              # `raco pkg install <dir>` takes the package name from the
-              # directory's basename, and a bare store path is called
-              # "...-source", so stage every source under its real name. The
-              # copies also have to be writable: raco compiles in place.
               stage="$TMPDIR/stage"
               mkdir -p "$stage"
               stage_pkg() { # <package-name> <source-dir>
@@ -283,19 +242,9 @@
               stage_pkg egg-herbie            ${herbie-src}/egg-herbie
               stage_pkg herbie                ${herbie-src}/src
 
-              # egg-herbie/main.rkt resolves the cdylib with
-              # (define-runtime-path "target/release/libegg_math.<so>"), i.e. the
-              # path cargo would have written it to.
               mkdir -p "$stage/egg-herbie/target/release"
               cp ${egg-herbie-lib}/lib/libegg_math.* "$stage/egg-herbie/target/release/"
 
-              # rival3 ships prebuilt native libraries under upstream Racket's
-              # platform names ("aarch64-macosx"), which is not what nixpkgs
-              # Racket reports ("aarch64-darwin"); alias the closest arch match
-              # so the lookup resolves. Same fix as
-              # herbie_mlir/cmake/fix_rival3_native.cmake, applied pre-install so
-              # the link is relative and travels with the copy. No-op on Linux,
-              # where the two strings already agree.
               subpath="$(racket -e '(displayln (system-library-subpath #f))')"
               nativedir="$stage/rival3/private/native"
               if [ -d "$nativedir" ] && [ ! -e "$nativedir/$subpath" ]; then
@@ -329,8 +278,6 @@
               runHook postBuild
             '';
 
-            # $out is already populated; just drop raco's advisory lock files,
-            # which are meaningless in a read-only store path.
             installPhase = ''
               runHook preInstall
               find "$out" -name '.LOCK*' -delete
@@ -342,9 +289,6 @@
               export HOME="$TMPDIR/home"
               export PLTADDONDIR="$out"
               ${exportLoaderPath}
-              # Loading the collection is the real test: it dlopen's the egg
-              # cdylib and rival3's native library, so a missing or unresolvable
-              # library fails here rather than three hours into an eval run.
               racket -e '(dynamic-require (quote egg-herbie) #f)'
               racket -l herbie -- --version
             '';
@@ -352,7 +296,6 @@
             meta.platforms = lib.platforms.unix;
           };
 
-          # Prebuilt rival3-ffi static C-API library, so `nix build` is offline.
           rival-ffi = rustPlatform.buildRustPackage {
             pname = "rival3-ffi";
             version = "unstable-2026-04-28";
@@ -446,10 +389,6 @@
                 ++ lib.optionals isDebug [
                   "fortify"
                   "fortify3"
-                  # LLVM defines _LIBCPP_HARDENING_MODE_EXTENSIVE via its
-                  # exported CMake flags when assertions are on (debug). Drop
-                  # nix's default libcxxhardeningfast so the two don't both
-                  # define _LIBCPP_HARDENING_MODE (-Wmacro-redefined).
                   "libcxxhardeningfast"
                 ];
               };
@@ -573,132 +512,134 @@
                 }
               );
 
-              # The build the evaluation actually needs: herbie-mlir-opt, and
-              # nothing else. rover (and with it the whole CIRCT dependency) and
-              # cranelift are dead weight for the eval, so they are switched off
-              # -- the point of a separate package is that `nix run .#herbie-eval`
-              # gets a cached store path instead of re-configuring and rebuilding
-              # a tree every time.
-              #
-              # Note there is deliberately no -DHERBIE_MLIR_BUILD_HERBIE=ON here:
-              # that option clones Herbie and runs `raco pkg install` + `cargo`,
-              # none of which work in the network-less Nix sandbox. The Racket
-              # side is the `herbie-racket` derivation instead.
-              tamagoyaki-eval = tamagoyaki.overrideAttrs (old: {
-                pname = "tamagoyaki-eval";
-                cmakeFlags = old.cmakeFlags ++ [
-                  "-DBUILD_HERBIE_MLIR=ON"
-                  "-DBUILD_ROVER_MLIR=OFF"
-                  "-DBUILD_CRANELIFT_MLIR=OFF"
-                ];
+              mkEvalBuild = pname: flags: tamagoyaki.overrideAttrs (old: {
+                inherit pname;
+                cmakeFlags = old.cmakeFlags ++ flags;
               });
 
-              herbie-eval = pkgs.writeShellApplication {
+              tamagoyaki-eval = mkEvalBuild "tamagoyaki-eval" [
+                "-DBUILD_HERBIE_MLIR=ON"
+                "-DBUILD_ROVER_MLIR=OFF"
+                "-DBUILD_CRANELIFT_MLIR=OFF"
+              ];
+
+              tamagoyaki-rover-eval = mkEvalBuild "tamagoyaki-rover-eval" [
+                "-DBUILD_HERBIE_MLIR=OFF"
+                "-DBUILD_ROVER_MLIR=ON"
+                "-DBUILD_CRANELIFT_MLIR=OFF"
+              ];
+
+              # Both evaluations are driven the same way: resolve the compiler
+              # and the output directory from the environment, insist on a
+              # checkout (the pipelines read their benchmarks, rule sources and
+              # Snakefile from one, and write results into it), then hand the
+              # lot to snakemake.
+              #
+              #   evalDir    the pipeline's directory, relative to the checkout
+              #   inputs     what has to be on PATH beyond snakemake and git
+              #   defaults   shell lines setting any extra `*_dir`-style vars
+              #   configArgs extra `--config` entries, referring to those vars
+              #   reads      what the pipeline reads from the checkout, for the
+              #              error message when it is not run inside one
+              #   env        extra exports the pipeline needs
+              #
+              # A second --config would *replace* ours rather than merge
+              # (argparse overwrites the dest), taking build_dir with it, so
+              # extra entries for sensitivity runs go through EXTRA_CONFIG:
+              #   EXTRA_CONFIG='seed=7 max_nodes=8000' herbie-eval
+              mkEval =
+                { name
+                , pkg
+                , evalDir
+                , defaultOutDir
+                , inputs ? [ ]
+                , defaults ? ""
+                , configArgs ? ""
+                , reads
+                , env ? ""
+                }:
+                pkgs.writeShellApplication {
+                  inherit name;
+                  runtimeInputs = [
+                    pkg
+                    pythonEnv # snakemake, xdsl-opt, the eval tools
+                    pkgs.git
+                    pkgs.coreutils
+                    # `snakemake paper` tars the artifact up; shared, so both
+                    # pipelines can build one.
+                    pkgs.gnutar
+                    pkgs.gzip
+                  ]
+                  ++ inputs;
+                  text = ''
+                    build_dir="''${BUILD_DIR:-${pkg}}"
+                    # Relative values are resolved against the repo root by the
+                    # Snakefile, so results land at the top level of the checkout.
+                    out_dir="''${OUT_DIR:-${defaultOutDir}}"
+                    cores="''${CORES:-1}"
+                    ${defaults}
+                    if [ -n "''${TAMAGOYAKI_REPO_ROOT:-}" ]; then
+                      repo_root="$TAMAGOYAKI_REPO_ROOT"
+                      if [ ! -f "$repo_root/${evalDir}/Snakefile" ]; then
+                        echo "${name}: TAMAGOYAKI_REPO_ROOT=$repo_root is not a Tamagoyaki tree" >&2
+                        echo "  (no ${evalDir}/Snakefile there)." >&2
+                        exit 1
+                      fi
+                    elif ! repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+                      echo "${name}: not inside a Tamagoyaki checkout." >&2
+                      echo "  The pipeline reads ${reads}" >&2
+                      echo "  and writes $out_dir, so run it from a clone" >&2
+                      echo "  (or point TAMAGOYAKI_REPO_ROOT at an unpacked tree," >&2
+                      echo "  which is what the Docker artifact does)." >&2
+                      exit 1
+                    fi
+
+                    export SOURCE_DATE_EPOCH="''${SOURCE_DATE_EPOCH:-315532800}"
+                    ${env}
+                    ${exportLoaderPath}
+
+                    cd "$repo_root/${evalDir}"
+                    echo "${name}: build_dir=$build_dir" >&2
+                    echo "${name}: out_dir=$out_dir" >&2
+                    # shellcheck disable=SC2086
+                    exec snakemake -j"$cores" --forceall "$@" --resources bench=1 \
+                      --config build_dir="$build_dir" out_dir="$out_dir" \
+                        ${configArgs} ''${EXTRA_CONFIG:-}
+                  '';
+                };
+
+              herbie-eval = mkEval {
                 name = "herbie-eval";
-                runtimeInputs = [
-                  tamagoyaki-eval
-                  pythonEnv
-                  pkgs.racket
-                  pkgs.git
-                  pkgs.coreutils
-                  pkgs.gnutar
-                  pkgs.gzip
-                ];
-                text = ''
-                  build_dir="''${BUILD_DIR:-${tamagoyaki-eval}}"
+                pkg = tamagoyaki-eval;
+                evalDir = "herbie_mlir/eval";
+                defaultOutDir = "eval-out";
+                reads = "herbie_mlir/eval/fpcore and herbie_mlir/rules.rkt";
+                inputs = [ pkgs.racket ];
+                defaults = ''
                   racket_prefix="''${RACKET_PREFIX:-${herbie-racket}}"
-                  # Relative values are resolved against the repo root by the
-                  # Snakefile, so results land at the top level of the checkout.
-                  out_dir="''${OUT_DIR:-eval-out}"
-                  cores="''${CORES:-1}"
-
-                  if ! repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-                    echo "herbie-eval: not inside a Tamagoyaki checkout." >&2
-                    echo "  The pipeline reads herbie_mlir/eval/fpcore and writes" >&2
-                    echo "  the output directory ($out_dir), so run it from a clone." >&2
-                    exit 1
-                  fi
-
-                  export SOURCE_DATE_EPOCH="''${SOURCE_DATE_EPOCH:-315532800}"
-                  export PLT_COMPILED_FILE_CHECK=exists
-                  ${exportLoaderPath}
-
-                  cd "$repo_root/herbie_mlir/eval"
-                  echo "herbie-eval: build_dir=$build_dir" >&2
                   echo "herbie-eval: racket_prefix=$racket_prefix" >&2
-                  echo "herbie-eval: out_dir=$out_dir" >&2
-                  # A second --config would *replace* ours rather than merge
-                  # (argparse overwrites the dest), taking build_dir with it, so
-                  # extra entries for sensitivity runs go through EXTRA_CONFIG:
-                  #   EXTRA_CONFIG='seed=7 max_nodes=8000' herbie-eval
-                  # shellcheck disable=SC2086
-                  exec snakemake -j"$cores" --forceall "$@" --resources bench=1 \
-                    --config build_dir="$build_dir" racket_prefix="$racket_prefix" \
-                      out_dir="$out_dir" ''${EXTRA_CONFIG:-}
                 '';
+                env = "export PLT_COMPILED_FILE_CHECK=exists";
+                configArgs = ''racket_prefix="$racket_prefix"'';
               };
 
-              # The mirror image of tamagoyaki-eval for the Rover datapath
-              # evaluation: rover-mlir-opt and nothing else. herbie brings the
-              # Rival/Racket half of the tree along with it and cranelift is
-              # unused here, so both are switched off; CIRCT stays, since rover
-              # links it and the evaluation's backend is circt-synth.
-              tamagoyaki-rover-eval = tamagoyaki.overrideAttrs (old: {
-                pname = "tamagoyaki-rover-eval";
-                cmakeFlags = old.cmakeFlags ++ [
-                  "-DBUILD_HERBIE_MLIR=OFF"
-                  "-DBUILD_ROVER_MLIR=ON"
-                  "-DBUILD_CRANELIFT_MLIR=OFF"
-                ];
-              });
-
-              rover-eval = pkgs.writeShellApplication {
+              rover-eval = mkEval {
                 name = "rover-eval";
-                runtimeInputs = [
-                  tamagoyaki-rover-eval
+                pkg = tamagoyaki-rover-eval;
+                evalDir = "rover-mlir/eval";
+                defaultOutDir = "rover-eval-out";
+                reads = "rover-mlir/eval/benchmarks and rover-mlir/rules";
+                inputs = [
                   circt # circt-synth, circt-translate
-                  pythonEnv # snakemake, xdsl-opt
                   pkgs.abc-verifier # technology mapping against ASAP7
-                  pkgs.git
-                  pkgs.coreutils
                 ];
-                text = ''
-                  build_dir="''${BUILD_DIR:-${tamagoyaki-rover-eval}}"
+                defaults = ''
                   circt_bin="''${CIRCT_BIN:-${circt}/bin}"
                   abc_bin="''${ABC:-${pkgs.abc-verifier}/bin/abc}"
-                  # Relative values are resolved against the repo root by the
-                  # Snakefile, so results land at the top level of the checkout.
-                  out_dir="''${OUT_DIR:-rover-eval-out}"
-                  cores="''${CORES:-1}"
-
-                  if ! repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-                    echo "rover-eval: not inside a Tamagoyaki checkout." >&2
-                    echo "  The pipeline reads rover-mlir/eval/benchmarks and" >&2
-                    echo "  rover-mlir/rules, and writes the output directory" >&2
-                    echo "  ($out_dir), so run it from a clone." >&2
-                    exit 1
-                  fi
-
-                  export SOURCE_DATE_EPOCH="''${SOURCE_DATE_EPOCH:-315532800}"
-                  ${exportLoaderPath}
-
-                  cd "$repo_root/rover-mlir/eval"
-                  echo "rover-eval: build_dir=$build_dir" >&2
                   echo "rover-eval: circt_bin=$circt_bin" >&2
                   echo "rover-eval: abc=$abc_bin" >&2
-                  echo "rover-eval: out_dir=$out_dir" >&2
-                  # A second --config would *replace* ours rather than merge
-                  # (argparse overwrites the dest), taking build_dir with it, so
-                  # extra entries for sensitivity runs go through EXTRA_CONFIG:
-                  #   EXTRA_CONFIG='max_iters=8 synth_until=mapping' rover-eval
-                  # The cell library is deliberately not passed: it defaults to
-                  # the vendored rover-mlir/eval/lib/asap7.genlib in the
-                  # checkout, and EXTRA_CONFIG='genlib=...' overrides it.
-                  # shellcheck disable=SC2086
-                  exec snakemake -j"$cores" --forceall "$@" --resources bench=1 \
-                    --config build_dir="$build_dir" out_dir="$out_dir" \
-                      circt_bin="$circt_bin" abc="$abc_bin" ''${EXTRA_CONFIG:-}
                 '';
+                configArgs = ''circt_bin="$circt_bin" abc="$abc_bin"'';
               };
 
               # `tamagoyaki-configure [build-dir] [extra cmake args...]`, using
@@ -822,6 +763,106 @@
 
           release = mkVariant { variant = "release"; };
           debug = mkVariant { variant = "debug"; };
+
+          imageRev = self.rev or self.dirtyRev or "<unavailable: no git metadata in flake source>";
+
+          eval-image-init = pkgs.writeShellApplication {
+            name = "tamagoyaki-eval-init";
+            runtimeInputs = [ pkgs.coreutils ];
+            text = ''
+              root="''${TAMAGOYAKI_REPO_ROOT:?}"
+              if [ ! -e "$root/Makefile" ]; then
+                mkdir -p "$root"
+                cp -R --no-preserve=mode,ownership ${self}/. "$root/"
+                echo "tamagoyaki: source tree materialised at $root (rev ${imageRev})" >&2
+              fi
+              mkdir -p "''${HOME:?}" "''${MPLCONFIGDIR:?}"
+              cd "$root"
+              exec "$@"
+            '';
+          };
+
+          eval-image-tools = pkgs.buildEnv {
+            name = "tamagoyaki-eval-tools";
+            paths = [
+              release.tamagoyaki-eval # herbie-mlir-opt
+              release.tamagoyaki-rover-eval # rover-mlir-opt
+              release.circt # circt-synth, circt-translate
+              pythonEnv # snakemake, xdsl-opt, the eval console scripts
+              pkgs.racket
+              pkgs.abc-verifier
+              pkgs.git
+              pkgs.gnugrep
+              pkgs.gnused
+              pkgs.findutils
+              pkgs.less
+            ];
+            pathsToLink = [ "/bin" ];
+            ignoreCollisions = true;
+          };
+
+          eval-image = pkgs.dockerTools.streamLayeredImage {
+            name = "tamagoyaki-eval";
+            tag = self.shortRev or "dirty";
+            maxLayers = 100;
+
+            contents = [
+              release.herbie-eval
+              release.rover-eval
+              eval-image-init
+              eval-image-tools
+              pkgs.gnumake
+              pkgs.bashInteractive
+              pkgs.coreutils
+              pkgs.dockerTools.usrBinEnv
+              pkgs.dockerTools.binSh
+              pkgs.dockerTools.fakeNss
+            ];
+
+            extraCommands = ''
+              mkdir -m 1777 tmp
+              mkdir -m 0777 results home work work/Tamagoyaki
+            '';
+            fakeRootCommands = "chown -R 0:0 ./tmp ./results ./home ./work";
+
+            config = {
+              Entrypoint = [ "/bin/tamagoyaki-eval-init" ];
+              Cmd = [
+                "make"
+                "eval"
+              ];
+              WorkingDir = "/work/Tamagoyaki";
+              Env = [
+                "PATH=/bin"
+                "TAMAGOYAKI_REPO_ROOT=/work/Tamagoyaki"
+                "TAMAGOYAKI_GIT_REV=${imageRev}"
+                
+                "HERBIE_OUT_DIR=/results/eval-out"
+                "ROVER_OUT_DIR=/results/rover-eval-out"
+                "CORES=1"
+
+                "HOME=/home/tamagoyaki"
+                "XDG_CACHE_HOME=/home/tamagoyaki/.cache"
+                "MPLCONFIGDIR=/home/tamagoyaki/.cache/matplotlib"
+                "LANG=C.UTF-8"
+                "LC_ALL=C.UTF-8"
+                "LOCALE_ARCHIVE=${pkgs.glibcLocales}/lib/locale/locale-archive"
+                "PYTHONDONTWRITEBYTECODE=1"
+                "PLTADDONDIR=${herbie-racket}"
+                "PLT_COMPILED_FILE_CHECK=exists"
+                "LD_LIBRARY_PATH=${nativeLoaderPath}"
+                "SOURCE_DATE_EPOCH=315532800"
+              ];
+              Labels = {
+                "org.opencontainers.image.title" = "Tamagoyaki evaluation artifact";
+                "org.opencontainers.image.description" = "Herbie-MLIR and Rover datapath evaluations, prebuilt";
+                "org.opencontainers.image.revision" = imageRev;
+                "org.opencontainers.image.licenses" = "Apache-2.0";
+              };
+            };
+
+            meta.platforms = lib.platforms.linux;
+          };
         in
         {
           packages = {
@@ -842,6 +883,9 @@
               egg-herbie-lib
               herbie-racket
               ;
+          }
+          // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+            inherit eval-image;
           };
           devShells = {
             default = release.shell;
@@ -857,6 +901,12 @@
             rover-eval = {
               type = "app";
               program = "${release.rover-eval}/bin/rover-eval";
+            };
+          }
+          // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+            eval-image = {
+              type = "app";
+              program = "${eval-image}";
             };
           };
         };

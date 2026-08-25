@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 from typing import Any, TypedDict, cast
 
+from tamagoyaki_eval import timing
+
 
 class TestResult(TypedDict, total=False):
     """Type for individual test result entries."""
@@ -41,11 +43,11 @@ def extract_filename_from_target_prog(target_prog: str) -> str:
 
 
 def extract_optimize_timing(timing_path: Path) -> tuple[str, str, str]:
-    """Extract LoadPDL, processFunctions, and EqualitySaturation durations from a tamagoyaki timing JSON file.
+    """Extract LoadPDL, processFunctions and EqualitySaturation durations from a
+    tamagoyaki timing JSON file.
 
-    Looks for the top-level "HerbieOptimizePass" entry and extracts its
-    "LoadPDL" and "processFunctions" children's wall-clock durations,
-    as well as the "EqualitySaturation" duration nested inside "processFunctions".
+    All three are looked up under the top-level "HerbieOptimizePass" scope;
+    EqualitySaturation sits inside processFunctions.
 
     Args:
         timing_path: Path to the timing JSON file.
@@ -55,53 +57,15 @@ def extract_optimize_timing(timing_path: Path) -> tuple[str, str, str]:
         equality_saturation_duration) as strings (in seconds).
 
     Raises:
-        FileNotFoundError: If the timing file does not exist.
-        ValueError: If the timing data is invalid or required entries are missing.
+        SystemExit: If the file or any of the three scopes is missing.
     """
-    if not timing_path.exists():
-        raise FileNotFoundError(f"Timing file not found: {timing_path}")
-
-    with open(timing_path) as f:
-        timing_data: Any = json.load(f)
-
-    if not isinstance(timing_data, list):
-        raise ValueError(
-            f"Expected timing data to be a list, got {type(timing_data).__name__}"
-        )
-
-    for entry in timing_data:
-        if isinstance(entry, dict) and entry.get("name") == "HerbieOptimizePass":
-            load_pdl: str | None = None
-            process_functions: str | None = None
-            equality_saturation: str | None = None
-
-            for sub_pass in entry.get("passes", []):
-                if not isinstance(sub_pass, dict):
-                    continue
-                wall: Any = sub_pass.get("wall")
-                if not isinstance(wall, dict) or "duration" not in wall:
-                    continue
-                if sub_pass.get("name") == "LoadPDL":
-                    load_pdl = str(wall["duration"])
-                elif sub_pass.get("name") == "processFunctions":
-                    process_functions = str(wall["duration"])
-                    # Extract EqualitySaturation from processFunctions children
-                    for child in sub_pass.get("passes", []):
-                        if isinstance(child, dict) and child.get("name") == "EqualitySaturation":
-                            child_wall: Any = child.get("wall")
-                            if isinstance(child_wall, dict) and "duration" in child_wall:
-                                equality_saturation = str(child_wall["duration"])
-
-            if load_pdl is None:
-                raise ValueError(f"No 'LoadPDL' entry found in HerbieOptimizePass in {timing_path}")
-            if process_functions is None:
-                raise ValueError(f"No 'processFunctions' entry found in HerbieOptimizePass in {timing_path}")
-            if equality_saturation is None:
-                raise ValueError(f"No 'EqualitySaturation' entry found in processFunctions in {timing_path}")
-
-            return load_pdl, process_functions, equality_saturation
-
-    raise ValueError(f"No 'HerbieOptimizePass' entry found in {timing_path}")
+    optimize = ("HerbieOptimizePass",)
+    return (
+        str(timing.require_scope(timing_path, *optimize, "LoadPDL")),
+        str(timing.require_scope(timing_path, *optimize, "processFunctions")),
+        str(timing.require_scope(
+            timing_path, *optimize, "processFunctions", "EqualitySaturation")),
+    )
 
 
 def extract_target_accuracy(target: Any) -> str:
@@ -203,7 +167,11 @@ def extract_herbie_timings(timeline_path: Path) -> tuple[str, str, str, str]:
 
 
 def extract_saturation_time(timing_path: Path) -> tuple[str, str]:
-    """Extract the runSaturation wall-clock duration and total match time from a tamagoyaki timing JSON file.
+    """Extract the runSaturation wall-clock duration and the total match time
+    from a tamagoyaki timing JSON file.
+
+    Matching happens once per saturation iteration, so the match time is the sum
+    over every "match" scope below runSaturation.
 
     Args:
         timing_path: Path to the timing JSON file.
@@ -212,42 +180,12 @@ def extract_saturation_time(timing_path: Path) -> tuple[str, str]:
         A tuple of (saturation_duration, match_duration) as strings.
 
     Raises:
-        FileNotFoundError: If the timing file does not exist.
-        ValueError: If the timing data is invalid or runSaturation entry is missing.
+        SystemExit: If the file, runSaturation, or every match scope is missing.
     """
-    if not timing_path.exists():
-        raise FileNotFoundError(f"Timing file not found: {timing_path}")
-
-    with open(timing_path) as f:
-        timing_data: Any = json.load(f)
-
-    if not isinstance(timing_data, list):
-        raise ValueError(
-            f"Expected timing data to be a list, got {type(timing_data).__name__}"
-        )
-
-    for entry in timing_data:
-        if isinstance(entry, dict) and entry.get("name") == "runSaturation":
-            wall: Any = entry.get("wall")
-            if not isinstance(wall, dict) or "duration" not in wall:
-                continue
-            saturation_duration = str(wall["duration"])
-
-            # Sum up match durations across all iterations
-            match_total: float = 0.0
-            passes: Any = entry.get("passes", [])
-            for iteration in passes:
-                if not isinstance(iteration, dict):
-                    continue
-                for sub_pass in iteration.get("passes", []):
-                    if isinstance(sub_pass, dict) and sub_pass.get("name") == "match":
-                        sub_wall: Any = sub_pass.get("wall")
-                        if isinstance(sub_wall, dict) and "duration" in sub_wall:
-                            match_total += float(sub_wall["duration"])
-
-            return saturation_duration, str(match_total)
-
-    raise ValueError(f"No 'runSaturation' entry found in {timing_path}")
+    return (
+        str(timing.require_scope(timing_path, "runSaturation")),
+        str(timing.require_sum(timing_path, "runSaturation", "match")),
+    )
 
 
 def extract_accuracies(
@@ -310,8 +248,8 @@ def extract_accuracies(
             load_pdl_time, process_functions_time, equality_saturation_time = extract_optimize_timing(
                 Path(optimize_timing_dir) / f"{filename}.json"
             )
-        except (ValueError, FileNotFoundError) as e:
-            raise ValueError(f"Test {i} ({name}): {e}")
+        except (SystemExit, ValueError, FileNotFoundError) as e:
+            raise SystemExit(f"Test {i} ({name}): {e}")
 
         # Extract Herbie timing data from timeline.json
         try:
@@ -330,8 +268,8 @@ def extract_accuracies(
             saturation_time_individual, match_time_individual = extract_saturation_time(
                 timing_dir / f"{filename}_individual.json"
             )
-        except (ValueError, FileNotFoundError) as e:
-            raise ValueError(f"Test {i} ({name}): {e}")
+        except (SystemExit, ValueError, FileNotFoundError) as e:
+            raise SystemExit(f"Test {i} ({name}): {e}")
 
         writer.writerow(
             {

@@ -1,8 +1,4 @@
-import os
-import glob
-import subprocess
-import platform
-import datetime
+import sys
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -22,10 +18,13 @@ from pathlib import Path
 EVAL_DIR   = Path(workflow.basedir).resolve()
 REPO_ROOT  = EVAL_DIR.parents[1]
 
-def _resolve_dir(value):
-    """Interpret a config path relative to the repo root, as an absolute Path."""
-    path = Path(value)
-    return path if path.is_absolute() else (REPO_ROOT / path).resolve()
+# The shared evaluation code comes from the checkout, not from wherever
+# tamagoyaki_eval is installed -- see tamagoyaki_eval/__init__.py for why.
+sys.path.insert(0, str(REPO_ROOT))
+
+from tamagoyaki_eval import dir_resolver, provenance
+
+_resolve_dir = dir_resolver(REPO_ROOT)
 
 BUILD_DIR = _resolve_dir(config.get("build_dir", "build-eval"))
 
@@ -38,6 +37,9 @@ RACKET_PREFIX = _resolve_dir(
 herbie_mlir_opt_path = str(BUILD_DIR / "bin" / "herbie-mlir-opt")
 herbie_racket_prefix = str(RACKET_PREFIX)
 
+RULES_RKT  = REPO_ROOT / "herbie_mlir" / "rules.rkt"
+FPCORE_DIR = EVAL_DIR / "fpcore"
+
 # ---------------------------------------------------------------------------
 # Evaluation parameters. Single source of truth: used in the rules *and*
 # recorded in the provenance manifest, and overridable for sensitivity runs
@@ -49,10 +51,13 @@ MAX_NODES        = int(config.get("max_nodes", 4000))
 HERBIE_NUM_ITERS = int(config.get("herbie_num_iters", 1))
 
 # Get all benchmark names from fpcore files (sorted for reproducibility)
-benchmark_names = sorted([
-    os.path.splitext(os.path.basename(f))[0]
-    for f in glob.glob("fpcore/*.fpcore")
-])
+benchmark_names = sorted([f.stem for f in FPCORE_DIR.glob("*.fpcore")])
+
+# The single rule set this pipeline builds a matcher from; `{set}` in the
+# shared pdl_to_pdl_interp rules resolves to it. Constrained so the wildcard
+# cannot swallow the path separators in RULES_DIR.
+wildcard_constraints:
+    set = "rules",
 
 # ---------------------------------------------------------------------------
 # Output layout. Results go to a directory at the top level of the repository
@@ -90,41 +95,28 @@ PLOTS = [
 ]
 
 # Cheap, non-measuring rules: never worth scheduling as separate cluster jobs.
-localrules: all, paper, provenance, clean, concatenate_merged_fpcores
+localrules: all, provenance, concatenate_merged_fpcores
 
 rule all:
     input:
         PLOTS,
+        PROVENANCE,
 
 # ============ Rules Processing Pipeline ============
 
 rule convert_rules_to_pdl:
-    output:
-        f"{RULES_DIR}/rules_pdl.mlir"
-    shell:
-        "herbie-pdl ../rules.rkt > {output}"
-
-rule convert_pdl_to_pdl_interp:
     input:
-        f"{RULES_DIR}/rules_pdl.mlir"
+        RULES_RKT
     output:
-        f"{RULES_DIR}/rules_pdl_interp.mlir"
-    shell:
-        "xdsl-opt -p 'convert-pdl-to-pdl-interp{{optimize_for_eqsat=true}}' {input} -o {output}"
-
-rule convert_pdl_to_pdl_interp_individual:
-    input:
         f"{RULES_DIR}/rules_pdl.mlir"
-    output:
-        f"{RULES_DIR}/rules_pdl_interp_individual.mlir"
     shell:
-        "xdsl-opt -p 'convert-pdl-to-pdl-interp{{optimize_for_eqsat=true convert-individually=true}}' {input} -o {output}"
+        "herbie-pdl {input} > {output}"
 
 # ============ Benchmark Processing Pipeline ============
 
 rule fpcore_to_mlir:
     input:
-        "fpcore/{benchmark}.fpcore"
+        FPCORE_DIR / "{benchmark}.fpcore"
     output:
         f"{MLIR_DIR}/{{benchmark}}.mlir"
     shell:
@@ -180,7 +172,7 @@ rule optimized_mlir_to_fpcore:
 
 rule insert_fpcore_alternatives:
     input:
-        original = "fpcore/{benchmark}.fpcore",
+        original = FPCORE_DIR / "{benchmark}.fpcore",
         optimized = f"{OPTIMIZED_FPCORE_DIR}/{{benchmark}}.fpcore"
     output:
         f"{FPCORE_MERGED_DIR}/{{benchmark}}.fpcore"
@@ -276,73 +268,37 @@ rule provenance:
     output:
         PROVENANCE,
     run:
-        def cmd(args):
-            try:
-                r = subprocess.run(args, capture_output=True, text=True)
-                return (r.stdout or r.stderr).strip().splitlines()[0] if (r.stdout or r.stderr) else ""
-            except Exception as e:
-                return f"<unavailable: {e}>"
+        provenance.write(
+            output[0],
+            title="Tamagoyaki / Herbie-MLIR evaluation provenance",
+            repo_root=REPO_ROOT,
+            fields=[
+                ("racket", provenance.cmd(["racket", "--version"])),
+                ("herbie_mlir_opt", herbie_mlir_opt_path),
+                ("herbie_mlir_opt_ver",
+                 provenance.cmd([herbie_mlir_opt_path, "--version"],
+                                drop=provenance.LLVM_BANNER)),
+                ("build_dir", BUILD_DIR),
+                ("racket_prefix", RACKET_PREFIX),
+                ("out_dir", OUT_DIR),
+                # keep=1: a missing collection answers with a backtrace.
+                ("herbie", provenance.cmd([
+                    "env", f"PLTADDONDIR={herbie_racket_prefix}",
+                    "racket", "-l", "herbie", "--", "--version"], keep=1)),
+                ("benchmarks", len(benchmark_names)),
+            ],
+            parameters=[
+                ("seed", SEED),
+                ("max_saturation_iters", MAX_SAT_ITERS),
+                ("max_nodes", MAX_NODES),
+                ("herbie_num_iters", HERBIE_NUM_ITERS),
+            ],
+        )
 
-        def cpu_model():
-            try:
-                for line in open("/proc/cpuinfo"):
-                    if line.startswith("model name"):
-                        return line.split(":", 1)[1].strip()
-            except Exception:
-                pass
-            return cmd(["sysctl", "-n", "machdep.cpu.brand_string"]) or "<unknown>"
+# ---------------------------------------------------------------------------
+# Shared rules: PDL -> PDL-interp, the paper artifact, clean.
+# ---------------------------------------------------------------------------
+PAPER_FIGURES = PLOTS
+PAPER_DATA = [EVALUATION_CSV, PROVENANCE]
 
-        git_rev = cmd(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"])
-        dirty = cmd(["git", "-C", str(REPO_ROOT), "status", "--porcelain"])
-
-        lines = [
-            "# Tamagoyaki / Herbie-MLIR evaluation provenance",
-            f"generated_utc:        {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
-            f"git_rev:              {git_rev}{'  (DIRTY WORKING TREE)' if dirty else ''}",
-            f"host:                 {platform.node()}",
-            f"platform:             {platform.platform()}",
-            f"cpu:                  {cpu_model()}  x{os.cpu_count()}",
-            f"python:               {platform.python_version()}",
-            f"snakemake:            {cmd(['snakemake', '--version'])}",
-            f"racket:               {cmd(['racket', '--version'])}",
-            f"herbie_mlir_opt:      {herbie_mlir_opt_path}",
-            f"herbie_mlir_opt_ver:  {cmd([herbie_mlir_opt_path, '--version'])}",
-            f"build_dir:            {BUILD_DIR}",
-            f"racket_prefix:        {RACKET_PREFIX}",
-            f"out_dir:              {OUT_DIR}",
-            f"herbie:               {cmd(['env', f'PLTADDONDIR={herbie_racket_prefix}', 'racket', '-l', 'herbie', '--', '--version'])}",
-            f"benchmarks:           {len(benchmark_names)}",
-            "",
-            "[parameters]",
-            f"seed:                 {SEED}",
-            f"max_saturation_iters: {MAX_SAT_ITERS}",
-            f"max_nodes:            {MAX_NODES}",
-            f"herbie_num_iters:     {HERBIE_NUM_ITERS}",
-            "",
-        ]
-        with open(output[0], "w") as fh:
-            fh.write("\n".join(lines))
-        print("\n".join(lines))
-
-# Everything a reviewer needs in one directory: the five figures, the raw CSV
-# and the manifest. `snakemake paper` builds it; the tarball is one file to ship.
-rule paper:
-    input:
-        plots = PLOTS,
-        csv = EVALUATION_CSV,
-        provenance = PROVENANCE,
-    output:
-        directory(PAPER_DIR),
-    shell:
-        r"""
-        mkdir -p {output}/plots
-        cp {input.csv} {input.provenance} {output}/
-        cp {input.plots} {output}/plots/
-        ( cd {OUT_DIR} && tar -czf {PAPER_NAME}.tar.gz {PAPER_NAME} )
-        """
-
-# ============ Utility Rules ============
-
-rule clean:
-    shell:
-        f"rm -rf {OUT_DIR}"
+include: str(REPO_ROOT / "tamagoyaki_eval" / "common.smk")

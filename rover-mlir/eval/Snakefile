@@ -1,9 +1,5 @@
-import datetime
-import hashlib
-import os
-import platform
 import re
-import subprocess
+import sys
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -23,15 +19,15 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 EVAL_DIR  = Path(workflow.basedir).resolve()
 REPO_ROOT = EVAL_DIR.parents[1]
-TOOLS_DIR = EVAL_DIR / "tools"
 RULES_SRC = REPO_ROOT / "rover-mlir" / "rules"
 
+# The shared evaluation code comes from the checkout, not from wherever
+# tamagoyaki_eval is installed -- see tamagoyaki_eval/__init__.py for why.
+sys.path.insert(0, str(REPO_ROOT))
 
-def _resolve_dir(value):
-    """Interpret a config path relative to the repo root, as an absolute Path."""
-    path = Path(value)
-    return path if path.is_absolute() else (REPO_ROOT / path).resolve()
+from tamagoyaki_eval import dir_resolver, provenance
 
+_resolve_dir = dir_resolver(REPO_ROOT)
 
 BUILD_DIR = _resolve_dir(config.get("build_dir", "build-eval-rover"))
 rover_opt = str(BUILD_DIR / "bin" / "rover-mlir-opt")
@@ -68,7 +64,7 @@ SYNTH_FLAGS    = " ".join(filter(None, [
 ]))
 
 # Configurations, and which rule set each saturates with. Keep in step with
-# CONFIGS in tools/latex_table.py, which owns the column order.
+# CONFIGS in tamagoyaki_eval/rover/latex_table.py, which owns the column order.
 CONFIGS = ["baseline", "rover", "multi", "multi-persist"]
 RULESET = {"rover": "base", "multi": "full", "multi-persist": "full"}
 
@@ -104,9 +100,12 @@ ABC_DIR       = f"{OUT_DIR}/08-abc"
 RESULTS_CSV   = f"{OUT_DIR}/09-results.csv"
 TABLE_TEX     = f"{OUT_DIR}/10-table.tex"
 PROVENANCE    = f"{OUT_DIR}/11-provenance.txt"
+PAPER_NAME    = "12-paper-artifact"
+PAPER_DIR     = f"{OUT_DIR}/{PAPER_NAME}"
+PAPER_TARBALL = f"{OUT_DIR}/{PAPER_NAME}.tar.gz"
 
 # Cheap, non-measuring rules: never worth scheduling as separate cluster jobs.
-localrules: all, clean, provenance, copy_input, baseline_passthrough, \
+localrules: all, provenance, copy_input, baseline_passthrough, \
             rules_base_pdl, rules_full_pdl, results_csv, latex_table
 
 rule all:
@@ -118,8 +117,9 @@ rule all:
 # 01 -- rule sets
 #
 # The two PDL sources concatenate directly: the patterns sit at the top level
-# of each file (implicit module), so `cat` is a valid pattern set. Regenerating
-# both matchers here is what keeps the evaluation independent of the checked-in
+# of each file (implicit module), so `cat` is a valid pattern set. The matchers
+# themselves come from the shared pdl_to_pdl_interp rule below; regenerating
+# them per run is what keeps the evaluation independent of the checked-in
 # rover-mlir/rules/rewrites_pdl_interp.mlir, which only the lit tests read.
 # ---------------------------------------------------------------------------
 rule rules_base_pdl:
@@ -138,14 +138,6 @@ rule rules_full_pdl:
         f"{RULES_DIR}/full_pdl.mlir"
     shell:
         "cat {input.base} {input.datapath} > {output}"
-
-rule pdl_to_pdl_interp:
-    input:
-        f"{RULES_DIR}/{{set}}_pdl.mlir"
-    output:
-        f"{RULES_DIR}/{{set}}_pdl_interp.mlir"
-    shell:
-        "xdsl-opt -p 'convert-pdl-to-pdl-interp{{optimize_for_eqsat=true}}' {input} -o {output}"
 
 # ---------------------------------------------------------------------------
 # 02 -- inputs
@@ -290,7 +282,7 @@ rule results_csv:
         configs = " ".join(CONFIGS),
         benchmarks = " ".join(BENCHMARKS),
     shell:
-        "python {TOOLS_DIR}/results_csv.py"
+        "rover-results-csv"
         " --abc-dir {ABC_DIR} --timing-dir {TIMING_DIR}"
         " --configs {params.configs} --benchmarks {params.benchmarks}"
         " -o {output}"
@@ -301,7 +293,7 @@ rule latex_table:
     output:
         TABLE_TEX
     shell:
-        "python {TOOLS_DIR}/latex_table.py {input} -o {output}"
+        "rover-latex-table {input} -o {output}"
 
 rule provenance:
     input:
@@ -309,70 +301,47 @@ rule provenance:
     output:
         PROVENANCE,
     run:
-        def cmd(args):
-            try:
-                r = subprocess.run(args, capture_output=True, text=True)
-                out = r.stdout or r.stderr
-                return out.strip().splitlines()[0] if out.strip() else ""
-            except Exception as e:
-                return f"<unavailable: {e}>"
+        provenance.write(
+            output[0],
+            title="Tamagoyaki / Rover datapath evaluation provenance",
+            repo_root=REPO_ROOT,
+            fields=[
+                ("rover_mlir_opt", rover_opt),
+                ("rover_mlir_opt_ver",
+                 provenance.cmd([rover_opt, "--version"],
+                                drop=provenance.LLVM_BANNER)),
+                ("circt_synth", circt_synth),
+                ("circt_synth_ver",
+                 provenance.cmd([circt_synth, "--version"],
+                                drop=provenance.LLVM_BANNER)),
+                ("circt_translate", circt_translate),
+                ("abc", abc),
+                # ABC echoes the -c command before answering it.
+                ("abc_ver", provenance.cmd([abc, "-c", "version"], drop=1)),
+                ("xdsl_opt", provenance.cmd(["xdsl-opt", "--version"])),
+                ("genlib", GENLIB),
+                ("genlib_sha256", provenance.sha256(GENLIB)),
+                ("genlib_upstream",
+                 "github.com/cowardsa/DatapathBench"
+                 "@fe5941cf234bd543c45e8ccea5c10f8c95232b6f (libraries/asap7.genlib)"),
+                ("build_dir", BUILD_DIR),
+                ("out_dir", OUT_DIR),
+                ("benchmarks", f"{len(BENCHMARKS)} ({', '.join(BENCHMARKS)})"),
+                ("configurations", ", ".join(CONFIGS)),
+            ],
+            parameters=[
+                ("max_iters", MAX_ITERS),
+                ("max_nodes", MAX_NODES),
+                ("synthesis_strategy", SYNTH_STRATEGY or "<circt-synth default>"),
+                ("synth_until", SYNTH_UNTIL or "<full pipeline>"),
+                ("circt_synth_flags", SYNTH_FLAGS or "<none>"),
+            ],
+        )
 
-        def cpu_model():
-            try:
-                for line in open("/proc/cpuinfo"):
-                    if line.startswith("model name"):
-                        return line.split(":", 1)[1].strip()
-            except Exception:
-                pass
-            return cmd(["sysctl", "-n", "machdep.cpu.brand_string"]) or "<unknown>"
+# ---------------------------------------------------------------------------
+# Shared rules: PDL -> PDL-interp, the paper artifact, clean.
+# ---------------------------------------------------------------------------
+PAPER_FIGURES = [TABLE_TEX]
+PAPER_DATA = [RESULTS_CSV, PROVENANCE]
 
-        def sha256(path):
-            try:
-                return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-            except Exception as e:
-                return f"<unavailable: {e}>"
-
-        git_rev = cmd(["git", "-C", str(REPO_ROOT), "rev-parse", "HEAD"])
-        dirty = cmd(["git", "-C", str(REPO_ROOT), "status", "--porcelain"])
-
-        lines = [
-            "# Tamagoyaki / Rover datapath evaluation provenance",
-            f"generated_utc:        {datetime.datetime.now(datetime.timezone.utc).isoformat()}",
-            f"git_rev:              {git_rev}{'  (DIRTY WORKING TREE)' if dirty else ''}",
-            f"host:                 {platform.node()}",
-            f"platform:             {platform.platform()}",
-            f"cpu:                  {cpu_model()}  x{os.cpu_count()}",
-            f"python:               {platform.python_version()}",
-            f"snakemake:            {cmd(['snakemake', '--version'])}",
-            f"rover_mlir_opt:       {rover_opt}",
-            f"rover_mlir_opt_ver:   {cmd([rover_opt, '--version'])}",
-            f"circt_synth:          {circt_synth}",
-            f"circt_synth_ver:      {cmd([circt_synth, '--version'])}",
-            f"circt_translate:      {circt_translate}",
-            f"abc:                  {abc}",
-            f"abc_ver:              {cmd([abc, '-c', 'version'])}",
-            f"xdsl_opt:             {cmd(['xdsl-opt', '--version'])}",
-            f"genlib:               {GENLIB}",
-            f"genlib_sha256:        {sha256(GENLIB)}",
-            "genlib_upstream:      github.com/cowardsa/DatapathBench"
-            "@fe5941cf234bd543c45e8ccea5c10f8c95232b6f (libraries/asap7.genlib)",
-            f"build_dir:            {BUILD_DIR}",
-            f"out_dir:              {OUT_DIR}",
-            f"benchmarks:           {len(BENCHMARKS)} ({', '.join(BENCHMARKS)})",
-            f"configurations:       {', '.join(CONFIGS)}",
-            "",
-            "[parameters]",
-            f"max_iters:            {MAX_ITERS}",
-            f"max_nodes:            {MAX_NODES}",
-            f"synthesis_strategy:   {SYNTH_STRATEGY or '<circt-synth default>'}",
-            f"synth_until:          {SYNTH_UNTIL or '<full pipeline>'}",
-            f"circt_synth_flags:    {SYNTH_FLAGS or '<none>'}",
-            "",
-        ]
-        with open(output[0], "w") as fh:
-            fh.write("\n".join(lines))
-        print("\n".join(lines))
-
-rule clean:
-    shell:
-        f"rm -rf {OUT_DIR}"
+include: str(REPO_ROOT / "tamagoyaki_eval" / "common.smk")

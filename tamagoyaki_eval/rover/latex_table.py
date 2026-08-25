@@ -44,7 +44,7 @@ def main() -> int:
         by_bench.setdefault(row["benchmark"], {})[row["config"]] = row
 
     lines = [
-        f"% Generated from {args.csv_file.name} by rover-mlir/eval/tools/latex_table.py.",
+        f"% Generated from {args.csv_file.name} by tamagoyaki_eval/rover/latex_table.py.",
         "% Bold marks the best area and the best delay in each row.",
         "% Times are e-graph wall clock in ms; circt-synth builds no e-graph.",
         r"\begin{tabular}{l" + "rr" + "rrr" * 3 + "}",
