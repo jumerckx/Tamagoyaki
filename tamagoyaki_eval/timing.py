@@ -1,37 +1,5 @@
-"""Read wall-clock durations out of a timing report.
-
-Every timing writer the evaluations use emits the same JSON schema to stderr:
-
-  * ``*-mlir-opt -tamagoyaki-timing -tamagoyaki-timing-output=json``
-    (scopes inside the Tamagoyaki passes: ``runSaturation``, ``rebuild``, ...)
-  * ``*-mlir-opt -mlir-timing -mlir-output-format=json``
-    (MLIR pass manager: ``CanonicalizerPass``, ``CombIntRangeNarrowing``, ...)
-
-Both write to *stderr* and both would write to the same stream, so only one may
-be enabled per process -- which is why Rover's multi-persist configuration is
-three invocations rather than one. This module is what stitches their numbers
-back together.
-
-Schema::
-
-    [ {"wall": {"duration": 0.0007, "percentage": 42.6},
-       "name": "runSaturation",
-       "passes": [ ...same shape..., {} ]},
-      {} ]
-
-The trailing ``{}`` entries are sentinels with no name and no timing; they are
-skipped.
-
-Scopes are addressed by a *path* of names, each searched depth-first from where
-the previous one matched, so a nested scope can be named without pinning the
-levels in between::
-
-    require_scope(f, "runSaturation")                       # anywhere
-    require_scope(f, "HerbieOptimizePass", "processFunctions", "EqualitySaturation")
-    require_sum(f, "runSaturation", "match")                # over all iterations
-
-The ``require_*`` variants fail loudly. A silently-zero timing column is worse
-than a broken pipeline: it looks like a real measurement.
+"""
+Read wall-clock durations out of a timing report.
 """
 
 from __future__ import annotations

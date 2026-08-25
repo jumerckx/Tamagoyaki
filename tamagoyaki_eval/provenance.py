@@ -1,23 +1,5 @@
-"""Record the environment behind an evaluation run.
-
-A figure or a table is only reproducible if it can be traced back to a commit,
-a toolchain and a parameter set, so every pipeline writes a manifest next to
-its results. The first block -- when, which commit, which host, which Python
-and Snakemake -- is the same for all of them and lives here; each pipeline adds
-its own tool versions and its own ``[parameters]`` section::
-
-    provenance.write(
-        output[0],
-        title="Tamagoyaki / Rover datapath evaluation provenance",
-        repo_root=REPO_ROOT,
-        fields=[("rover_mlir_opt", rover_opt), ...],
-        parameters=[("max_iters", MAX_ITERS), ...],
-    )
-
-Nothing here raises: a manifest that fails to write because ``abc --version``
-misbehaved would fail a run that has already produced its numbers. Values that
-cannot be determined are recorded as ``<unavailable: ...>``, which is itself
-provenance.
+"""
+Record the environment behind an evaluation run.
 """
 
 from __future__ import annotations
@@ -29,7 +11,7 @@ import platform
 import subprocess
 from pathlib import Path
 
-__all__ = ["cmd", "cpu_model", "sha256", "field", "host_fields", "render", "write"]
+__all__ = ["cmd", "cpu_model", "field", "host_fields", "render", "sha256", "write"]
 
 #: Values are aligned at this column, wide enough for the longest key in use
 #: (``max_saturation_iters:``). Shared so the two manifests stay comparable.
@@ -58,7 +40,7 @@ def cmd(args: list[str], *, drop: int = 0, keep: int | None = None) -> str:
     backtrace rather than a version.
     """
     try:
-        r = subprocess.run(args, capture_output=True, text=True)
+        r = subprocess.run(args, check=False, capture_output=True, text=True)
         out = r.stdout or r.stderr
         lines = [ln.strip() for ln in out.strip().splitlines() if ln.strip()]
         lines = lines[drop:][:keep]
@@ -92,12 +74,17 @@ def sha256(path: str | Path) -> str:
 
 def host_fields(repo_root: str | Path) -> list[tuple[str, str]]:
     """The environment prefix every manifest starts with."""
-    git_rev = cmd(["git", "-C", str(repo_root), "rev-parse", "HEAD"])
-    dirty = cmd(["git", "-C", str(repo_root), "status", "--porcelain"])
-    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    baked_rev = os.environ.get("TAMAGOYAKI_GIT_REV")
+    if baked_rev:
+        git_rev = baked_rev
+    else:
+        rev = cmd(["git", "-C", str(repo_root), "rev-parse", "HEAD"])
+        dirty = cmd(["git", "-C", str(repo_root), "status", "--porcelain"])
+        git_rev = f"{rev}{'  (DIRTY WORKING TREE)' if dirty else ''}"
+    now = datetime.datetime.now(datetime.UTC).isoformat()
     return [
         ("generated_utc", now),
-        ("git_rev", f"{git_rev}{'  (DIRTY WORKING TREE)' if dirty else ''}"),
+        ("git_rev", git_rev),
         ("host", platform.node()),
         ("platform", platform.platform()),
         ("cpu", f"{cpu_model()}  x{os.cpu_count()}"),

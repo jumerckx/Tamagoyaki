@@ -141,14 +141,6 @@
                 pkgs.lldb
               ];
 
-          # nixpkgs Racket reports its platform subpath as "<arch>-darwin", but
-          # Herbie's `egg-herbie` package is a redirect that gates its prebuilt
-          # binary dependency on the upstream Racket string ("<arch>-macosx").
-          # That guard never matches under nixpkgs Racket on macOS, so
-          # `raco pkg install herbie` silently omits the binary package and the
-          # `egg-herbie` collection ends up missing. Naming the prebuilt package
-          # for this system explicitly sidesteps the guard. On Linux the strings
-          # agree, so the default dependency resolution already works ("").
           eggHerbiePkg =
             if system == "aarch64-darwin" then
               "egg-herbie-macosm1"
@@ -166,10 +158,6 @@
           # A shell line prepending nativeLoaderPath to whatever is already set.
           exportLoaderPath = "export ${loaderPathVar}=\"${nativeLoaderPath}\${${loaderPathVar}:+:\$${loaderPathVar}}\"";
 
-          # One-shot, idempotent helper: install Herbie into the user's Racket
-          # package scope together with the correct prebuilt egg-herbie for this
-          # system, then confirm the `egg-herbie` collection actually loads (it
-          # dlopen's a Rust cdylib via FFI). Run once per machine.
           herbie-setup = pkgs.writeShellScriptBin "herbie-setup" ''
             set -euo pipefail
             want="herbie ${eggHerbiePkg}"
@@ -183,14 +171,6 @@
             fi
           '';
 
-          # The Racket `rival3` package, pinned by release tag. v1.0.2 is the
-          # release the catalog resolved to for the pinned Herbie (its zip hashes
-          # to the checksum recorded in pkgs.rktd), so this reproduces the same
-          # prefix a source build produced rather than tracking whatever
-          # `releases/latest` points at today.
-          #
-          # The zip has its package files at the root (info.rkt, main.rkt,
-          # private/), hence stripRoot = false.
           racket-rival3-src = pkgs.fetchzip {
             url = "https://github.com/herbie-fp/rival3/releases/download/v1.0.2/rival3-racket.zip";
             hash = "sha256-WwmuJSyEN+/bbvVdw6e0pQ7rjX+87nr387Yug5vAsUg=";
@@ -211,10 +191,6 @@
             cargoHash = "sha256-jzRiXE7GEYRLlUwbOMwbOS2s3ciPN3tkHkyl0YwIJdY=";
             doCheck = false;
 
-            # Only the cdylib: a `libegg_math.*` glob would also pick up cargo's
-            # .rlib and .d, which nothing on the Racket side ever loads. The
-            # release dir is target/release or target/<triple>/release depending
-            # on whether the build is cross-ish, so search rather than guess.
             installPhase = ''
               runHook preInstall
               mkdir -p $out/lib
@@ -230,17 +206,6 @@
             '';
           };
 
-          # Herbie plus its Racket package closure, installed into a
-          # self-contained PLTADDONDIR prefix. This is the `racket -l herbie
-          # report` half of the evaluation, and the reason the eval used to need
-          # an in-tree CMake build: -DHERBIE_MLIR_BUILD_HERBIE=ON produces the
-          # same prefix under <build>/herbie_mlir/racket-pkgs, but by cloning
-          # Herbie and letting `raco` resolve the rest from the package catalog.
-          # Here every source is a pinned flake input and egg-herbie's cdylib is
-          # prebuilt, so nothing reaches the network and the result is cached.
-          #
-          # Use it by pointing PLTADDONDIR at the store path (that is what the
-          # Snakefile's `racket_prefix` config does).
           herbie-racket = pkgs.stdenv.mkDerivation {
             pname = "herbie-racket";
             version = "2.3";
@@ -252,8 +217,6 @@
               runHook preBuild
               export HOME="$TMPDIR/home"
               mkdir -p "$HOME"
-              # Some of these packages run code at compile time, which can reach
-              # the same dlopen'd libraries the install check needs.
               ${exportLoaderPath}
 
               # Install directly into $out rather than staging and copying: raco
@@ -262,10 +225,6 @@
               export PLTADDONDIR="$out"
               mkdir -p "$PLTADDONDIR"
 
-              # `raco pkg install <dir>` takes the package name from the
-              # directory's basename, and a bare store path is called
-              # "...-source", so stage every source under its real name. The
-              # copies also have to be writable: raco compiles in place.
               stage="$TMPDIR/stage"
               mkdir -p "$stage"
               stage_pkg() { # <package-name> <source-dir>
@@ -283,19 +242,9 @@
               stage_pkg egg-herbie            ${herbie-src}/egg-herbie
               stage_pkg herbie                ${herbie-src}/src
 
-              # egg-herbie/main.rkt resolves the cdylib with
-              # (define-runtime-path "target/release/libegg_math.<so>"), i.e. the
-              # path cargo would have written it to.
               mkdir -p "$stage/egg-herbie/target/release"
               cp ${egg-herbie-lib}/lib/libegg_math.* "$stage/egg-herbie/target/release/"
 
-              # rival3 ships prebuilt native libraries under upstream Racket's
-              # platform names ("aarch64-macosx"), which is not what nixpkgs
-              # Racket reports ("aarch64-darwin"); alias the closest arch match
-              # so the lookup resolves. Same fix as
-              # herbie_mlir/cmake/fix_rival3_native.cmake, applied pre-install so
-              # the link is relative and travels with the copy. No-op on Linux,
-              # where the two strings already agree.
               subpath="$(racket -e '(displayln (system-library-subpath #f))')"
               nativedir="$stage/rival3/private/native"
               if [ -d "$nativedir" ] && [ ! -e "$nativedir/$subpath" ]; then
@@ -329,8 +278,6 @@
               runHook postBuild
             '';
 
-            # $out is already populated; just drop raco's advisory lock files,
-            # which are meaningless in a read-only store path.
             installPhase = ''
               runHook preInstall
               find "$out" -name '.LOCK*' -delete
@@ -342,9 +289,6 @@
               export HOME="$TMPDIR/home"
               export PLTADDONDIR="$out"
               ${exportLoaderPath}
-              # Loading the collection is the real test: it dlopen's the egg
-              # cdylib and rival3's native library, so a missing or unresolvable
-              # library fails here rather than three hours into an eval run.
               racket -e '(dynamic-require (quote egg-herbie) #f)'
               racket -l herbie -- --version
             '';
@@ -352,7 +296,6 @@
             meta.platforms = lib.platforms.unix;
           };
 
-          # Prebuilt rival3-ffi static C-API library, so `nix build` is offline.
           rival-ffi = rustPlatform.buildRustPackage {
             pname = "rival3-ffi";
             version = "unstable-2026-04-28";
@@ -446,10 +389,6 @@
                 ++ lib.optionals isDebug [
                   "fortify"
                   "fortify3"
-                  # LLVM defines _LIBCPP_HARDENING_MODE_EXTENSIVE via its
-                  # exported CMake flags when assertions are on (debug). Drop
-                  # nix's default libcxxhardeningfast so the two don't both
-                  # define _LIBCPP_HARDENING_MODE (-Wmacro-redefined).
                   "libcxxhardeningfast"
                 ];
               };
@@ -573,31 +512,17 @@
                 }
               );
 
-              # Each evaluation gets a build with only the dialect it measures
-              # turned on: the point of a separate package is that `nix run
-              # .#<x>-eval` gets a cached store path instead of re-configuring
-              # and rebuilding a tree every time.
               mkEvalBuild = pname: flags: tamagoyaki.overrideAttrs (old: {
                 inherit pname;
                 cmakeFlags = old.cmakeFlags ++ flags;
               });
 
-              # Note there is deliberately no -DHERBIE_MLIR_BUILD_HERBIE=ON
-              # here: that option clones Herbie and runs `raco pkg install` +
-              # `cargo`, none of which work in the network-less Nix sandbox.
-              # The Racket side is the `herbie-racket` derivation instead.
-              # rover (and with it the whole CIRCT dependency) and cranelift are
-              # dead weight for this one, so they are switched off.
               tamagoyaki-eval = mkEvalBuild "tamagoyaki-eval" [
                 "-DBUILD_HERBIE_MLIR=ON"
                 "-DBUILD_ROVER_MLIR=OFF"
                 "-DBUILD_CRANELIFT_MLIR=OFF"
               ];
 
-              # The mirror image: rover-mlir-opt and nothing else. herbie brings
-              # the Rival/Racket half of the tree along with it and cranelift is
-              # unused here, so both are switched off; CIRCT stays, since rover
-              # links it and the evaluation's backend is circt-synth.
               tamagoyaki-rover-eval = mkEvalBuild "tamagoyaki-rover-eval" [
                 "-DBUILD_HERBIE_MLIR=OFF"
                 "-DBUILD_ROVER_MLIR=ON"

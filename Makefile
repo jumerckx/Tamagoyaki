@@ -22,9 +22,6 @@
 CORES          ?= 1
 SNAKEMAKE_ARGS ?= --forceall
 
-# Each pipeline has its own build and output tree. An empty *_BUILD_DIR means
-# "use the Nix store path baked into the wrapper", which is the normal case --
-# set it to an in-tree build (e.g. `build`) to measure a local compiler.
 HERBIE_BUILD_DIR ?=
 HERBIE_OUT_DIR   ?= eval-out
 ROVER_BUILD_DIR  ?=
@@ -33,11 +30,7 @@ ROVER_OUT_DIR    ?= rover-eval-out
 .PHONY: eval herbie-eval rover-eval \
         eval-clean herbie-eval-clean rover-eval-clean
 
-# Both pipelines report wall clock, so they must never run at the same time --
-# which is also why each passes --resources bench=1 to snakemake internally.
-# `make -j eval` would otherwise have them compete for the machine.
 .NOTPARALLEL:
-
 eval: herbie-eval rover-eval
 
 herbie-eval:
