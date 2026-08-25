@@ -578,10 +578,19 @@
                     out_dir="''${OUT_DIR:-${defaultOutDir}}"
                     cores="''${CORES:-1}"
                     ${defaults}
-                    if ! repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+                    if [ -n "''${TAMAGOYAKI_REPO_ROOT:-}" ]; then
+                      repo_root="$TAMAGOYAKI_REPO_ROOT"
+                      if [ ! -f "$repo_root/${evalDir}/Snakefile" ]; then
+                        echo "${name}: TAMAGOYAKI_REPO_ROOT=$repo_root is not a Tamagoyaki tree" >&2
+                        echo "  (no ${evalDir}/Snakefile there)." >&2
+                        exit 1
+                      fi
+                    elif ! repo_root="$(git rev-parse --show-toplevel 2>/dev/null)"; then
                       echo "${name}: not inside a Tamagoyaki checkout." >&2
                       echo "  The pipeline reads ${reads}" >&2
-                      echo "  and writes $out_dir, so run it from a clone." >&2
+                      echo "  and writes $out_dir, so run it from a clone" >&2
+                      echo "  (or point TAMAGOYAKI_REPO_ROOT at an unpacked tree," >&2
+                      echo "  which is what the Docker artifact does)." >&2
                       exit 1
                     fi
 
@@ -606,10 +615,6 @@
                 defaultOutDir = "eval-out";
                 reads = "herbie_mlir/eval/fpcore and herbie_mlir/rules.rkt";
                 inputs = [ pkgs.racket ];
-                # racket_prefix is a separate knob from build_dir because the
-                # two do not always come from the same place: an in-tree CMake
-                # build with -DHERBIE_MLIR_BUILD_HERBIE=ON produces both, but
-                # under Nix they are independent store paths.
                 defaults = ''
                   racket_prefix="''${RACKET_PREFIX:-${herbie-racket}}"
                   echo "herbie-eval: racket_prefix=$racket_prefix" >&2
@@ -628,9 +633,6 @@
                   circt # circt-synth, circt-translate
                   pkgs.abc-verifier # technology mapping against ASAP7
                 ];
-                # The cell library is deliberately not passed: it defaults to
-                # the vendored rover-mlir/eval/lib/asap7.genlib in the checkout,
-                # and EXTRA_CONFIG='genlib=...' overrides it.
                 defaults = ''
                   circt_bin="''${CIRCT_BIN:-${circt}/bin}"
                   abc_bin="''${ABC:-${pkgs.abc-verifier}/bin/abc}"
@@ -761,6 +763,106 @@
 
           release = mkVariant { variant = "release"; };
           debug = mkVariant { variant = "debug"; };
+
+          imageRev = self.rev or self.dirtyRev or "<unavailable: no git metadata in flake source>";
+
+          eval-image-init = pkgs.writeShellApplication {
+            name = "tamagoyaki-eval-init";
+            runtimeInputs = [ pkgs.coreutils ];
+            text = ''
+              root="''${TAMAGOYAKI_REPO_ROOT:?}"
+              if [ ! -e "$root/Makefile" ]; then
+                mkdir -p "$root"
+                cp -R --no-preserve=mode,ownership ${self}/. "$root/"
+                echo "tamagoyaki: source tree materialised at $root (rev ${imageRev})" >&2
+              fi
+              mkdir -p "''${HOME:?}" "''${MPLCONFIGDIR:?}"
+              cd "$root"
+              exec "$@"
+            '';
+          };
+
+          eval-image-tools = pkgs.buildEnv {
+            name = "tamagoyaki-eval-tools";
+            paths = [
+              release.tamagoyaki-eval # herbie-mlir-opt
+              release.tamagoyaki-rover-eval # rover-mlir-opt
+              release.circt # circt-synth, circt-translate
+              pythonEnv # snakemake, xdsl-opt, the eval console scripts
+              pkgs.racket
+              pkgs.abc-verifier
+              pkgs.git
+              pkgs.gnugrep
+              pkgs.gnused
+              pkgs.findutils
+              pkgs.less
+            ];
+            pathsToLink = [ "/bin" ];
+            ignoreCollisions = true;
+          };
+
+          eval-image = pkgs.dockerTools.streamLayeredImage {
+            name = "tamagoyaki-eval";
+            tag = self.shortRev or "dirty";
+            maxLayers = 100;
+
+            contents = [
+              release.herbie-eval
+              release.rover-eval
+              eval-image-init
+              eval-image-tools
+              pkgs.gnumake
+              pkgs.bashInteractive
+              pkgs.coreutils
+              pkgs.dockerTools.usrBinEnv
+              pkgs.dockerTools.binSh
+              pkgs.dockerTools.fakeNss
+            ];
+
+            extraCommands = ''
+              mkdir -m 1777 tmp
+              mkdir -m 0777 results home work work/Tamagoyaki
+            '';
+            fakeRootCommands = "chown -R 0:0 ./tmp ./results ./home ./work";
+
+            config = {
+              Entrypoint = [ "/bin/tamagoyaki-eval-init" ];
+              Cmd = [
+                "make"
+                "eval"
+              ];
+              WorkingDir = "/work/Tamagoyaki";
+              Env = [
+                "PATH=/bin"
+                "TAMAGOYAKI_REPO_ROOT=/work/Tamagoyaki"
+                "TAMAGOYAKI_GIT_REV=${imageRev}"
+                
+                "HERBIE_OUT_DIR=/results/eval-out"
+                "ROVER_OUT_DIR=/results/rover-eval-out"
+                "CORES=1"
+
+                "HOME=/home/tamagoyaki"
+                "XDG_CACHE_HOME=/home/tamagoyaki/.cache"
+                "MPLCONFIGDIR=/home/tamagoyaki/.cache/matplotlib"
+                "LANG=C.UTF-8"
+                "LC_ALL=C.UTF-8"
+                "LOCALE_ARCHIVE=${pkgs.glibcLocales}/lib/locale/locale-archive"
+                "PYTHONDONTWRITEBYTECODE=1"
+                "PLTADDONDIR=${herbie-racket}"
+                "PLT_COMPILED_FILE_CHECK=exists"
+                "LD_LIBRARY_PATH=${nativeLoaderPath}"
+                "SOURCE_DATE_EPOCH=315532800"
+              ];
+              Labels = {
+                "org.opencontainers.image.title" = "Tamagoyaki evaluation artifact";
+                "org.opencontainers.image.description" = "Herbie-MLIR and Rover datapath evaluations, prebuilt";
+                "org.opencontainers.image.revision" = imageRev;
+                "org.opencontainers.image.licenses" = "Apache-2.0";
+              };
+            };
+
+            meta.platforms = lib.platforms.linux;
+          };
         in
         {
           packages = {
@@ -781,6 +883,9 @@
               egg-herbie-lib
               herbie-racket
               ;
+          }
+          // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+            inherit eval-image;
           };
           devShells = {
             default = release.shell;
@@ -796,6 +901,12 @@
             rover-eval = {
               type = "app";
               program = "${release.rover-eval}/bin/rover-eval";
+            };
+          }
+          // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
+            eval-image = {
+              type = "app";
+              program = "${eval-image}";
             };
           };
         };

@@ -37,6 +37,11 @@ build-eval/
 /eval-out/
 # Rover datapath evaluation results (`nix run .#rover-eval`)
 /rover-eval-out/
+# Docker artifact results (`make docker-eval`)
+/docker-results/
+# nix build out-links
+/result
+/result-*
 build-eval-rover/
 .cache
 _deps

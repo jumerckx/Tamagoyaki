@@ -28,7 +28,8 @@ ROVER_BUILD_DIR  ?=
 ROVER_OUT_DIR    ?= rover-eval-out
 
 .PHONY: eval herbie-eval rover-eval \
-        eval-clean herbie-eval-clean rover-eval-clean
+        eval-clean herbie-eval-clean rover-eval-clean \
+        docker-image docker-eval
 
 .NOTPARALLEL:
 eval: herbie-eval rover-eval
@@ -48,3 +49,31 @@ rover-eval-clean:
 	rm -rf $(ROVER_OUT_DIR)
 
 eval-clean: herbie-eval-clean rover-eval-clean
+
+# The Docker artifact
+# -------------------
+#
+# `nix run .#eval-image` writes the image tar to stdout, so loading it and
+# shipping it are the same command with a different sink:
+#
+#   nix run .#eval-image | gzip -9 > tamagoyaki-eval-$(git rev-parse --short HEAD).tar.gz
+
+DOCKER_IMAGE     ?= tamagoyaki-eval
+DOCKER_IMAGE_TAG ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dirty)
+DOCKER_OUT_DIR   ?= docker-results
+
+docker-image:
+	nix run .#eval-image | docker load
+
+# Whether to pass --user depends on how the daemon runs. Rootful docker maps
+# the container's root to the host's, so without --user every result file comes
+# out root-owned. Rootless docker (and podman) already map the invoking user to
+# the container's root, so --user would land on an unrelated subuid and the
+# mount stops being writable -- exactly backwards.
+docker-eval:
+	mkdir -p $(DOCKER_OUT_DIR)
+	@if docker info -f '{{.SecurityOptions}}' 2>/dev/null | grep -q rootless; then \
+	  user=; else user="--user $$(id -u):$$(id -g)"; fi; \
+	set -x; docker run --rm --network=none $$user \
+	  -v '$(abspath $(DOCKER_OUT_DIR)):/results' -e CORES='$(CORES)' \
+	  $(DOCKER_IMAGE):$(DOCKER_IMAGE_TAG)
