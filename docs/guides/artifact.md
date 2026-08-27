@@ -19,13 +19,13 @@ This nix flake will build MLIR, CIRCT, and more, which leads to long build times
 ## Running the evaluation
 
 ```shell
-docker load < tamagoyaki-eval-<rev>.tar.gz
+docker load --input tamagoyaki-eval-<rev>.tar.gz
 mkdir -p results
 docker run --rm -v "$PWD/results:/results" tamagoyaki-eval:<rev>
 ```
 
 The container's default command--invoked when running `docker run`--is `make eval`, which runs both evaluations one after the other. Results land in
-`results/eval-out/` and `results/rover-eval-out/` on the host.
+`results/herbie-eval-out/` and `results/rover-eval-out/` on the host.
 
 Note, the docker container works fully offline so you can optionally pass `--network=none` to `docker run`.
 
@@ -37,9 +37,9 @@ Running the evaluation writes intermediate results and measurements to directori
 
 | file | what it is |
 |---|---|
-| `results/eval-out/10-evaluation.csv` | accuracies and timings, one row per benchmark |
-| `results/eval-out/11-plots/` | the five figures, as PDF |
-| `results/eval-out/12-provenance.txt` | commit, toolchain versions, parameters |
+| `results/herbie-eval-out/10-evaluation.csv` | accuracies and timings, one row per benchmark |
+| `results/herbie-eval-out/11-plots/` | the five figures, as PDF |
+| `results/herbie-eval-out/12-provenance.txt` | commit, toolchain versions, parameters |
 | `results/rover-eval-out/09-results.csv` | area, delay and e-graph time per benchmark × configuration |
 | `results/rover-eval-out/10-table.tex` | the comparison table, best area/delay in bold |
 | `results/rover-eval-out/11-provenance.txt` | as above, plus the cell library's hash |
@@ -56,7 +56,7 @@ and take snakemake arguments directly, which is the way to run part of a
 pipeline:
 
 ```shell
-OUT_DIR=/results/eval-out herbie-eval --until saturation_timing_joint
+OUT_DIR=/results/herbie-eval-out herbie-eval --until saturation_timing_joint
 OUT_DIR=/results/rover-eval-out rover-eval --until abc_map
 ```
 
