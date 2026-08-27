@@ -27,7 +27,10 @@ docker run --rm -v "$PWD/results:/results" tamagoyaki-eval:<rev>
 The container's default command--invoked when running `docker run`--is `make eval`, which runs both evaluations one after the other. Results land in
 `results/herbie-eval-out/` and `results/rover-eval-out/` on the host.
 
-Note, the docker container works fully offline so you can optionally pass `--network=none` to `docker run`.
+Note: the docker container works fully offline so you can optionally pass `--network=none` to `docker run`.
+
+Note: under *rootful* Docker the results come out
+root-owned; add `--user "$(id -u):$(id -g)"` there, but not when rootless.
 
 Both evaluations use [snakemake](https://snakemake.github.io) for workflow management. All the steps of the evaluations are declared in `herbie_mlir/eval/Snakefile` and `rover-mlir/eval/Snakefile`.
 
