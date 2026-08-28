@@ -1,4 +1,4 @@
-# Evaluation artifacts (results now live in /eval-out at the repo root)
+# Evaluation artifacts
 .snakemake
 
 # Build artifacts

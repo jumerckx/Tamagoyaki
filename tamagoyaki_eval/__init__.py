@@ -55,7 +55,7 @@ def dir_resolver(repo_root: Path):
     Both pipelines take their directories from ``--config`` and want the same
     rule: absolute values are used as given, relative ones are resolved against
     the checkout root rather than the current directory, so that
-    ``out_dir=eval-out`` means the same thing wherever snakemake was started.
+    ``out_dir=herbie-eval-out`` means the same thing wherever snakemake was started.
     """
 
     def resolve(value) -> Path:

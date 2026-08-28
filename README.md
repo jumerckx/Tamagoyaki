@@ -116,19 +116,19 @@ herbie-eval -n                # dry-run the pipeline
 
 Knobs are environment variables: `BUILD_DIR` (defaults to the Nix-built
 `tamagoyaki-eval`; point it at an in-tree `build` to measure a local compiler),
-`RACKET_PREFIX`, `OUT_DIR` (default `eval-out`, relative to the repo root),
+`RACKET_PREFIX`, `OUT_DIR` (default `herbie-eval-out`, relative to the repo root),
 `CORES` (default `1`), and `EXTRA_CONFIG` for Snakefile parameters, e.g.:
 
 ```shell
 EXTRA_CONFIG='seed=7 max_nodes=8000' herbie-eval
 ```
 
-Outputs land in `eval-out/` at the top level of the checkout. Each generated
-directory and file is prefixed with its pipeline stage, so the tree reads in
-execution order:
+Outputs land in `herbie-eval-out/` at the top level of the checkout. Each
+generated directory and file is prefixed with its pipeline stage, so the tree
+reads in execution order:
 
 ```
-eval-out/
+herbie-eval-out/
   01-rules/               PDL and PDL-interp rule sets
   02-mlir/                benchmarks lowered from FPCore to MLIR
   03-optimized/           after equality saturation
@@ -242,7 +242,7 @@ The [`Makefile`](Makefile) wraps both commands, and can run them back to back:
 
 ```shell
 make eval           # both, one after the other
-make herbie-eval    # just the Herbie-MLIR pipeline    -> eval-out/
+make herbie-eval    # just the Herbie-MLIR pipeline    -> herbie-eval-out/
 make rover-eval     # just the Rover datapath pipeline -> rover-eval-out/
 make eval-clean     # remove both output trees
 ```

@@ -68,7 +68,7 @@ wildcard_constraints:
 # plain `ls` of the output tree reads in pipeline order rather than
 # alphabetically. Keep the numbers in step with the rule order below.
 # ---------------------------------------------------------------------------
-OUT_DIR = str(_resolve_dir(config.get("out_dir", "eval-out")))
+OUT_DIR = str(_resolve_dir(config.get("out_dir", "herbie-eval-out")))
 
 RULES_DIR             = f"{OUT_DIR}/01-rules"
 MLIR_DIR              = f"{OUT_DIR}/02-mlir"

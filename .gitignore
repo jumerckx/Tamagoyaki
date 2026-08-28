@@ -34,7 +34,7 @@ __pycache__
 build/
 build-eval/
 # Herbie-MLIR evaluation results (`nix run .#herbie-eval`)
-/eval-out/
+/herbie-eval-out/
 # Rover datapath evaluation results (`nix run .#rover-eval`)
 /rover-eval-out/
 # Docker artifact results (`make docker-eval`)

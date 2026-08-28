@@ -8,14 +8,14 @@
 #
 # Usage:
 #   make eval          # both evaluations, one after the other
-#   make herbie-eval   # just the Herbie-MLIR pipeline    -> eval-out/
+#   make herbie-eval   # just the Herbie-MLIR pipeline    -> herbie-eval-out/
 #   make rover-eval    # just the Rover datapath pipeline -> rover-eval-out/
 #   make eval-clean    # remove both output trees
 #
 # Overrides, forwarded to the wrappers as environment variables:
 #   make eval CORES=4
 #   make eval SNAKEMAKE_ARGS='-n'                 # dry run
-#   make herbie-eval HERBIE_OUT_DIR=eval-out-alt
+#   make herbie-eval HERBIE_OUT_DIR=herbie-eval-out-alt
 #   make rover-eval ROVER_BUILD_DIR=build         # measure a local compiler
 #   EXTRA_CONFIG='max_iters=8' make rover-eval    # Snakefile parameters
 
@@ -23,7 +23,7 @@ CORES          ?= 1
 SNAKEMAKE_ARGS ?= --forceall
 
 HERBIE_BUILD_DIR ?=
-HERBIE_OUT_DIR   ?= eval-out
+HERBIE_OUT_DIR   ?= herbie-eval-out
 ROVER_BUILD_DIR  ?=
 ROVER_OUT_DIR    ?= rover-eval-out
 

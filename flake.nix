@@ -612,7 +612,7 @@
                 name = "herbie-eval";
                 pkg = tamagoyaki-eval;
                 evalDir = "herbie_mlir/eval";
-                defaultOutDir = "eval-out";
+                defaultOutDir = "herbie-eval-out";
                 reads = "herbie_mlir/eval/fpcore and herbie_mlir/rules.rkt";
                 inputs = [ pkgs.racket ];
                 defaults = ''
@@ -837,7 +837,7 @@
                 "TAMAGOYAKI_REPO_ROOT=/work/Tamagoyaki"
                 "TAMAGOYAKI_GIT_REV=${imageRev}"
                 
-                "HERBIE_OUT_DIR=/results/eval-out"
+                "HERBIE_OUT_DIR=/results/herbie-eval-out"
                 "ROVER_OUT_DIR=/results/rover-eval-out"
                 "CORES=1"
 
