@@ -28,7 +28,7 @@
     };
 
     llvm-project-src = {
-      url = "github:llvm/llvm-project/040a641988f6ed6f4fab250706ca2b620c1de2d8";
+      url = "github:jumerckx/llvm-project/e7168c97319949caf408047cdb957687e6751a5b";
       flake = false;
     };
     circt-src = {
