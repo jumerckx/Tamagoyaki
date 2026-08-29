@@ -202,7 +202,8 @@ Outputs land in `rover-eval-out/`, stage-prefixed like the Herbie tree:
 rover-eval-out/
   01-rules/               base and full rule sets, PDL and PDL-interp
   02-input/               benchmarks as fed to the pipeline
-  03-egraph/              persisted e-graph, before and after the CIRCT passes
+  03-egraph/              persisted e-graphs (per rule set, and after the CIRCT
+                          passes) and their reported sizes
   04-extracted/           per-configuration IR handed to the backend
   05-timing/              saturation (and, for multi-persist, CIRCT pass) times
   06-synth/               circt-synth output
@@ -210,8 +211,10 @@ rover-eval-out/
   08-abc/                 raw abc print_stats reports
   09-results.csv          area, delay and e-graph time per benchmark+config
   10-table.tex            the comparison table, best area/delay in bold
-  11-provenance.txt       commit, toolchain versions, genlib hash, parameters
-  12-paper-artifact/      table + CSV + manifest (and .tar.gz alongside)
+  11-egraph.csv           e-classes and e-nodes per benchmark+config
+  12-egraph-table.tex     the e-graph size table, ratios against single-level
+  13-provenance.txt       commit, toolchain versions, genlib hash, parameters
+  14-paper-artifact/      tables + CSVs + manifest (and .tar.gz alongside)
 ```
 
 The paper artifact is not built by default; ask for it with `rover-eval paper`.

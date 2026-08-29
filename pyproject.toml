@@ -53,6 +53,8 @@ plot-matcher-speedup = "herbie_mlir.tools.plot_matcher_speedup:entry"
 rover-abc-stats = "tamagoyaki_eval.rover.abc_stats:entry"
 rover-results-csv = "tamagoyaki_eval.rover.results_csv:entry"
 rover-latex-table = "tamagoyaki_eval.rover.latex_table:entry"
+rover-egraph-csv = "tamagoyaki_eval.rover.egraph_csv:entry"
+rover-egraph-table = "tamagoyaki_eval.rover.egraph_table:entry"
 
 
 [dependency-groups]
