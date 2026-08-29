@@ -14,7 +14,7 @@ config.test_exec_root = os.path.join(config.tamagoyaki_obj_root, "rover-mlir", "
 # skip them so lit doesn't complain about missing RUN lines. (The rewrite rule
 # sets now live in rover-mlir/rules/, outside test_source_root, so they need no
 # entry here.)
-config.excludes = ["basic.comb.mlir"]
+config.excludes = ["basic.comb.mlir", "Inputs"]
 
 llvm_config.use_default_substitutions()
 

@@ -45,7 +45,9 @@ Running the evaluation writes intermediate results and measurements to directori
 | `results/herbie-eval-out/12-provenance.txt` | commit, toolchain versions, parameters |
 | `results/rover-eval-out/09-results.csv` | area, delay and e-graph time per benchmark × configuration |
 | `results/rover-eval-out/10-table.tex` | the comparison table, best area/delay in bold |
-| `results/rover-eval-out/11-provenance.txt` | as above, plus the cell library's hash |
+| `results/rover-eval-out/11-egraph.csv` | e-classes and e-nodes per benchmark × configuration |
+| `results/rover-eval-out/12-egraph-table.tex` | the e-graph size table, ratios against single-level |
+| `results/rover-eval-out/13-provenance.txt` | as above, plus the cell library's hash |
 
 ## Interacting with the framework
 

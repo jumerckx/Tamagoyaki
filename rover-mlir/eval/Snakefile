@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# The Rover datapath evaluation: four configurations of the same five circuits,
+# The Rover datapath evaluation: four configurations of the same four circuits,
 # each synthesized through the same backend, compared on ASAP7-mapped area and
 # delay plus the wall clock the e-graph cost.
 #
@@ -99,18 +99,22 @@ AIGER_DIR     = f"{OUT_DIR}/07-aiger"
 ABC_DIR       = f"{OUT_DIR}/08-abc"
 RESULTS_CSV   = f"{OUT_DIR}/09-results.csv"
 TABLE_TEX     = f"{OUT_DIR}/10-table.tex"
-PROVENANCE    = f"{OUT_DIR}/11-provenance.txt"
-PAPER_NAME    = "12-paper-artifact"
+EGRAPH_CSV    = f"{OUT_DIR}/11-egraph.csv"
+EGRAPH_TEX    = f"{OUT_DIR}/12-egraph-table.tex"
+PROVENANCE    = f"{OUT_DIR}/13-provenance.txt"
+PAPER_NAME    = "14-paper-artifact"
 PAPER_DIR     = f"{OUT_DIR}/{PAPER_NAME}"
 PAPER_TARBALL = f"{OUT_DIR}/{PAPER_NAME}.tar.gz"
 
 # Cheap, non-measuring rules: never worth scheduling as separate cluster jobs.
 localrules: all, provenance, copy_input, baseline_passthrough, \
-            rules_base_pdl, rules_full_pdl, results_csv, latex_table
+            rules_base_pdl, rules_full_pdl, results_csv, latex_table, \
+            egraph_csv, egraph_table
 
 rule all:
     input:
         TABLE_TEX,
+        EGRAPH_TEX,
         PROVENANCE,
 
 # ---------------------------------------------------------------------------
@@ -155,13 +159,21 @@ rule copy_input:
         "cp {input} {output}"
 
 # ---------------------------------------------------------------------------
-# 04/05 -- e-graph configurations
+# 03/04/05 -- e-graph configurations
 #
 # On timing: `-tamagoyaki-timing` and `-mlir-timing` both write JSON to stderr,
 # so enabling both in one process concatenates two documents into something
 # unparseable. Only one timing writer per invocation -- which is why
 # multi-persist below is three processes rather than one pipeline.
 # ---------------------------------------------------------------------------
+# The saturation itself: identical for both rule sets, so the rules below differ
+# only in which matcher they load and where the graph and any timing land.
+SATURATE = (
+    '{rover_opt} --rover-insert-graph {input.mlir}'
+    ' --rover-saturate="patterns-file={input.rules}'
+    ' max-iters={MAX_ITERS} max-nodes={MAX_NODES}"'
+)
+
 rule baseline_passthrough:
     input:
         f"{INPUT_DIR}/{{bench}}.mlir"
@@ -195,21 +207,35 @@ rule persist_saturate:
         mlir = f"{INPUT_DIR}/{{bench}}.mlir",
         rules = f"{RULES_DIR}/full_pdl_interp.mlir"
     output:
-        mlir = f"{EGRAPH_DIR}/{{bench}}.sat.mlir",
+        mlir = f"{EGRAPH_DIR}/{{bench}}.full-sat.mlir",
         timing = f"{TIMING_DIR}/multi-persist/{{bench}}.json"
     resources:
         bench = 1
     shell:
-        '{rover_opt} --rover-insert-graph {input.mlir}'
-        ' --rover-saturate="patterns-file={input.rules} max-iters={MAX_ITERS} max-nodes={MAX_NODES}"'
-        ' -tamagoyaki-timing -tamagoyaki-timing-output=json'
-        ' 2> {output.timing} > {output.mlir}'
+        SATURATE + ' -tamagoyaki-timing -tamagoyaki-timing-output=json'
+                   ' 2> {output.timing} > {output.mlir}'
+
+# The e-graph size table needs a single-level graph to compare against, and the
+# `rover` configuration saturates and extracts in one process, so its graph is
+# never written out. Saturate once more with the base rule set purely to have
+# one on disk: nothing is timed here, and the numbers in the results table still
+# come from saturate_extract.
+rule saturate_base_egraph:
+    input:
+        mlir = f"{INPUT_DIR}/{{bench}}.mlir",
+        rules = f"{RULES_DIR}/base_pdl_interp.mlir"
+    output:
+        f"{EGRAPH_DIR}/{{bench}}.base-sat.mlir"
+    resources:
+        bench = 1
+    shell:
+        SATURATE + ' > {output}'
 
 # CIRCT passes over the persisted e-graph. Run in rover-mlir-opt, not circt-opt:
 # circt-opt does not know the equivalence dialect and cannot parse the graph.
 rule persist_canonicalize:
     input:
-        f"{EGRAPH_DIR}/{{bench}}.sat.mlir"
+        f"{EGRAPH_DIR}/{{bench}}.full-sat.mlir"
     output:
         mlir = f"{EGRAPH_DIR}/{{bench}}.canon.mlir",
         timing = f"{TIMING_DIR}/multi-persist/{{bench}}.canon.json"
@@ -219,6 +245,21 @@ rule persist_canonicalize:
         '{rover_opt} {input} --canonicalize --comb-int-range-narrowing'
         ' -mlir-timing -mlir-timing-display=tree -mlir-output-format=json'
         ' 2> {output.timing} > {output.mlir}'
+
+# The size of each persisted graph, as the compiler itself counts it: the
+# analysis behind --equivalence-graph-size is the one the saturation loop prints
+# under --debug-only=ematch, so the numbers do not depend on an assertions
+# build. It has to run here rather than during saturation anyway, because the
+# `multi-persist` graph is only complete after the CIRCT passes above.
+rule egraph_size:
+    input:
+        f"{EGRAPH_DIR}/{{bench}}.{{variant}}.mlir"
+    output:
+        f"{EGRAPH_DIR}/{{bench}}.{{variant}}.size.txt"
+    wildcard_constraints:
+        variant = "base-sat|full-sat|canon",
+    shell:
+        "{rover_opt} --equivalence-graph-size {input} -o /dev/null > {output}"
 
 rule persist_extract:
     input:
@@ -266,7 +307,7 @@ rule abc_map:
         '{abc} -c "read_genlib {GENLIB}; read {input}; strash; map; print_stats" > {output}'
 
 # ---------------------------------------------------------------------------
-# 09/10/11 -- results
+# 09..13 -- results
 # ---------------------------------------------------------------------------
 rule results_csv:
     input:
@@ -295,9 +336,30 @@ rule latex_table:
     shell:
         "rover-latex-table {input} -o {output}"
 
+rule egraph_csv:
+    input:
+        expand(f"{EGRAPH_DIR}/{{bench}}.{{variant}}.size.txt",
+               bench=BENCHMARKS, variant=["base-sat", "full-sat", "canon"]),
+    output:
+        EGRAPH_CSV
+    params:
+        benchmarks = " ".join(BENCHMARKS),
+    shell:
+        "rover-egraph-csv --egraph-dir {EGRAPH_DIR}"
+        " --benchmarks {params.benchmarks} -o {output}"
+
+rule egraph_table:
+    input:
+        EGRAPH_CSV
+    output:
+        EGRAPH_TEX
+    shell:
+        "rover-egraph-table {input} -o {output}"
+
 rule provenance:
     input:
         csv = RESULTS_CSV,
+        egraph_csv = EGRAPH_CSV,
     output:
         PROVENANCE,
     run:
@@ -341,7 +403,7 @@ rule provenance:
 # ---------------------------------------------------------------------------
 # Shared rules: PDL -> PDL-interp, the paper artifact, clean.
 # ---------------------------------------------------------------------------
-PAPER_FIGURES = [TABLE_TEX]
-PAPER_DATA = [RESULTS_CSV, PROVENANCE]
+PAPER_FIGURES = [TABLE_TEX, EGRAPH_TEX]
+PAPER_DATA = [RESULTS_CSV, EGRAPH_CSV, PROVENANCE]
 
 include: str(REPO_ROOT / "tamagoyaki_eval" / "common.smk")

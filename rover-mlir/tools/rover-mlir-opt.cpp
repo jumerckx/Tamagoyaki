@@ -54,6 +54,7 @@ int main(int argc, char **argv) {
   // that: it does not know the equivalence dialect.
   circt::comb::registerPasses();
   circt::datapath::registerPasses();
+  mlir::equivalence::registerEquivalencePasses();
 
   mlir::DialectRegistry registry;
   registry.insert<comb::CombDialect, hw::HWDialect, datapath::DatapathDialect,
