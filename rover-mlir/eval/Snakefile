@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# The Rover datapath evaluation: four configurations of the same five circuits,
+# The Rover datapath evaluation: four configurations of the same four circuits,
 # each synthesized through the same backend, compared on ASAP7-mapped area and
 # delay plus the wall clock the e-graph cost.
 #

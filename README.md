@@ -150,7 +150,7 @@ The paper artifact is not built by default; ask for it with `herbie-eval paper`.
 
 The Rover evaluation (Snakemake pipeline in
 [`rover-mlir/eval/Snakefile`](rover-mlir/eval/Snakefile)) compares four
-configurations of the same five datapath circuits on ASAP7-mapped area and
+configurations of the same four datapath circuits on ASAP7-mapped area and
 delay, plus the wall clock the e-graph cost:
 
 | configuration | pipeline |
