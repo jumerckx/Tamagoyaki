@@ -31,10 +31,14 @@ CONFIGS = [
 ]
 
 
+def fmt_ratio(value: float) -> str:
+    return rf"($\times${value:.1f})"
+
+
 def ratio_cell(count: int | None, base: int | None) -> str:
     if count is None or not base:
         return "--"
-    return rf"($\times${count / base:.1f})"
+    return fmt_ratio(count / base)
 
 
 def main() -> int:
@@ -83,7 +87,7 @@ def main() -> int:
     average = ["Average", ""]
     for config, _ in CONFIGS:
         seen = ratios[config]
-        average += ["", rf"(x{sum(seen) / len(seen):.1f})" if seen else "--"]
+        average += ["", fmt_ratio(sum(seen) / len(seen)) if seen else "--"]
     lines += [" & ".join(average) + r" \\", r"\bottomrule", r"\end{tabular}"]
 
     text = "\n".join(lines) + "\n"
