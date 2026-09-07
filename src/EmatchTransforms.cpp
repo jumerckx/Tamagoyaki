@@ -24,6 +24,7 @@
 #include "Utils/ClassOpUtils.h"
 #include "Utils/CongruenceEngine.h"
 #include "Utils/HashConsPatternRewriter.h"
+#include "mlir/Dialect/Match/IR/MatchOps.h"
 #include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
@@ -81,12 +82,48 @@ void populateEmatchToApplyRewritePatterns(RewritePatternSet &patterns) {
                EmatchToApplyRewritePattern<DedupOp>>(patterns.getContext());
 }
 
+template <typename OpTy>
+struct EmatchToApplyNativeRewritePattern : public OpRewritePattern<OpTy> {
+  using OpRewritePattern<OpTy>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(OpTy op,
+                                PatternRewriter &rewriter) const final {
+    if (!op->template getParentOfType<match::MatcherOp>())
+      return failure();
+    StringRef name = op->getName().stripDialect();
+    rewriter.replaceOpWithNewOp<match::ApplyNativeRewriteOp>(
+        op, op->getResultTypes(), name, op->getOperands());
+    return success();
+  }
+};
+
+void populateEmatchToApplyNativeRewritePatterns(RewritePatternSet &patterns) {
+  // Only the matcher-side class-navigation helpers are converted here; the
+  // rewriter-side ops (union, dedup) live in pdl_interp rewriters and are
+  // lowered by convertEmatchOpsToApplyRewrites instead.
+  patterns.add<EmatchToApplyNativeRewritePattern<GetClassValsOp>,
+               EmatchToApplyNativeRewritePattern<GetClassRepresentativeOp>,
+               EmatchToApplyNativeRewritePattern<GetClassResultOp>,
+               EmatchToApplyNativeRewritePattern<GetClassResultsOp>>(
+      patterns.getContext());
+}
+
 } // namespace
 
 void convertEmatchOpsToApplyRewrites(ModuleOp module) {
   TAMAGOYAKI_SCOPED_TIMER("convertEmatchOpsToApplyRewrites");
   RewritePatternSet patterns(module.getContext());
   populateEmatchToApplyRewritePatterns(patterns);
+  GreedyRewriteConfig config;
+  config.enableConstantCSE(false);
+  config.enableFolding(false);
+  (void)applyPatternsGreedily(module, std::move(patterns), config);
+}
+
+void convertEmatchOpsToMatchRewrites(ModuleOp module) {
+  TAMAGOYAKI_SCOPED_TIMER("convertEmatchOpsToMatchRewrites");
+  RewritePatternSet patterns(module.getContext());
+  populateEmatchToApplyNativeRewritePatterns(patterns);
   GreedyRewriteConfig config;
   config.enableConstantCSE(false);
   config.enableFolding(false);

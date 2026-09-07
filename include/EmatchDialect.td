@@ -258,4 +258,78 @@ def ConvertEmatchToPDLInterpPass : Pass<"convert-ematch-to-pdl-interp", "::mlir:
     let dependentDialects = ["::mlir::pdl_interp::PDLInterpDialect"];
 }
 
+def EmatchifyPass : Pass<"ematchify", "::mlir::ModuleOp"> {
+    let summary = "Insert ematch operations into a match/pdl_interp rewrite pattern "
+                  "to enable e-matching.";
+    let description = [{
+        This pass rewrites a `match`-dialect matcher together with its
+        `pdl_interp` rewriter so that matching and rewriting operate over the
+        equivalence classes of an e-graph rather than over concrete values and
+        operations. It performs four local insertions/replacements:
+
+        * Every `match.get_result` (unwrapped by a following `match.is_not_null`)
+          is followed by an `ematch.get_class_result` on the unwrapped value, and
+          downstream uses of the value are redirected to the class result.
+        * Every `match.get_defining_op %x` navigates from the whole equivalence
+          class of `%x` instead of just `%x`: its operand becomes
+          `match.get_each(ematch.get_class_vals %x)`.
+        * Every `pdl_interp.replace` becomes an `ematch.union` merging the
+          replaced operation with its replacement values.
+        * Every `pdl_interp.create_operation` is followed by an `ematch.dedup`
+          against the hashcons, and its uses are redirected to the deduped op.
+        * Every `match.get_operand` value (unwrapped by `match.is_not_null`)
+          forwarded to a `match.success` is wrapped in an
+          `ematch.get_class_representative`, so the rewriter receives a
+          representative of the operand's equivalence class rather than the
+          concrete matched value.
+        * In the pdl_interp rewriters, the `get_class_representative` applied to
+          !pdl.value arguments at every call site is undone by a
+          ematch.get_class_result. This operation is also inserted around every
+          pdl_interp.get_result.
+    }];
+    let dependentDialects = [
+        "::mlir::ematch::EmatchDialect",
+        "::mlir::pdl_interp::PDLInterpDialect",
+    ];
+}
+
+def ConvertEmatchToMatchPass : Pass<"convert-ematch-to-match", "::mlir::ModuleOp"> {
+    let summary = "Convert ematch operations to match.apply_native_rewrite operations.";
+    let description = [{
+        This pass converts operations in the ematch dialect into match.apply_native_rewrite
+        operations. It only considers ematch operations within match.matcher parent operations.
+    }];
+    let dependentDialects = [
+        "::mlir::match::MatchDialect",
+    ];
+}
+
+def EmatchCombineMatchersPass
+    : Pass<"ematch-combine-matchers", "::mlir::ModuleOp"> {
+    let summary = "Combine match.matcher ops into one matcher ordered for e-matching.";
+    let description = [{
+        Like `match-combine-matchers`, this merges every `match.matcher` in a
+        module into a single combined matcher whose failure spine is materialized
+        as `match.try` / `match.switch_op_name` / `match.switch_type` regions.
+        Unlike `match-combine-matchers`, it orders predicates by
+        operation-navigation position rather than by frequency, so the combined
+        matcher does not blow up exponentially once
+        `ematchify` turns each `match.get_defining_op` into a loop
+        over an equivalence class.
+
+        Concretely, predicates are emitted in a DFS over the tree of navigated
+        operations: after navigating to an operation, every predicate that
+        depends only on the operations navigated so far (e.g. `match.has_name`,
+        `match.check_operand_count`) is emitted before the next
+        `match.get_defining_op`. This makes each discriminating name check a
+        branch point *above* the next defining-op navigation, so the later
+        e-class loops only run for candidates that already passed the earlier
+        checks.
+
+        Intended pipeline: `ematch-combine-matchers` then
+        `ematchify`.
+    }];
+    let dependentDialects = ["::mlir::match::MatchDialect"];
+}
+
 #endif // EMATCH_DIALECT
