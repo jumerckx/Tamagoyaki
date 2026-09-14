@@ -2,17 +2,7 @@
 #
 # This module provides functions to simplify the setup of TableGen-generated
 # files for MLIR dialects.
-#
-# It is installed alongside TamagoyakiConfig.cmake and included from it, so an
-# out-of-tree dialect gets add_dialect_tablegen() from
-# find_package(Tamagoyaki) with nothing else to wire up.
 
-# Aggregate target for generated dialect/op/pass documentation. MLIR's
-# add_mlir_doc(), called from add_dialect_tablegen() below, attaches each
-# generated markdown file to it. The in-tree MLIR build defines `mlir-doc`
-# itself; a standalone build -- this project or a downstream one -- has to
-# create it before the first add_mlir_doc() call. Build the docs with:
-#   cmake --build <build-dir> --target mlir-doc
 if(NOT TARGET mlir-doc)
   add_custom_target(mlir-doc)
   set_target_properties(mlir-doc PROPERTIES FOLDER "Docs")

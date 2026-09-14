@@ -29,13 +29,13 @@ add_mlir_library(CraneliftDialect
   MLIREmatch
 )
 
-# Tamagoyaki's own include directories are not listed here: they arrive as
-# usage requirements of MLIREquivalence/MLIREmatch, the same way in an in-tree
-# build as through find_package(Tamagoyaki).
 target_include_directories(CraneliftDialect PUBLIC ${CRANELIFT_INCLUDE_DIR})
-target_include_directories(CraneliftDialect PUBLIC ${CRANELIFT_MLIR_BINARY_DIR}/include/Cranelift)
-target_include_directories(CraneliftDialect PUBLIC ${CRANELIFT_MLIR_INCLUDE_DIR})
-target_include_directories(CraneliftDialect PUBLIC ${CRANELIFT_MLIR_BINARY_DIR}/include)
+target_include_directories(CraneliftDialect
+  PUBLIC ${CRANELIFT_MLIR_BINARY_DIR}/include/Cranelift)
+target_include_directories(CraneliftDialect
+  PUBLIC ${CRANELIFT_MLIR_INCLUDE_DIR})
+target_include_directories(CraneliftDialect
+  PUBLIC ${CRANELIFT_MLIR_BINARY_DIR}/include)
 
 # ============================================================================
 # Install Rules

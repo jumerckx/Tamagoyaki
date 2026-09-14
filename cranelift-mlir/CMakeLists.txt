@@ -1,11 +1,8 @@
 # cranelift-mlir: Cranelift backend in MLIR
 #
 # Buildable two ways: as a subdirectory of the Tamagoyaki tree, and standalone
-# against a Tamagoyaki that was found with find_package. The standalone path is
-# the one the out-of-tree case-study repositories take, and exercising it here
-# in CI is what keeps Tamagoyaki's exported interface honest -- a header that
-# never got installed, or a target whose usage requirements are incomplete,
-# fails this build rather than someone else's.
+# against a Tamagoyaki that was found with find_package.
+# CI tests the latter to ensure external standalone projects can do the same.
 #
 # Standalone:
 #   cmake -S cranelift-mlir -B <build> -GNinja \

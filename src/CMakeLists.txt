@@ -8,14 +8,6 @@
 # those headers #include ("EquivalenceOps.h.inc" and friends), and the vendored
 # MLIR internals under vendor/, which a public header reaches for as
 # "vendor/mlir/SimpleOperationInfo.h" (include/Utils/HashConsPatternRewriter.h).
-# All three are spelled the same way by every consumer, in this tree and out of
-# it, so the install tree puts them together under one directory -- vendor/
-# keeping its subdirectory, since that is part of how it is spelled.
-#
-# add_mlir_library compiles through an object library (obj.<name>) whenever one
-# is created, and usage requirements set on the wrapper do not reach it -- the
-# same reason the HiGHS block below attaches to obj.MLIREquivalence. So set the
-# directories on both targets.
 function(tamagoyaki_public_includes name)
   foreach(_target ${name} obj.${name})
     if(TARGET ${_target})
@@ -148,9 +140,6 @@ mlir_check_all_link_libraries(tamagoyaki-opt)
 # ============================================================================
 # Install Rules
 # ============================================================================
-# The libraries go into the TamagoyakiTargets export set; tamagoyaki-opt does
-# not, since a downstream project runs it rather than links it (its location is
-# published as TAMAGOYAKI_TOOLS_DIR instead).
 install(TARGETS
   MLIREquivalence
   MLIREmatch

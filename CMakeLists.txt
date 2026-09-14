@@ -48,9 +48,6 @@ include(HandleLLVMOptions)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-# add_dialect_tablegen(), used by every dialect in this tree. Included once
-# here; an out-of-tree dialect gets the same file from TamagoyakiConfig.cmake,
-# so neither kind of consumer has to know where it lives.
 include(TableGenHelpers)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
@@ -60,26 +57,12 @@ link_directories(${LLVM_BUILD_LIBRARY_DIR})
 separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
 add_definitions(${LLVM_DEFINITIONS_LIST})
 
-# Note: Tamagoyaki's own include/ and the tablegen output under
-# ${CMAKE_CURRENT_BINARY_DIR}/include are deliberately *not* added at directory
-# scope. They are usage requirements of MLIREquivalence/MLIREmatch/
-# TamagoyakiTiming (see tamagoyaki_public_includes in src/CMakeLists.txt), so
-# that a subproject here compiles against exactly the interface an out-of-tree
-# consumer gets from find_package(Tamagoyaki) -- and a gap in that interface
-# breaks this build rather than only the downstream one.
 add_subdirectory(include)
 add_subdirectory(src)
 add_subdirectory(test)
 
 # cranelift-mlir subproject (optional, can be disabled)
-#
-# The two case studies that used to sit alongside it -- herbie_mlir and
-# rover-mlir -- now live in their own repository, which consumes Tamagoyaki
-# through the package exported below:
-#   https://github.com/jumerckx/tamagoyaki-case-studies
-# cranelift-mlir stays because it needs nothing beyond MLIR, and because it is
-# also buildable standalone: CI builds it that way against an install prefix,
-# which is what keeps the exported interface from quietly rotting.
+
 option(BUILD_CRANELIFT_MLIR "Build cranelift-mlir subproject" ON)
 if(BUILD_CRANELIFT_MLIR)
   add_subdirectory(cranelift-mlir)
