@@ -6,8 +6,7 @@
 #
 # Standalone:
 #   cmake -S cranelift-mlir -B <build> -GNinja \
-#         -DMLIR_DIR=<llvm>/lib/cmake/mlir \
-#         -DTamagoyaki_DIR=<prefix-or-build-dir>/lib/cmake/tamagoyaki
+#         -DCMAKE_PREFIX_PATH=<tamagoyaki-install-prefix-or-build-dir>
 cmake_minimum_required(VERSION 3.20.0)
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)

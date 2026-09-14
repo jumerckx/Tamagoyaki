@@ -73,10 +73,15 @@ find_package(Tamagoyaki REQUIRED CONFIG)   # MLIREquivalence, MLIREmatch,
                                            # TamagoyakiTiming, add_dialect_tablegen()
 ```
 
-`Tamagoyaki_DIR` points either at an install prefix's `lib/cmake/tamagoyaki` or,
-for the development loop with nothing installed, at a build directory's. The
-config finds MLIR (and HiGHS) itself, defaulting to the ones Tamagoyaki was
-compiled against — so `Tamagoyaki_DIR` is the only thing a consumer has to pass.
+Put an install prefix — or, for the development loop with nothing installed, a
+Tamagoyaki build directory — on `CMAKE_PREFIX_PATH`. The config finds MLIR (and
+HiGHS) itself, defaulting to the ones Tamagoyaki was compiled against, so that
+one path is all a consumer has to pass:
+
+```shell
+cmake -DCMAKE_PREFIX_PATH=/path/to/tamagoyaki/build ...
+```
+
 `cranelift-mlir` in this repository is built both ways, and CI builds it
 standalone against an install prefix on every change, which is what keeps that
 interface from quietly rotting.

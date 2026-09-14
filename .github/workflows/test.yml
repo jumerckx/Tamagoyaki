@@ -75,9 +75,9 @@ jobs:
       # throwaway prefix and build cranelift-mlir against it as its own
       # top-level project -- the same way the case-study repositories do.
       #
-      # Tamagoyaki_DIR is deliberately the only thing passed: MLIR and HiGHS
-      # come from TamagoyakiConfig.cmake. If a consumer ever has to be told
-      # where those live, the package is under-specified and this step is
+      # The install prefix is deliberately the only thing passed: MLIR and
+      # HiGHS come from TamagoyakiConfig.cmake. If a consumer ever has to be
+      # told where those live, the package is under-specified and this step is
       # where that shows up.
       - name: Build a standalone consumer against the installed package
         run: |
@@ -85,7 +85,7 @@ jobs:
           cmake -G Ninja -S cranelift-mlir -B build-standalone \
             -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}" \
             -DLLVM_EXTERNAL_LIT="$LLVM_EXTERNAL_LIT" \
-            -DTamagoyaki_DIR="$PWD/install-check/lib/cmake/tamagoyaki"
+            -DCMAKE_PREFIX_PATH="$PWD/install-check;$CMAKE_PREFIX_PATH"
           ninja -C build-standalone check-cranelift-mlir
 
       - name: Upload ExternalProject logs on failure

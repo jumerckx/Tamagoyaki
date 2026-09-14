@@ -89,7 +89,8 @@ set_target_properties(check-all PROPERTIES FOLDER "Tests")
 # at a build directory with nothing installed.
 include(CMakePackageConfigHelpers)
 
-set(TAMAGOYAKI_INSTALL_CMAKEDIR ${CMAKE_INSTALL_LIBDIR}/cmake/tamagoyaki)
+set(TAMAGOYAKI_INSTALL_CMAKEDIR lib/cmake/tamagoyaki CACHE STRING
+    "Where TamagoyakiConfig.cmake is installed, relative to the prefix")
 set(TAMAGOYAKI_BUILD_CMAKEDIR lib/cmake/tamagoyaki)
 
 # TamagoyakiConfig.cmake includes this next to itself, so the build tree needs

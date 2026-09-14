@@ -39,11 +39,12 @@ find_package(Tamagoyaki REQUIRED CONFIG)
 target_link_libraries(my-opt PRIVATE MLIREquivalence MLIREmatch)
 ```
 
-Configure it with `-DTamagoyaki_DIR=<prefix>/lib/cmake/tamagoyaki`, where
-`<prefix>` is either an install prefix (`cmake --install build --prefix ...`) or
-a Tamagoyaki build directory -- both export a config, so the inner loop against
-a local checkout needs no install step. The config finds MLIR and HiGHS itself,
-defaulting to the ones Tamagoyaki was compiled against, and provides
+Configure it with `-DCMAKE_PREFIX_PATH=<prefix>`, where `<prefix>` is either an
+install prefix (`cmake --install build --prefix ...`) or a Tamagoyaki build
+directory -- both export a config, so the inner loop against a local checkout
+needs no install step.
+The config finds MLIR and HiGHS itself, defaulting to the ones Tamagoyaki was
+compiled against, and provides
 `add_dialect_tablegen()` for your own dialect's TableGen and
 `TAMAGOYAKI_TOOLS_DIR` for locating `tamagoyaki-opt`.
 
