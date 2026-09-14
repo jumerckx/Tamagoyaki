@@ -1,7 +1,5 @@
 # TableGen generation for Rover passes
 
-include(${PROJECT_SOURCE_DIR}/cmake/TableGenHelpers.cmake)
-
 # ============================================================================
 # Rover Passes
 # ============================================================================

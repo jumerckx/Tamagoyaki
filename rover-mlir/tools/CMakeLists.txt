@@ -23,19 +23,19 @@ set(ROVER_MLIR_OPT_LIBS
 add_llvm_executable(rover-mlir-opt rover-mlir-opt.cpp)
 llvm_update_compile_flags(rover-mlir-opt)
 
+# Tamagoyaki's include directories come through MLIREquivalence/MLIREmatch.
 target_include_directories(rover-mlir-opt PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/../include
-  ${CMAKE_BINARY_DIR}/rover-mlir/include
-  ${PROJECT_SOURCE_DIR}/include
+  ${ROVER_MLIR_SOURCE_DIR}/include
+  ${ROVER_MLIR_BINARY_DIR}/include
   ${CIRCT_INCLUDE_DIRS}
 )
 
 target_link_libraries(rover-mlir-opt PRIVATE ${ROVER_MLIR_OPT_LIBS})
-add_dependencies(rover-mlir-opt
-  MLIRRoverIncGen
-  MLIREquivalenceIncGen
-  MLIREmatchIncGen
-)
+# Only rover-mlir's own tablegen target. Tamagoyaki's .inc files are either
+# built by its IncGen targets (in-tree, ordered by the link to MLIREquivalence)
+# or already installed (standalone); MLIREquivalenceIncGen does not exist out
+# of tree.
+add_dependencies(rover-mlir-opt MLIRRoverIncGen)
 mlir_check_all_link_libraries(rover-mlir-opt)
 
 # ============================================================================

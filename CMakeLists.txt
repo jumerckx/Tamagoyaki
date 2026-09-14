@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20.0)
-project(mmlir LANGUAGES CXX C)
+project(tamagoyaki VERSION 0.1.0 LANGUAGES CXX C)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 if(CMAKE_EXPORT_COMPILE_COMMANDS)
@@ -48,15 +48,10 @@ include(HandleLLVMOptions)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
-# Aggregate target for generated dialect/op/pass documentation. MLIR's
-# add_mlir_doc() attaches each generated markdown file to this target. The
-# in-tree MLIR build defines `mlir-doc` itself; in a standalone build we have
-# to create it before any add_mlir_doc() call (see cmake/TableGenHelpers.cmake).
-# Build the docs with:  cmake --build <build-dir> --target mlir-doc
-if(NOT TARGET mlir-doc)
-  add_custom_target(mlir-doc)
-  set_target_properties(mlir-doc PROPERTIES FOLDER "Docs")
-endif()
+# add_dialect_tablegen(), used by every dialect in this tree. Included once
+# here; an out-of-tree dialect gets the same file from TamagoyakiConfig.cmake,
+# so neither kind of consumer has to know where it lives.
+include(TableGenHelpers)
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 include_directories(${LLVM_INCLUDE_DIRS})
@@ -65,9 +60,14 @@ link_directories(${LLVM_BUILD_LIBRARY_DIR})
 separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
 add_definitions(${LLVM_DEFINITIONS_LIST})
 
+# Note: Tamagoyaki's own include/ and the tablegen output under
+# ${CMAKE_CURRENT_BINARY_DIR}/include are deliberately *not* added at directory
+# scope. They are usage requirements of MLIREquivalence/MLIREmatch/
+# TamagoyakiTiming (see tamagoyaki_public_includes in src/CMakeLists.txt), so
+# that a subproject here compiles against exactly the interface an out-of-tree
+# consumer gets from find_package(Tamagoyaki) -- and a gap in that interface
+# breaks this build rather than only the downstream one.
 add_subdirectory(include)
-include_directories(include)
-include_directories(${CMAKE_CURRENT_BINARY_DIR}/include)
 add_subdirectory(src)
 add_subdirectory(test)
 
@@ -112,3 +112,73 @@ if(BUILD_ROVER_MLIR)
 endif()
 add_custom_target(check-all DEPENDS ${CHECK_ALL_DEPENDS})
 set_target_properties(check-all PROPERTIES FOLDER "Tests")
+
+# ============================================================================
+# Package export
+# ============================================================================
+# Tamagoyaki is meant to be consumed out of tree with
+# find_package(Tamagoyaki CONFIG): a case-study repo builds against an
+# installed -- or merely configured -- Tamagoyaki instead of pulling it in
+# with add_subdirectory(). Two config files are generated so Tamagoyaki_DIR
+# can point either at an install prefix or, for the development loop, straight
+# at a build directory with nothing installed.
+include(CMakePackageConfigHelpers)
+
+set(TAMAGOYAKI_INSTALL_CMAKEDIR ${CMAKE_INSTALL_LIBDIR}/cmake/tamagoyaki)
+set(TAMAGOYAKI_BUILD_CMAKEDIR lib/cmake/tamagoyaki)
+
+# TamagoyakiConfig.cmake includes this next to itself, so the build tree needs
+# its own copy for the build-tree config to resolve.
+configure_file(cmake/TableGenHelpers.cmake
+               ${CMAKE_BINARY_DIR}/${TAMAGOYAKI_BUILD_CMAKEDIR}/TableGenHelpers.cmake
+               COPYONLY)
+
+# --- build tree ---
+set(TAMAGOYAKI_CONFIG_TOOLSDIR bin)
+set(TAMAGOYAKI_CONFIG_CMAKEDIR ${TAMAGOYAKI_BUILD_CMAKEDIR})
+configure_package_config_file(
+  cmake/TamagoyakiConfig.cmake.in
+  ${CMAKE_BINARY_DIR}/${TAMAGOYAKI_BUILD_CMAKEDIR}/TamagoyakiConfig.cmake
+  INSTALL_DESTINATION ${TAMAGOYAKI_BUILD_CMAKEDIR}
+  INSTALL_PREFIX ${CMAKE_BINARY_DIR}
+  PATH_VARS TAMAGOYAKI_CONFIG_TOOLSDIR TAMAGOYAKI_CONFIG_CMAKEDIR)
+
+export(EXPORT TamagoyakiTargets
+       FILE ${CMAKE_BINARY_DIR}/${TAMAGOYAKI_BUILD_CMAKEDIR}/TamagoyakiTargets.cmake)
+
+write_basic_package_version_file(
+  ${CMAKE_BINARY_DIR}/${TAMAGOYAKI_BUILD_CMAKEDIR}/TamagoyakiConfigVersion.cmake
+  VERSION ${PROJECT_VERSION}
+  COMPATIBILITY SameMinorVersion)
+
+# --- install tree ---
+set(TAMAGOYAKI_CONFIG_TOOLSDIR ${CMAKE_INSTALL_BINDIR})
+set(TAMAGOYAKI_CONFIG_CMAKEDIR ${TAMAGOYAKI_INSTALL_CMAKEDIR})
+configure_package_config_file(
+  cmake/TamagoyakiConfig.cmake.in
+  ${CMAKE_CURRENT_BINARY_DIR}/cmake-install/TamagoyakiConfig.cmake
+  INSTALL_DESTINATION ${TAMAGOYAKI_INSTALL_CMAKEDIR}
+  PATH_VARS TAMAGOYAKI_CONFIG_TOOLSDIR TAMAGOYAKI_CONFIG_CMAKEDIR)
+
+install(EXPORT TamagoyakiTargets DESTINATION ${TAMAGOYAKI_INSTALL_CMAKEDIR})
+install(FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/cmake-install/TamagoyakiConfig.cmake
+        ${CMAKE_BINARY_DIR}/${TAMAGOYAKI_BUILD_CMAKEDIR}/TamagoyakiConfigVersion.cmake
+        cmake/TableGenHelpers.cmake
+        DESTINATION ${TAMAGOYAKI_INSTALL_CMAKEDIR})
+
+# Headers. The hand-written tree and the tablegen output land together in one
+# flat directory because every consumer spells them unprefixed
+# (#include "EquivalenceDialect.h") and the public headers include their own
+# .h.inc. The .td files come along so a downstream dialect can include them.
+install(DIRECTORY include/
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tamagoyaki
+        FILES_MATCHING PATTERN "*.h" PATTERN "*.td")
+# Spelled "vendor/mlir/..." by the public headers, so it keeps its prefix.
+install(DIRECTORY vendor
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tamagoyaki
+        FILES_MATCHING PATTERN "*.h")
+install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/include/
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/tamagoyaki
+        FILES_MATCHING PATTERN "*.inc"
+        PATTERN "CMakeFiles" EXCLUDE)

@@ -1,7 +1,7 @@
 # cranelift library
 
-set(CRANELIFT_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../include/Cranelift)
-set(CRANELIFT_MLIR_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
+set(CRANELIFT_INCLUDE_DIR ${CRANELIFT_MLIR_SOURCE_DIR}/include/Cranelift)
+set(CRANELIFT_MLIR_INCLUDE_DIR ${CRANELIFT_MLIR_SOURCE_DIR}/include)
 
 # ============================================================================
 # Cranelift Library
@@ -29,10 +29,13 @@ add_mlir_library(CraneliftDialect
   MLIREmatch
 )
 
+# Tamagoyaki's own include directories are not listed here: they arrive as
+# usage requirements of MLIREquivalence/MLIREmatch, the same way in an in-tree
+# build as through find_package(Tamagoyaki).
 target_include_directories(CraneliftDialect PUBLIC ${CRANELIFT_INCLUDE_DIR})
-target_include_directories(CraneliftDialect PUBLIC ${CMAKE_BINARY_DIR}/cranelift-mlir/include/Cranelift)
+target_include_directories(CraneliftDialect PUBLIC ${CRANELIFT_MLIR_BINARY_DIR}/include/Cranelift)
 target_include_directories(CraneliftDialect PUBLIC ${CRANELIFT_MLIR_INCLUDE_DIR})
-target_include_directories(CraneliftDialect PUBLIC ${CMAKE_BINARY_DIR}/cranelift-mlir/include)
+target_include_directories(CraneliftDialect PUBLIC ${CRANELIFT_MLIR_BINARY_DIR}/include)
 
 # ============================================================================
 # Install Rules

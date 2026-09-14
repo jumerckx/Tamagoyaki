@@ -1,7 +1,11 @@
 @LIT_SITE_CFG_IN_HEADER@
 
 config.llvm_tools_dir = lit_config.substitute("@LLVM_TOOLS_DIR@")
-config.tamagoyaki_obj_root = "@TAMAGOYAKI_BINARY_DIR@"
+config.herbie_tools_dir = lit_config.substitute("@HERBIE_MLIR_TOOLS_DIR@")
+# Where tamagoyaki-opt lives. Same as the above in an in-tree build; the found
+# Tamagoyaki's bin/ when herbie_mlir is built standalone.
+config.tamagoyaki_tools_dir = lit_config.substitute("@TAMAGOYAKI_TOOLS_DIR@")
+config.test_exec_root = lit_config.substitute("@HERBIE_MLIR_TEST_EXEC_ROOT@")
 config.llvm_shlib_ext = "@SHLIBEXT@"
 
 import lit.llvm

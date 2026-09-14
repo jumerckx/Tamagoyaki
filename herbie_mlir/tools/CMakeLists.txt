@@ -17,17 +17,19 @@ set(HERBIE_MLIR_OPT_LIBS
 add_llvm_executable(herbie-mlir-opt herbie-mlir-opt.cpp)
 llvm_update_compile_flags(herbie-mlir-opt)
 
+# Tamagoyaki's include directories come through MLIREquivalence/MLIREmatch.
 target_include_directories(herbie-mlir-opt PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/../include
-  ${CMAKE_BINARY_DIR}/herbie_mlir/include
-  ${PROJECT_SOURCE_DIR}/include
+  ${HERBIE_MLIR_SOURCE_DIR}/include
+  ${HERBIE_MLIR_BINARY_DIR}/include
 )
 
 target_link_libraries(herbie-mlir-opt PRIVATE ${HERBIE_MLIR_OPT_LIBS})
+# Only herbie_mlir's own tablegen target. Tamagoyaki's .inc files are either
+# built by its IncGen targets (in-tree, ordered by the link to MLIREquivalence)
+# or already installed (standalone); MLIREquivalenceIncGen does not exist out
+# of tree.
 add_dependencies(herbie-mlir-opt
   MLIRHerbieMLIRIncGen
-  MLIREquivalenceIncGen
-  MLIREmatchIncGen
   buildRival
 )
 mlir_check_all_link_libraries(herbie-mlir-opt)

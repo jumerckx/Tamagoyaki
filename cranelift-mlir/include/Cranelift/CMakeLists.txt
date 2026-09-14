@@ -1,7 +1,5 @@
 # TableGen generation for Cranelift passes
 
-include(${PROJECT_SOURCE_DIR}/cmake/TableGenHelpers.cmake)
-
 # ============================================================================
 # Cranelift Passes
 # ============================================================================

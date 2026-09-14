@@ -1,7 +1,8 @@
 @LIT_SITE_CFG_IN_HEADER@
 
 config.llvm_tools_dir = lit_config.substitute("@LLVM_TOOLS_DIR@")
-config.tamagoyaki_obj_root = "@TAMAGOYAKI_BINARY_DIR@"
+config.rover_tools_dir = lit_config.substitute("@ROVER_MLIR_TOOLS_DIR@")
+config.test_exec_root = lit_config.substitute("@ROVER_MLIR_TEST_EXEC_ROOT@")
 config.llvm_shlib_ext = "@SHLIBEXT@"
 
 import lit.llvm

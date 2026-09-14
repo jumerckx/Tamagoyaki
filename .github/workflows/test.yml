@@ -68,6 +68,26 @@ jobs:
       - name: Build and test (check-all)
         run: ninja -C build check-all
 
+      # Tamagoyaki is consumed out of tree via find_package(Tamagoyaki CONFIG),
+      # and an interface only stays complete if something keeps checking it: an
+      # uninstalled header or a missing usage requirement is invisible to the
+      # in-tree build above, which sees the whole source tree. So install to a
+      # throwaway prefix and build cranelift-mlir against it as its own
+      # top-level project -- the same way the case-study repositories do.
+      #
+      # Tamagoyaki_DIR is deliberately the only thing passed: MLIR and HiGHS
+      # come from TamagoyakiConfig.cmake. If a consumer ever has to be told
+      # where those live, the package is under-specified and this step is
+      # where that shows up.
+      - name: Build a standalone consumer against the installed package
+        run: |
+          cmake --install build --prefix "$PWD/install-check"
+          cmake -G Ninja -S cranelift-mlir -B build-standalone \
+            -DCMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE:-Release}" \
+            -DLLVM_EXTERNAL_LIT="$LLVM_EXTERNAL_LIT" \
+            -DTamagoyaki_DIR="$PWD/install-check/lib/cmake/tamagoyaki"
+          ninja -C build-standalone check-cranelift-mlir
+
       - name: Upload ExternalProject logs on failure
         if: failure()
         uses: actions/upload-artifact@v4

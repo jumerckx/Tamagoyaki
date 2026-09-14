@@ -82,3 +82,9 @@ CMakeFiles
 
 # nix-direnv cache (per-machine; do not commit)
 .direnv/
+
+# Throwaway trees from the standalone-consumer check (CI step, reproducible
+# locally): `cmake --install build --prefix install-check` + a cranelift-mlir
+# build configured against it.
+/install-check/
+/build-standalone/

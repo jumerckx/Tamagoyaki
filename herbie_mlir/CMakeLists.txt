@@ -1,5 +1,12 @@
 # herbie-mlir: Implementation of Herbie's core in MLIR
 # This subproject extends Tamagoyaki with interval arithmetic via Rival
+#
+# Nothing here addresses the enclosing project: herbie_mlir is built both as a
+# subdirectory of the Tamagoyaki tree and as its own top-level project against
+# a find_package(Tamagoyaki), and CMAKE_BINARY_DIR / PROJECT_SOURCE_DIR mean
+# different things in the two. These two do not.
+set(HERBIE_MLIR_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+set(HERBIE_MLIR_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
 
 add_subdirectory(include)
 # rival must be configured before src so that the gmp_external / mpfr_external

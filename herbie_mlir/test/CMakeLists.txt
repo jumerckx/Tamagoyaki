@@ -4,7 +4,11 @@ if(NOT LLVM_EXTERNAL_LIT)
     message(FATAL_ERROR "LLVM_EXTERNAL_LIT not set. Required for running tests.")
 endif()
 
-set(TAMAGOYAKI_BINARY_DIR ${PROJECT_BINARY_DIR})
+# Where the tests run, and where they find their tools. Both are written so
+# they hold whether herbie_mlir is a subdirectory of Tamagoyaki or its own
+# top-level project: LLVM_RUNTIME_OUTPUT_INTDIR is this build's bin/ either way.
+set(HERBIE_MLIR_TEST_EXEC_ROOT ${CMAKE_CURRENT_BINARY_DIR}/lit)
+set(HERBIE_MLIR_TOOLS_DIR ${LLVM_RUNTIME_OUTPUT_INTDIR})
 set(HERBIE_MLIR_TEST_LIT_CFG ${CMAKE_CURRENT_SOURCE_DIR}/lit/lit.cfg.py)
 configure_lit_site_cfg(
   ${CMAKE_CURRENT_SOURCE_DIR}/lit/lit.site.cfg.py.in
@@ -13,8 +17,15 @@ configure_lit_site_cfg(
 
 set(HERBIE_MLIR_TEST_DEPENDS
     herbieMLIR
-    herbie-mlir-opt
-    tamagoyaki-opt)
+    herbie-mlir-opt)
+
+# The tests also run tamagoyaki-opt. In tree it is a target here and lands in
+# the same bin/; standalone it is a binary in the found Tamagoyaki, whose
+# location TamagoyakiConfig.cmake published as TAMAGOYAKI_TOOLS_DIR.
+if(TARGET tamagoyaki-opt)
+  set(TAMAGOYAKI_TOOLS_DIR ${LLVM_RUNTIME_OUTPUT_INTDIR})
+  list(APPEND HERBIE_MLIR_TEST_DEPENDS tamagoyaki-opt)
+endif()
 
 # FileCheck, count, and not come from the prebuilt LLVM. They are only
 # exported as CMake imported targets when LLVM is built with

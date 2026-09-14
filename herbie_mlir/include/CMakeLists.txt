@@ -1,7 +1,5 @@
 # TableGen generation for HerbieMLIR dialect
 
-include(${PROJECT_SOURCE_DIR}/cmake/TableGenHelpers.cmake)
-
 # ============================================================================
 # HerbieMLIR Dialect
 # ============================================================================

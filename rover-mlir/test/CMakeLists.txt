@@ -4,7 +4,11 @@ if(NOT LLVM_EXTERNAL_LIT)
     message(FATAL_ERROR "LLVM_EXTERNAL_LIT not set. Required for running tests.")
 endif()
 
-set(TAMAGOYAKI_BINARY_DIR ${PROJECT_BINARY_DIR})
+# Where the tests run, and where they find their tools. Both are written so
+# they hold whether rover-mlir is a subdirectory of Tamagoyaki or its own
+# top-level project: LLVM_RUNTIME_OUTPUT_INTDIR is this build's bin/ either way.
+set(ROVER_MLIR_TEST_EXEC_ROOT ${CMAKE_CURRENT_BINARY_DIR})
+set(ROVER_MLIR_TOOLS_DIR ${LLVM_RUNTIME_OUTPUT_INTDIR})
 set(ROVER_MLIR_TEST_LIT_CFG ${CMAKE_CURRENT_SOURCE_DIR}/lit.cfg.py)
 configure_lit_site_cfg(
   ${CMAKE_CURRENT_SOURCE_DIR}/lit.site.cfg.py.in

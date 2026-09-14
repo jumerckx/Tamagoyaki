@@ -1,6 +1,6 @@
 # herbie-mlir library
 
-set(HERBIE_MLIR_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+set(HERBIE_MLIR_INCLUDE_DIR ${HERBIE_MLIR_SOURCE_DIR}/include)
 
 # ============================================================================
 # herbieMLIR Library
@@ -41,8 +41,10 @@ add_mlir_library(herbieMLIR
   TamagoyakiTiming
 )
 
+# Tamagoyaki's include directories are not listed: they arrive as usage
+# requirements of MLIREquivalence/MLIREmatch, in-tree and out of tree alike.
 target_include_directories(herbieMLIR PUBLIC ${HERBIE_MLIR_INCLUDE_DIR})
-target_include_directories(herbieMLIR PUBLIC ${CMAKE_BINARY_DIR}/herbie_mlir/include)
+target_include_directories(herbieMLIR PUBLIC ${HERBIE_MLIR_BINARY_DIR}/include)
 
 # Ensure GMP/MPFR headers are available before compiling.
 # ExternalProject dependencies don't propagate through INTERFACE/IMPORTED
