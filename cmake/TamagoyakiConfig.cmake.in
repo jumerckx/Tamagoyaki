@@ -1,0 +1,42 @@
+# TamagoyakiConfig.cmake - package config for find_package(Tamagoyaki CONFIG)
+#
+# Provides the imported targets MLIREquivalence, MLIREmatch and
+# TamagoyakiTiming, and the add_dialect_tablegen() helper that generates a
+# dialect's .inc files.
+#
+# Tamagoyaki_DIR may point either at an install prefix's
+# lib/cmake/tamagoyaki, or -- for the development loop, with nothing
+# installed -- at a build directory's lib/cmake/tamagoyaki.
+#
+# Variables set:
+#   TAMAGOYAKI_TOOLS_DIR      where tamagoyaki-opt lives (run, not linked)
+#   TAMAGOYAKI_CMAKE_DIR      this directory
+#   TAMAGOYAKI_ENABLE_HIGHS   whether the ILP selection pass has its solver
+
+
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+set(TAMAGOYAKI_ENABLE_HIGHS @TAMAGOYAKI_ENABLE_HIGHS@)
+
+if(NOT MLIR_DIR)
+  set(MLIR_DIR "@MLIR_DIR@")
+endif()
+find_dependency(MLIR)
+
+if(TAMAGOYAKI_ENABLE_HIGHS)
+  if(NOT highs_DIR)
+    set(highs_DIR "@highs_DIR@")
+  endif()
+  find_dependency(highs)
+endif()
+
+set_and_check(TAMAGOYAKI_TOOLS_DIR "@PACKAGE_TAMAGOYAKI_CONFIG_TOOLSDIR@")
+set_and_check(TAMAGOYAKI_CMAKE_DIR "@PACKAGE_TAMAGOYAKI_CONFIG_CMAKEDIR@")
+
+include("${TAMAGOYAKI_CMAKE_DIR}/TableGenHelpers.cmake")
+
+include("${CMAKE_CURRENT_LIST_DIR}/TamagoyakiTargets.cmake")
+
+check_required_components(Tamagoyaki)

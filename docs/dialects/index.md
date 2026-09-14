@@ -19,7 +19,8 @@ directory is available (see `TAMAGOYAKI_BUILD_DIR`).
 
 equivalence
 ematch
-herbie
 cranelift
-rover
 ```
+
+The dialects of the case studies -- `herbie` and `rover` -- are documented in
+[their own repository](https://github.com/jumerckx/tamagoyaki-case-studies).

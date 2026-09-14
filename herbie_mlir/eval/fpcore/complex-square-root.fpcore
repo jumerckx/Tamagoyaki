@@ -1,7 +1,0 @@
-(FPCore
- (re im)
- :name
- "Complex square root"
- :cite
- (herbie-2015)
- (* 1/2 (sqrt (* 2 (+ (sqrt (+ (* re re) (* im im))) re)))))

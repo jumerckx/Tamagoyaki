@@ -2,16 +2,13 @@
 name = "tamagoyaki"
 version = "0.1.0"
 requires-python = ">=3.13"
+# What it takes to build, test and document Tamagoyaki. The evaluations and the
+# tools they call moved out with the case studies:
+#   https://github.com/jumerckx/tamagoyaki-case-studies
 dependencies = [
     "cmake-format>=0.6.13",
     "lit>=18.1.8",
-    "matplotlib>=3.10.8",
-    "numpy>=2.4.3",
-    "pandas>=3.0.1",
     "pre-commit>=4.5.1",
-    "snakemake>=9",
-    "snakemake-executor-plugin-cluster-generic>=1",
-    "xdsl>=0.56.2",
 ]
 
 [project.optional-dependencies]
@@ -38,29 +35,13 @@ tamagoyaki = { workspace = true }
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+# No Python packages ship from this repository -- herbie_mlir and
+# tamagoyaki_eval went with the case studies. The project exists only to pin
+# the toolchain that builds and tests Tamagoyaki.
 [tool.hatch.build.targets.wheel]
-packages = ["herbie_mlir", "tamagoyaki_eval"]
-
-[project.scripts]
-fpcore-mlir = "herbie_mlir.tools.fpcore_mlir:entry"
-herbie-pdl = "herbie_mlir.tools.herbie_pdl:entry"
-mlir-fpcore = "herbie_mlir.tools.mlir_fpcore:entry"
-insert-fpcore-alternative = "herbie_mlir.tools.insert_fpcore_alternative:entry"
-extract-accuracies = "herbie_mlir.tools.extract_accuracies:entry"
-plot-accuracies = "herbie_mlir.tools.plot_accuracies:entry"
-plot-timing = "herbie_mlir.tools.plot_timing:entry"
-plot-matcher-speedup = "herbie_mlir.tools.plot_matcher_speedup:entry"
-rover-abc-stats = "tamagoyaki_eval.rover.abc_stats:entry"
-rover-results-csv = "tamagoyaki_eval.rover.results_csv:entry"
-rover-latex-table = "tamagoyaki_eval.rover.latex_table:entry"
-rover-egraph-csv = "tamagoyaki_eval.rover.egraph_csv:entry"
-rover-egraph-table = "tamagoyaki_eval.rover.egraph_table:entry"
-
+bypass-selection = true
 
 [dependency-groups]
 dev = [
     "tamagoyaki",
 ]
-
-[project.entry-points.'xdsl.universe']
-tools = 'herbie_mlir.tools:EQSAT_UNIVERSE'

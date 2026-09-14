@@ -1,7 +1,7 @@
 # Building Tamagoyaki
 
 :::{note}
-If you're using **Nix** and have time to spare, all the tools can be built with `nix build`. This will build LLVM, MLIR, CIRCT, and Rival and finally produce `tamagoyaki-opt`, `herbie-mlir-opt`, `rover-mlir-opt`, and `cranelift-mlir-opt` in the `result` directory.
+If you're using **Nix** and have time to spare, everything can be built with `nix build`. This will build LLVM and MLIR and finally produce `tamagoyaki-opt` and `cranelift-mlir-opt` in the `result` directory.
 If you're not running on a beefy machine, this can easily take multiple hours. Once the initial build is done, subsequent builds should be faster due to dependencies living in the Nix' cache.
 CI also builds the project using Nix.
 :::
@@ -12,9 +12,7 @@ The Tamagoyaki core (`tamagoyaki-opt`) depends on MLIR. You can build it with:
 cmake -G Ninja \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
   -DCMAKE_PREFIX_PATH=PATH_TO_MLIR_INSTALL_DIR \
-  -BUILD_HERBIE_MLIR=OFF \
-  -BUILD_ROVER_MLIR=OFF \
-  -BUILD_CRANELIFT_MLIR=OFF \
+  -DBUILD_CRANELIFT_MLIR=OFF \
   -B build \
   -S $PWD
 ninja -C build
@@ -22,17 +20,34 @@ ninja -C build
 
 Running `ninja -C build check-all` will run the test suites for Tamagoyaki and all the enabled subprojects.
 
-## Building Subprojects
+## The case studies
 
-For some of the existing Tamagoyaki subprojects, you need additional dependencies:
+The two case studies -- Herbie-MLIR (floating-point accuracy, needing Rust and
+[Rival 3](https://github.com/herbie-fp/rival3)) and ROVER-MLIR (RTL
+optimisation, needing [CIRCT](https://github.com/llvm/circt)) -- are built from
+[their own repository](https://github.com/jumerckx/tamagoyaki-case-studies),
+which pins the Tamagoyaki it was tested against. See its README for the build.
 
-* **Herbie-MLIR**
+## Building against Tamagoyaki
 
-[Herbie](https://herbie.uwplse.org) is a tool for automatically increasing the precision of floating point expressions.
-We implemented Herbie's core optimization procedure in MLIR using Tamagoyaki.
-When enabling Herbie-MLIR, you are expected to have a (sufficiently recent) Rust/Cargo toolchain available. The build process will pull, compile, and link against [Rival3](https://github.com/herbie-fp/rival3), an interval and arbitrary precision execution framework that's also used by the original Herbie project.
+A project of your own consumes Tamagoyaki through its exported CMake package:
 
-* **ROVER-MLIR**
+```cmake
+find_package(MLIR REQUIRED CONFIG)
+find_package(Tamagoyaki REQUIRED CONFIG)
 
-[ROVER](https://arxiv.org/abs/2406.12421) is a tool for RTL optimization using equality saturation.
-To build ROVER-MLIR, an implementation of the procedure in MLIR, you need an installation of [CIRCT](https://github.com/llvm/circt).
+target_link_libraries(my-opt PRIVATE MLIREquivalence MLIREmatch)
+```
+
+Configure it with `-DCMAKE_PREFIX_PATH=<prefix>`, where `<prefix>` is either an
+install prefix (`cmake --install build --prefix ...`) or a Tamagoyaki build
+directory -- both export a config, so the inner loop against a local checkout
+needs no install step.
+The config finds MLIR and HiGHS itself, defaulting to the ones Tamagoyaki was
+compiled against, and provides
+`add_dialect_tablegen()` for your own dialect's TableGen and
+`TAMAGOYAKI_TOOLS_DIR` for locating `tamagoyaki-opt`.
+
+`cranelift-mlir` in the Tamagoyaki repository is the worked example: it builds
+both as a subdirectory and as its own top-level project, and CI does the latter
+on every change.

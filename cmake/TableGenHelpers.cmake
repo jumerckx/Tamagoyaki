@@ -3,6 +3,11 @@
 # This module provides functions to simplify the setup of TableGen-generated
 # files for MLIR dialects.
 
+if(NOT TARGET mlir-doc)
+  add_custom_target(mlir-doc)
+  set_target_properties(mlir-doc PROPERTIES FOLDER "Docs")
+endif()
+
 # add_dialect_tablegen - Generate TableGen files for an MLIR dialect
 #
 # Usage:

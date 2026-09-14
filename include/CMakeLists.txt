@@ -3,8 +3,6 @@
 # To add a new dialect, copy one of the add_dialect_tablegen blocks below.
 # Available COMPONENTS: Ops, Types, Attrs, Dialect, Passes, OpInterfaces
 
-include(${PROJECT_SOURCE_DIR}/cmake/TableGenHelpers.cmake)
-
 # ============================================================================
 # Equivalence Dialect
 # ============================================================================

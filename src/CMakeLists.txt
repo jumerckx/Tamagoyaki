@@ -1,6 +1,26 @@
 # Dialect libraries and tamagoyaki-opt executable
 
 # ============================================================================
+# Public include directories
+# ============================================================================
+# The headers a consumer needs live in three places: the hand-written ones
+# under include/, the tablegen output under ${PROJECT_BINARY_DIR}/include that
+# those headers #include ("EquivalenceOps.h.inc" and friends), and the vendored
+# MLIR internals under vendor/, which a public header reaches for as
+# "vendor/mlir/SimpleOperationInfo.h" (include/Utils/HashConsPatternRewriter.h).
+function(tamagoyaki_public_includes name)
+  foreach(_target ${name} obj.${name})
+    if(TARGET ${_target})
+      target_include_directories(${_target} PUBLIC
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+        $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/tamagoyaki>)
+    endif()
+  endforeach()
+endfunction()
+
+# ============================================================================
 # Equivalence Dialect Library
 # ============================================================================
 add_mlir_dialect_library(MLIREquivalence
@@ -25,6 +45,7 @@ add_mlir_dialect_library(MLIREquivalence
   MLIRRegisterAllPasses
   TamagoyakiTiming
 )
+tamagoyaki_public_includes(MLIREquivalence)
 
 # The equivalence-select-ilp pass optionally links the HiGHS solver. When
 # disabled the pass source still compiles (so the pass stays registered) but
@@ -60,6 +81,7 @@ add_mlir_library(TamagoyakiTiming
   LINK_LIBS PUBLIC
   MLIRIR
 )
+tamagoyaki_public_includes(TamagoyakiTiming)
 
 # ============================================================================
 # Ematch Dialect Library
@@ -89,6 +111,7 @@ add_mlir_dialect_library(MLIREmatch
   MLIREquivalence
   TamagoyakiTiming
 )
+tamagoyaki_public_includes(MLIREmatch)
 
 # ============================================================================
 # tamagoyaki-opt Executable
@@ -121,6 +144,7 @@ install(TARGETS
   MLIREquivalence
   MLIREmatch
   TamagoyakiTiming
+  EXPORT TamagoyakiTargets
   RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
   LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
   ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
