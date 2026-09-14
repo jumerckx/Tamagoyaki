@@ -71,23 +71,15 @@ add_subdirectory(include)
 add_subdirectory(src)
 add_subdirectory(test)
 
-# herbie_mlir subproject (optional, can be disabled)
-option(BUILD_HERBIE_MLIR "Build herbie_mlir subproject" ON)
-if(BUILD_HERBIE_MLIR)
-  add_subdirectory(herbie_mlir)
-endif()
-
-# rover-mlir subproject (optional, can be disabled)
-option(BUILD_ROVER_MLIR "Build rover-mlir subproject" ON)
-if(BUILD_ROVER_MLIR)
-  find_package(CIRCT REQUIRED CONFIG)
-  message(STATUS "Using CIRCTConfig.cmake in: ${CIRCT_DIR}")
-  list(APPEND CMAKE_MODULE_PATH "${CIRCT_CMAKE_DIR}")
-  include_directories(${CIRCT_INCLUDE_DIRS})
-  add_subdirectory(rover-mlir)
-endif()
-
 # cranelift-mlir subproject (optional, can be disabled)
+#
+# The two case studies that used to sit alongside it -- herbie_mlir and
+# rover-mlir -- now live in their own repository, which consumes Tamagoyaki
+# through the package exported below:
+#   https://github.com/jumerckx/tamagoyaki-case-studies
+# cranelift-mlir stays because it needs nothing beyond MLIR, and because it is
+# also buildable standalone: CI builds it that way against an install prefix,
+# which is what keeps the exported interface from quietly rotting.
 option(BUILD_CRANELIFT_MLIR "Build cranelift-mlir subproject" ON)
 if(BUILD_CRANELIFT_MLIR)
   add_subdirectory(cranelift-mlir)
@@ -97,18 +89,8 @@ endif()
 # lit suite are still pulled in as build deps so CI fails on a compile
 # break instead of silently skipping them.
 set(CHECK_ALL_DEPENDS check-tamagoyaki)
-if(BUILD_HERBIE_MLIR)
-  list(APPEND CHECK_ALL_DEPENDS check-herbie-mlir)
-endif()
 if(BUILD_CRANELIFT_MLIR)
   list(APPEND CHECK_ALL_DEPENDS check-cranelift-mlir)
-endif()
-if(BUILD_ROVER_MLIR)
-  if(ROVER_MLIR_BUILD_TOOLS)
-    list(APPEND CHECK_ALL_DEPENDS check-rover-mlir)
-  else()
-    list(APPEND CHECK_ALL_DEPENDS RoverDialect)
-  endif()
 endif()
 add_custom_target(check-all DEPENDS ${CHECK_ALL_DEPENDS})
 set_target_properties(check-all PROPERTIES FOLDER "Tests")

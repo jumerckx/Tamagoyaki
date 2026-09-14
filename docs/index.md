@@ -14,10 +14,11 @@ Tamagoyaki ships two custom MLIR dialects:
 - **`ematch`** — extends `pdl_interp` to perform e-matching for equality
   saturation.
 
-The `herbie_mlir` subproject specializes the framework for
-floating-point optimisation in the spirit of
-[Herbie](https://herbie.uwplse.org/), wired up to the
-[Rival 3](https://github.com/herbie-fp/rival3) interval-arithmetic library.
+Two case studies build on it -- floating-point accuracy in the spirit of
+[Herbie](https://herbie.uwplse.org/), and datapath optimisation over
+[CIRCT](https://circt.llvm.org/) -- and live in
+[their own repository](https://github.com/jumerckx/tamagoyaki-case-studies),
+so that the framework does not carry their dependencies.
 
 ```{toctree}
 :hidden:

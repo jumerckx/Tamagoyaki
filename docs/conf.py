@@ -95,9 +95,7 @@ def _maybe_run_tablegen() -> None:
     targets = [
         "MLIREquivalenceIncGen",
         "MLIREmatchIncGen",
-        "MLIRHerbieMLIRIncGen",
         "MLIRCraneliftIncGen",
-        "MLIRRoverIncGen",
     ]
     try:
         subprocess.run(
@@ -131,9 +129,7 @@ def _maybe_run_tablegen() -> None:
 DIALECT_DOCS = [
     ("equivalence", "Equivalence dialect", "EquivalenceDialect.md", "EquivalencePasses.md"),
     ("ematch", "Ematch dialect", "EmatchDialect.md", "EmatchPasses.md"),
-    ("herbie", "HerbieMLIR dialect", "HerbieMLIRDialect.md", "HerbieMLIRPasses.md"),
     ("cranelift", "Cranelift passes", None, "CraneliftPasses.md"),
-    ("rover", "Rover passes", None, "RoverPasses.md"),
 ]
 
 

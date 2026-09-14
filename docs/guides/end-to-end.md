@@ -73,7 +73,7 @@ pdl.pattern : benefit(1) {
 :::{note}
 `pdl` is verbose to write. Writing it by hand should be avoided.
 The MLIR project also contains the PDLL language, which is higher-level language built on top of `pdl`.
-For Tamagoyaki, we have also written custom python tools to convert rewrite rules in a different format to pdl, for example for Herbie-MLIR (`herbie_mlir/tools/herbie_pdl.py`).
+We have also written custom python tools to convert rewrite rules in a different format to pdl, for example for Herbie-MLIR (`herbie_mlir/tools/herbie_pdl.py`, in the [case-studies repository](https://github.com/jumerckx/tamagoyaki-case-studies)).
 :::
 
 To execute `pdl` patterns, the IR first needs to be lowered to [`pdl_interp`](https://mlir.llvm.org/docs/Dialects/PDLInterpOps/).

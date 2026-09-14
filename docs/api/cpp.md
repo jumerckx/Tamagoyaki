@@ -28,12 +28,4 @@ expose additional symbols, or browse the auto-generated namespace listings.
    :members:
 ```
 
-## `herbie`
-
-```{eval-rst}
-.. doxygennamespace:: herbie
-   :project: tamagoyaki
-   :members:
-```
-
 

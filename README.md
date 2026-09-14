@@ -50,31 +50,55 @@ The `ematch` dialect extends the `pdl_interp` dialect to support e-matching for 
 
 - **`-equivalence-graph-contains`**: Reports, for each pattern in a `pdl_interp` patterns module (via `patterns-file=...` or nested `@patterns`/`@ir` submodules), whether it is *contained* in the e-graph — i.e. whether the pattern matches with its root in the e-class of a value returned by an `equivalence.yield`. Rather than rewriting, the pass replaces every `pdl_interp.record_match` with a custom constraint that registers the match and its operands, then runs the matcher once over the graph. Patterns can use the `ematch.is_arg` operation to pin operands to specific block arguments, fully grounding the query (e.g. "is `a * 2` for argument `a` present?" rather than "is some `x * 2` present?").
 
-## Herbie-MLIR
+## Case studies
 
-The `herbie-mlir` subproject extends Tamagoyaki with floating-point expression optimization inspired by [Herbie](https://herbie.uwplse.org/). The goal is to use equality saturation with the `ematch` dialect to explore equivalent floating-point expressions and select those with improved numerical accuracy or performance characteristics.
+Two compilers built on Tamagoyaki, together with the paper's evaluations, live
+in their own repository:
+[**tamagoyaki-case-studies**](https://github.com/jumerckx/tamagoyaki-case-studies).
 
-The subproject includes the `herbie-mlir-opt` tool, which combines the `equivalence` and `ematch` dialects with specialized patterns for floating-point arithmetic transformations. This tool builds on the MLIR infrastructure and the [Rival 3](https://github.com/herbie-fp/rival3) arbitrary-precision interval arithmetic library.
+| | |
+|---|---|
+| `herbie_mlir` | floating-point accuracy optimisation in the spirit of [Herbie](https://herbie.uwplse.org/), with interval arithmetic from [Rival 3](https://github.com/herbie-fp/rival3) |
+| `rover-mlir`  | datapath optimisation over [CIRCT](https://circt.llvm.org/)'s `comb`/`hw`/`datapath` dialects |
 
+They are separate because of what they drag in — CIRCT, Rust, Rival 3, a pinned
+Herbie and its whole Racket package closure — none of which the framework
+itself needs. That repository pins the Tamagoyaki it was tested against, so the
+two version independently.
+
+Tamagoyaki is consumed the way any other CMake dependency is:
+
+```cmake
+find_package(Tamagoyaki REQUIRED CONFIG)   # MLIREquivalence, MLIREmatch,
+                                           # TamagoyakiTiming, add_dialect_tablegen()
+```
+
+`Tamagoyaki_DIR` points either at an install prefix's `lib/cmake/tamagoyaki` or,
+for the development loop with nothing installed, at a build directory's. The
+config finds MLIR (and HiGHS) itself, defaulting to the ones Tamagoyaki was
+compiled against — so `Tamagoyaki_DIR` is the only thing a consumer has to pass.
+`cranelift-mlir` in this repository is built both ways, and CI builds it
+standalone against an install prefix on every change, which is what keeps that
+interface from quietly rotting.
 
 ## Building
 
 ### Prerequisites
 
-The project builds against a local MLIR/LLVM (and CIRCT) build supplied by the
-Nix flake, so the only host requirement is [Nix](https://nixos.org/) with flakes
-enabled. Enter the development shell — which provides the toolchain, a pinned
-LLVM/MLIR + CIRCT, and the full Python environment (xdsl, snakemake, lit,
-pre-commit, plotting and docs deps), all built from `pyproject.toml` + `uv.lock`
-via [uv2nix](https://github.com/pyproject-nix/uv2nix):
+The project builds against a local MLIR/LLVM build supplied by the Nix flake,
+so the only host requirement is [Nix](https://nixos.org/) with flakes enabled.
+Enter the development shell — which provides the toolchain, a pinned LLVM/MLIR,
+and the Python environment (lit, pre-commit, cmake-format and the docs stack),
+built from `pyproject.toml` + `uv.lock` via
+[uv2nix](https://github.com/pyproject-nix/uv2nix):
 
 ```shell
 nix develop          # release toolchain; use `nix develop .#debug` for assertions
 pre-commit install
 ```
 
-The shell exports `CMAKE_PREFIX_PATH` (LLVM/MLIR/CIRCT) and `LLVM_EXTERNAL_LIT`
-automatically. `uv` is still available for lockfile maintenance (`uv lock`), but
+The shell exports `CMAKE_PREFIX_PATH` (LLVM/MLIR and HiGHS) and
+`LLVM_EXTERNAL_LIT` automatically. `uv` is still available for lockfile maintenance (`uv lock`), but
 the Python environment itself comes from Nix.
 
 ### CMake Configuration
@@ -93,171 +117,13 @@ Build and run the test suite:
 ninja -C build check-tamagoyaki   # or `check-all`
 ```
 
-## Herbie-MLIR Evaluation
+## Evaluations
 
-The full Herbie-MLIR evaluation (Snakemake pipeline in
-[`herbie_mlir/eval/Snakefile`](herbie_mlir/eval/Snakefile)) is wrapped by a
-single reproducible command. The compiler and the Racket prefix Herbie is
-installed into are both pinned Nix derivations — so `racket -l herbie report`
-runs against a known Herbie — and the command runs the pipeline over them
-(fpcore → MLIR → equality saturation → fpcore → Herbie report → plots):
-
-```shell
-nix run .#herbie-eval         # from a checkout; builds + runs end-to-end
-```
-
-or, from inside the dev shell:
-
-```shell
-nix develop
-herbie-eval                   # same thing; extra args pass through to snakemake
-herbie-eval -n                # dry-run the pipeline
-```
-
-Knobs are environment variables: `BUILD_DIR` (defaults to the Nix-built
-`tamagoyaki-eval`; point it at an in-tree `build` to measure a local compiler),
-`RACKET_PREFIX`, `OUT_DIR` (default `herbie-eval-out`, relative to the repo root),
-`CORES` (default `1`), and `EXTRA_CONFIG` for Snakefile parameters, e.g.:
-
-```shell
-EXTRA_CONFIG='seed=7 max_nodes=8000' herbie-eval
-```
-
-Outputs land in `herbie-eval-out/` at the top level of the checkout. Each
-generated directory and file is prefixed with its pipeline stage, so the tree
-reads in execution order:
-
-```
-herbie-eval-out/
-  01-rules/               PDL and PDL-interp rule sets
-  02-mlir/                benchmarks lowered from FPCore to MLIR
-  03-optimized/           after equality saturation
-  04-optimize_timing/     per-benchmark wall clock for the above
-  05-saturation_timing/   joint vs. individual matcher timings
-  06-optimized_fpcore/    optimized MLIR back to FPCore
-  07-fpcore_merged/       original + optimized alternative per benchmark
-  08-herbie_input.fpcore  all merged benchmarks, concatenated
-  09-herbie_eval/         Herbie report
-  10-evaluation.csv       accuracies + timings extracted from the report
-  11-plots/               the five figures
-  12-provenance.txt       commit, toolchain versions, parameters
-  13-paper-artifact/      figures + CSV + manifest (and .tar.gz alongside)
-```
-
-The paper artifact is not built by default; ask for it with `herbie-eval paper`.
-
-## Rover Datapath Evaluation
-
-The Rover evaluation (Snakemake pipeline in
-[`rover-mlir/eval/Snakefile`](rover-mlir/eval/Snakefile)) compares four
-configurations of the same four datapath circuits on ASAP7-mapped area and
-delay, plus the wall clock the e-graph cost:
-
-| configuration | pipeline |
-|---|---|
-| `baseline` | `circt-synth` on the input as written — no e-graph |
-| `rover` | saturate with the base rewrites (comb/hw only), extract |
-| `multi` | saturate with base + datapath rewrites, extract |
-| `multi-persist` | as `multi`, but run `--canonicalize` and `--comb-int-range-narrowing` over the *persisted e-graph* before extracting |
-
-Every configuration goes through the same backend — `circt-synth` →
-`circt-translate --export-aiger` → `abc` technology mapping — so only the input
-IR differs.
-
-```shell
-nix run .#rover-eval          # from a checkout; builds + runs end-to-end
-```
-
-or, from inside the dev shell:
-
-```shell
-nix develop
-rover-eval                    # same thing; extra args pass through to snakemake
-rover-eval -n                 # dry-run the pipeline
-```
-
-Knobs are environment variables: `BUILD_DIR` (defaults to the Nix-built
-`tamagoyaki-rover-eval`; point it at an in-tree `build` to test a local
-compiler), `OUT_DIR` (default `rover-eval-out`, relative to the repo root),
-`CIRCT_BIN`, `ABC`, `CORES` (default `1`), and `EXTRA_CONFIG` for Snakefile
-parameters, e.g.:
-
-```shell
-EXTRA_CONFIG='max_iters=8 synth_until=mapping' rover-eval
-EXTRA_CONFIG='genlib=/path/to/other.genlib' rover-eval
-```
-
-Inputs: the benchmarks are plain `hw.module` in
-[`rover-mlir/eval/benchmarks/`](rover-mlir/eval/benchmarks) (the e-graph comes
-from `--rover-insert-graph`, and the lit suite drives these same files), the
-rewrite rules are [`rover-mlir/rules/`](rover-mlir/rules) — `rewrites_base.mlir`
-alone for `rover`, concatenated with `rewrites_datapath.mlir` for the rest — and
-the cell library is a vendored ASAP7 `genlib`, see
-[`rover-mlir/eval/lib/README.md`](rover-mlir/eval/lib/README.md) for its
-provenance and the citation it requires.
-
-Outputs land in `rover-eval-out/`, stage-prefixed like the Herbie tree:
-
-```
-rover-eval-out/
-  01-rules/               base and full rule sets, PDL and PDL-interp
-  02-input/               benchmarks as fed to the pipeline
-  03-egraph/              persisted e-graphs (per rule set, and after the CIRCT
-                          passes) and their reported sizes
-  04-extracted/           per-configuration IR handed to the backend
-  05-timing/              saturation (and, for multi-persist, CIRCT pass) times
-  06-synth/               circt-synth output
-  07-aiger/               AIGER netlists
-  08-abc/                 raw abc print_stats reports
-  09-results.csv          area, delay and e-graph time per benchmark+config
-  10-table.tex            the comparison table, best area/delay in bold
-  11-egraph.csv           e-classes and e-nodes per benchmark+config
-  12-egraph-table.tex     the e-graph size table, ratios against single-level
-  13-provenance.txt       commit, toolchain versions, genlib hash, parameters
-  14-paper-artifact/      tables + CSVs + manifest (and .tar.gz alongside)
-```
-
-The paper artifact is not built by default; ask for it with `rover-eval paper`.
-
-## Shared Evaluation Infrastructure
-
-The two pipelines are the same skeleton with different payloads -- rule set to
-matcher, opt tool over a benchmark corpus capturing IR and a timing report,
-domain-specific backend, one tidy CSV, a provenance manifest -- so what they
-have in common lives in [`tamagoyaki_eval/`](tamagoyaki_eval):
-
-| | |
-|---|---|
-| `timing.py` | reading the JSON that `-tamagoyaki-timing` and `-mlir-timing` emit |
-| `provenance.py` | the manifest's shared environment block |
-| `common.smk` | the PDL-to-PDL-interp rules, the paper artifact, `clean` |
-| `rover/` | Rover's result tools, as console scripts (`rover-results-csv`, ...) |
-
-Each Snakefile includes `common.smk` at its bottom, where everything the
-workflow defines is already in scope, and imports the helpers from the checkout
-rather than from the installed package — the workflow is one unit and there is
-no editable install, so mixing the two would let them drift apart (see
-[`tamagoyaki_eval/__init__.py`](tamagoyaki_eval/__init__.py)). The `mkEval` function in
-[`flake.nix`](flake.nix) builds both wrappers, so a third evaluation needs a
-Snakefile of its own stages and little else.
-
-The [`Makefile`](Makefile) wraps both commands, and can run them back to back:
-
-```shell
-make eval           # both, one after the other
-make herbie-eval    # just the Herbie-MLIR pipeline    -> herbie-eval-out/
-make rover-eval     # just the Rover datapath pipeline -> rover-eval-out/
-make eval-clean     # remove both output trees
-```
-
-The environment variables above are exposed as `CORES`, `SNAKEMAKE_ARGS`, and a
-`HERBIE_`/`ROVER_`-prefixed `*_BUILD_DIR` and `*_OUT_DIR` per pipeline, so
-`make eval` can drive both without their settings colliding:
-
-```shell
-make eval CORES=4 SNAKEMAKE_ARGS='-n'
-make rover-eval ROVER_BUILD_DIR=build
-```
+Both Snakemake pipelines — the Herbie-MLIR accuracy evaluation and the Rover
+datapath evaluation — and the Docker artifact that runs them offline live in
+the [case-studies
+repository](https://github.com/jumerckx/tamagoyaki-case-studies), alongside the
+code they measure.
 
 ## About
 
