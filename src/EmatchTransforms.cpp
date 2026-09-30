@@ -153,6 +153,49 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
   }
 
   registerEmatchRewrites(pdlPattern);
+  if (eagerRewrite) {
+    pdlPattern.registerRewriteFunction("union", [&uf](PatternRewriter &rewriter,
+                                                      PDLResultList &results,
+                                                      ArrayRef<PDLValue> args) {
+      assert(args.size() == 2 && "union expects 2 arguments");
+
+      PDLValue arg0 = args[0];
+      PDLValue arg1 = args[1];
+
+      if (arg0.isa<Value>() && arg1.isa<Value>()) {
+        uf.queueClassUnion(arg0.cast<Value>(), arg1.cast<Value>());
+      } else if (arg0.isa<Operation *>() && arg1.isa<ValueRange>()) {
+        uf.queueClassUnion(arg0.cast<Operation *>(), arg1.cast<ValueRange>());
+      } else if (arg0.isa<ValueRange>() && arg1.isa<ValueRange>()) {
+        uf.queueClassUnion(arg0.cast<ValueRange>(), arg1.cast<ValueRange>());
+      } else {
+        llvm_unreachable("union: unsupported argument types");
+      }
+      return success();
+    });
+  } else {
+    pdlPattern.registerRewriteFunction("union", [&uf](PatternRewriter &rewriter,
+                                                      PDLResultList &results,
+                                                      ArrayRef<PDLValue> args) {
+      assert(args.size() == 2 && "union expects 2 arguments");
+
+      PDLValue arg0 = args[0];
+      PDLValue arg1 = args[1];
+
+      if (arg0.isa<Value>() && arg1.isa<Value>()) {
+        uf.classUnion(rewriter, arg0.cast<Value>(), arg1.cast<Value>());
+      } else if (arg0.isa<Operation *>() && arg1.isa<ValueRange>()) {
+        uf.classUnion(rewriter, arg0.cast<Operation *>(),
+                      arg1.cast<ValueRange>());
+      } else if (arg0.isa<ValueRange>() && arg1.isa<ValueRange>()) {
+        uf.classUnion(rewriter, arg0.cast<ValueRange>(),
+                      arg1.cast<ValueRange>());
+      } else {
+        llvm_unreachable("union: unsupported argument types");
+      }
+      return success();
+    });
+  }
   pdlPattern.registerRewriteFunction("union", [&uf, eagerRewrite](
                                                   PatternRewriter &rewriter,
                                                   PDLResultList &results,
