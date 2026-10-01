@@ -74,7 +74,7 @@ module @patterns {
       pdl_interp.is_not_null %7 : !pdl.value -> ^bb12, ^bb8
     ^bb12:
       %8 = pdl_interp.get_operand 1 of %6
-      pdl_interp.are_equal %7, %8 : !pdl.value -> ^bb13, ^bb8
+      ematch.are_equivalent %7, %8 -> ^bb13, ^bb8
     ^bb13:
       %9 = pdl_interp.get_result 0 of %6
       pdl_interp.is_not_null %9 : !pdl.value -> ^bb14, ^bb8
@@ -82,7 +82,9 @@ module @patterns {
       %10 = ematch.get_class_result %9
       pdl_interp.is_not_null %10 : !pdl.value -> ^bb15, ^bb8
     ^bb15:
-      pdl_interp.are_equal %10, %1 : !pdl.value -> ^bb16, ^bb8
+      // %10 is the outer class of the addi, %1 the inner class it was reached
+      // through via the leader chain: compare e-classes, not SSA values.
+      ematch.are_equivalent %10, %1 -> ^bb16, ^bb8
     ^bb16:
       %11 = pdl_interp.get_value_type of %10 : !pdl.type
       %12 = pdl_interp.get_value_type of %3 : !pdl.type
