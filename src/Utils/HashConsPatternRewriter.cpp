@@ -13,6 +13,7 @@
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Region.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/Debug.h"
@@ -83,6 +84,13 @@ LogicalResult HashConsPatternRewriter::insert(Operation *op) {
   assert(region && "insert: operation has no parent region");
   assert(!llvm::isa<equivalence::ClassOp>(op));
 
+  // Non-speculatable operations (e.g. memref side effects) are allowed inside a
+  // graph but must never be hash-consed: deduplicating them could drop or
+  // reorder side effects. Treat insert as a successful no-op so callers leave
+  // them in place and never count them toward the node budget.
+  if (!mlir::isSpeculatable(op))
+    return success();
+
   ScopedMapTy::ScopeTy *scope = getScope(region);
   assert(scope && "insert: no scope registered for region");
 
@@ -104,6 +112,11 @@ LogicalResult HashConsPatternRewriter::insert(Operation *op) {
 Operation *HashConsPatternRewriter::lookup(Operation *op) {
   Region *region = op->getParentRegion();
   assert(region && "lookup: operation has no parent region");
+
+  // Non-speculatable operations are never hash-consed (see insert), so they can
+  // never have a congruent duplicate in the scope.
+  if (!mlir::isSpeculatable(op))
+    return nullptr;
 
   ScopedMapTy::ScopeTy *scope = getScope(region);
   assert(scope && "lookup: no scope registered for region");

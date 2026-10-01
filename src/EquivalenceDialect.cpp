@@ -24,7 +24,6 @@
 #include "mlir/IR/RegionKindInterface.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
-#include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
 #include "llvm/ADT/STLExtras.h"
@@ -222,22 +221,6 @@ mlir::equivalence::ClassOp::canonicalize(ClassOp op,
   }
 
   return success(changed);
-}
-
-mlir::LogicalResult mlir::equivalence::GraphOp::verify() {
-  auto walkResult = getBody().walk([&](Operation *op) -> WalkResult {
-    if (isa<YieldOp>(op))
-      return WalkResult::advance();
-    if (!mlir::isSpeculatable(op) &&
-        !op->hasAttrOfType<UnitAttr>("equivalence.allow_unspeculatable")) {
-      return op->emitOpError(
-          "operation in equivalence.graph region must be "
-          "speculatable or carry the "
-          "`equivalence.allow_unspeculatable` unit attribute");
-    }
-    return WalkResult::advance();
-  });
-  return failure(walkResult.wasInterrupted());
 }
 
 //===----------------------------------------------------------------------===//
