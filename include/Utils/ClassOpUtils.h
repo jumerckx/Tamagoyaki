@@ -21,12 +21,51 @@
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Support/LLVM.h"
+#include "llvm/ADT/iterator.h"
+#include "llvm/ADT/iterator_range.h"
 
 namespace mlir::ematch {
 
-/// Helper function to get all values from a ClassOp
-SmallVector<mlir::Value> getClassVals(mlir::PatternRewriter &rewriter,
-                                      mlir::Value val);
+/// Lazy forward iterator over the values of an e-class. It first visits the
+/// inputs of the class itself and then follows the leader chain outward,
+/// visiting the inputs of each enclosing class in turn. An inner class's
+/// leader always lives in an enclosing graph scope, so every visited value
+/// dominates (is visible from) the starting class. A value that is not an
+/// equivalence.class result is visited on its own.
+class ClassValIterator
+    : public llvm::iterator_facade_base<
+          ClassValIterator, std::forward_iterator_tag, mlir::Value,
+          std::ptrdiff_t, mlir::Value *, mlir::Value> {
+public:
+  /// The end iterator.
+  ClassValIterator() = default;
+  /// Iterate over the class of `val` (or just `val` if it is not a class).
+  explicit ClassValIterator(mlir::Value val);
+
+  mlir::Value operator*() const;
+  ClassValIterator &operator++();
+  bool operator==(const ClassValIterator &other) const {
+    return classOp == other.classOp && index == other.index &&
+           single == other.single;
+  }
+
+private:
+  /// Advance to the next class in the leader chain while the current class
+  /// has no input left at `index`.
+  void skipExhausted();
+
+  equivalence::ClassOp classOp;
+  unsigned index = 0;
+  /// Set when iterating over a value that is not part of a class.
+  mlir::Value single;
+};
+
+using ClassValRange = llvm::iterator_range<ClassValIterator>;
+
+/// Get all values in the e-class of `val`, including the values of the
+/// classes reachable through the leader chain. The range is lazy; use
+/// `llvm::to_vector` to materialize it.
+ClassValRange getClassVals(mlir::PatternRewriter &rewriter, mlir::Value val);
 
 /// Helper function to get the first value from a ClassOp
 mlir::Value getClassRepresentative(mlir::PatternRewriter &rewriter,
