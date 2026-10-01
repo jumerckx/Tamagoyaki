@@ -73,13 +73,28 @@ struct EmatchToApplyRewritePattern : public OpRewritePattern<OpTy> {
   }
 };
 
+struct AreEquivalentToApplyConstraintPattern
+    : public OpRewritePattern<AreEquivalentOp> {
+  using OpRewritePattern<AreEquivalentOp>::OpRewritePattern;
+
+  LogicalResult matchAndRewrite(AreEquivalentOp op,
+                                PatternRewriter &rewriter) const final {
+    rewriter.replaceOpWithNewOp<pdl_interp::ApplyConstraintOp>(
+        op, /*results=*/TypeRange{}, op->getName().stripDialect(),
+        ValueRange{op.getLhs(), op.getRhs()},
+        /*isNegated=*/false, op.getTrueDest(), op.getFalseDest());
+    return success();
+  }
+};
+
 void populateEmatchToApplyRewritePatterns(RewritePatternSet &patterns) {
   patterns.add<EmatchToApplyRewritePattern<GetClassValsOp>,
                EmatchToApplyRewritePattern<GetClassRepresentativeOp>,
                EmatchToApplyRewritePattern<GetClassResultOp>,
                EmatchToApplyRewritePattern<GetClassResultsOp>,
                EmatchToApplyRewritePattern<UnionOp>,
-               EmatchToApplyRewritePattern<DedupOp>>(patterns.getContext());
+               EmatchToApplyRewritePattern<DedupOp>,
+               AreEquivalentToApplyConstraintPattern>(patterns.getContext());
 }
 
 } // namespace
@@ -104,6 +119,10 @@ void registerEmatchRewrites(PDLPatternModule &pdlPattern) {
                                      getClassRepresentative);
   pdlPattern.registerRewriteFunction("get_class_result", getClassResult);
   pdlPattern.registerRewriteFunction("get_class_results", getClassResults);
+  pdlPattern.registerConstraintFunction(
+      "are_equivalent", [](PatternRewriter &, Value lhs, Value rhs) {
+        return success(areEquivalent(lhs, rhs));
+      });
 }
 
 bool isEquivalenceDialectOp(Operation *op) {

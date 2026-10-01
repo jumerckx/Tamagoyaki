@@ -22,7 +22,8 @@
 namespace mlir::ematch {
 
 /// Register the e-class traversal helpers used by the matcher bytecode to walk
-/// the e-graph (get_class_vals, get_class_representative, ...).
+/// the e-graph (get_class_vals, get_class_representative, ...) and the
+/// are_equivalent constraint.
 void registerEmatchRewrites(PDLPatternModule &pdlPattern);
 
 /// Operations in the equivalence dialect are skipped when walking the IR for

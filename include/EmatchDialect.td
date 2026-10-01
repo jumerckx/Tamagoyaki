@@ -149,6 +149,34 @@ def Ematch_IsArgOp : Ematch_Op<"is_arg", [Terminator]> {
     }];
 }
 
+def Ematch_AreEquivalentOp : Ematch_Op<"are_equivalent", [Terminator]> {
+    let summary = "Check whether two values are in the same equivalence class.";
+    let description = [{
+        The `ematch.are_equivalent` operation checks whether two `!pdl.value`s
+        belong to the same e-class. Unlike `pdl_interp.are_equal`, it looks
+        through the leader chain of nested graph scopes: two equivalence.class
+        results are equivalent if they share the same canonical leader. Values
+        that are not equivalence.class results are only equivalent to
+        themselves. It behaves like a `pdl_interp` predicate: on success control
+        branches to the true destination, otherwise to the false destination.
+
+        This operation is lowered to a `pdl_interp.apply_constraint`.
+
+        Example:
+
+        ```mlir
+        ematch.are_equivalent %a, %b -> ^success, ^failure
+        ```
+    }];
+
+    let arguments = (ins PDL_Value:$lhs, PDL_Value:$rhs);
+    let successors = (successor AnySuccessor:$trueDest, AnySuccessor:$falseDest);
+
+    let assemblyFormat = [{
+        $lhs `,` $rhs attr-dict `->` $trueDest `,` $falseDest
+    }];
+}
+
 def Ematch_DedupOp : Ematch_Op<"dedup"> {
     let summary = "Deduplicate an operation against the hashcons.";
     let description = [{
