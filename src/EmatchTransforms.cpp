@@ -121,6 +121,28 @@ struct PendingMatch {
   mlir::detail::PDLByteCode::MatchResult matchResult;
 };
 
+template <typename UnionFn>
+PDLRewriteFunction makeUnionRewrite(UnionFn unionFn) {
+  return [unionFn](PatternRewriter &rewriter, PDLResultList &,
+                   ArrayRef<PDLValue> args) -> LogicalResult {
+    assert(args.size() == 2 && "union expects 2 arguments");
+
+    PDLValue arg0 = args[0];
+    PDLValue arg1 = args[1];
+
+    if (arg0.isa<Value>() && arg1.isa<Value>()) {
+      unionFn(rewriter, arg0.cast<Value>(), arg1.cast<Value>());
+    } else if (arg0.isa<Operation *>() && arg1.isa<ValueRange>()) {
+      unionFn(rewriter, arg0.cast<Operation *>(), arg1.cast<ValueRange>());
+    } else if (arg0.isa<ValueRange>() && arg1.isa<ValueRange>()) {
+      unionFn(rewriter, arg0.cast<ValueRange>(), arg1.cast<ValueRange>());
+    } else {
+      llvm_unreachable("union: unsupported argument types");
+    }
+    return success();
+  };
+}
+
 } // namespace
 
 bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
@@ -153,40 +175,18 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
   }
 
   registerEmatchRewrites(pdlPattern);
-  pdlPattern.registerRewriteFunction("union", [&uf, eagerRewrite](
-                                                  PatternRewriter &rewriter,
-                                                  PDLResultList &results,
-                                                  ArrayRef<PDLValue> args) {
-    assert(args.size() == 2 && "union expects 2 arguments");
-
-    PDLValue arg0 = args[0];
-    PDLValue arg1 = args[1];
-
-    if (eagerRewrite) {
-      if (arg0.isa<Value>() && arg1.isa<Value>()) {
-        uf.queueClassUnion(arg0.cast<Value>(), arg1.cast<Value>());
-      } else if (arg0.isa<Operation *>() && arg1.isa<ValueRange>()) {
-        uf.queueClassUnion(arg0.cast<Operation *>(), arg1.cast<ValueRange>());
-      } else if (arg0.isa<ValueRange>() && arg1.isa<ValueRange>()) {
-        uf.queueClassUnion(arg0.cast<ValueRange>(), arg1.cast<ValueRange>());
-      } else {
-        llvm_unreachable("union: unsupported argument types");
-      }
-    } else {
-      if (arg0.isa<Value>() && arg1.isa<Value>()) {
-        uf.classUnion(rewriter, arg0.cast<Value>(), arg1.cast<Value>());
-      } else if (arg0.isa<Operation *>() && arg1.isa<ValueRange>()) {
-        uf.classUnion(rewriter, arg0.cast<Operation *>(),
-                      arg1.cast<ValueRange>());
-      } else if (arg0.isa<ValueRange>() && arg1.isa<ValueRange>()) {
-        uf.classUnion(rewriter, arg0.cast<ValueRange>(),
-                      arg1.cast<ValueRange>());
-      } else {
-        llvm_unreachable("union: unsupported argument types");
-      }
-    }
-    return success();
-  });
+  if (eagerRewrite) {
+    pdlPattern.registerRewriteFunction(
+        "union", makeUnionRewrite([&uf](PatternRewriter &, auto lhs, auto rhs) {
+          uf.queueClassUnion(lhs, rhs);
+        }));
+  } else {
+    pdlPattern.registerRewriteFunction(
+        "union",
+        makeUnionRewrite([&uf](PatternRewriter &rewriter, auto lhs, auto rhs) {
+          uf.classUnion(rewriter, lhs, rhs);
+        }));
+  }
   pdlPattern.registerRewriteFunction(
       "dedup", [&hashconsRewriter](PatternRewriter &rewriter, Operation *op) {
         if (Operation *existing = hashconsRewriter.lookup(op)) {
