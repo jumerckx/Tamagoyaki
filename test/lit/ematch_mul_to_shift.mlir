@@ -55,7 +55,7 @@ module @patterns {
             
             pdl_interp.is_not_null %7 : !pdl.value -> ^bb16, ^bb_continue
         ^bb16:  // pred: ^bb15
-            pdl_interp.are_equal %7, %0 : !pdl.value -> ^bb17, ^bb_continue
+            ematch.are_equivalent %7, %0 -> ^bb17, ^bb_continue
         ^bb17:  // pred: ^bb16
             %8 = pdl_interp.get_value_type of %7 : !pdl.type
             pdl_interp.are_equal %8, %4 : !pdl.type -> ^bb18, ^bb_continue
