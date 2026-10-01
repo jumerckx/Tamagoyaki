@@ -114,7 +114,11 @@ void convertEmatchOpsToApplyRewrites(ModuleOp module) {
 //===----------------------------------------------------------------------===//
 
 void registerEmatchRewrites(PDLPatternModule &pdlPattern) {
-  pdlPattern.registerRewriteFunction("get_class_vals", getClassVals);
+  // PDL ranges must be materialized.
+  pdlPattern.registerRewriteFunction(
+      "get_class_vals", [](PatternRewriter &rewriter, Value val) {
+        return llvm::to_vector(getClassVals(rewriter, val));
+      });
   pdlPattern.registerRewriteFunction("get_class_representative",
                                      getClassRepresentative);
   pdlPattern.registerRewriteFunction("get_class_result", getClassResult);

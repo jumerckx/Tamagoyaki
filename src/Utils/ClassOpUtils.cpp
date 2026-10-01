@@ -22,15 +22,43 @@
 using namespace mlir;
 using namespace mlir::ematch;
 
-SmallVector<mlir::Value>
-mlir::ematch::getClassVals(mlir::PatternRewriter &rewriter, mlir::Value val) {
-  Operation *defOp = val.getDefiningOp();
-  if (defOp == nullptr) {
-    return {val};
-  } else if (auto classOp = dyn_cast<equivalence::ClassOp>(defOp)) {
-    return llvm::to_vector(classOp.getInputs());
+ClassValIterator::ClassValIterator(Value val) {
+  if (auto classOp = val.getDefiningOp<equivalence::ClassOp>()) {
+    this->classOp = classOp;
+    skipExhausted();
+  } else {
+    single = val;
   }
-  return {val};
+}
+
+Value ClassValIterator::operator*() const {
+  if (single)
+    return single;
+  // Op wrappers have no const accessors.
+  return equivalence::ClassOp(classOp).getInputs()[index];
+}
+
+ClassValIterator &ClassValIterator::operator++() {
+  if (single) {
+    single = nullptr;
+    return *this;
+  }
+  ++index;
+  skipExhausted();
+  return *this;
+}
+
+void ClassValIterator::skipExhausted() {
+  while (classOp && index >= classOp.getInputs().size()) {
+    Value leader = classOp.getLeader();
+    classOp = leader ? leader.getDefiningOp<equivalence::ClassOp>() : nullptr;
+    index = 0;
+  }
+}
+
+ClassValRange mlir::ematch::getClassVals(mlir::PatternRewriter &rewriter,
+                                         mlir::Value val) {
+  return ClassValRange(ClassValIterator(val), ClassValIterator());
 }
 
 mlir::Value
