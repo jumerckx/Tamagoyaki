@@ -1,7 +1,11 @@
 // The evaluation reads per-benchmark saturation wall clock out of this JSON
 // (rover-mlir/eval/Snakefile, stage 05-timing), so a refactor that drops the
 // timing registration from rover-mlir-opt would silently zero every reported
-// runtime. Guard both the flag and the scope name.
+// runtime. Guard the flag, the scope name, and the resolution: the scopes
+// being reported last around a millisecond, and MLIR's stock JSON writer
+// rounds seconds to four decimals, which quantizes them to 0.1 ms. Falling
+// back to it (see HighPrecisionJsonStrategy, src/TamagoyakiTiming.cpp) would
+// leave the evaluation measuring its own rounding.
 
 // RUN: rover-mlir-opt --rover-insert-graph %s \
 // RUN:   --rover-saturate="patterns-file=%S/../rules/rewrites_pdl_interp.mlir max-iters=2" \
@@ -22,4 +26,5 @@ module @ir {
 }
 
 // CHECK: "wall"
+// CHECK-SAME: "duration": {{[0-9]+\.[0-9]{9},}}
 // CHECK: "name": "runSaturation"

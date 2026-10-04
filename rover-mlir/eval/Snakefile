@@ -52,6 +52,12 @@ GENLIB = str(_resolve_dir(config.get("genlib", EVAL_DIR / "lib" / "asap7.genlib"
 MAX_ITERS = int(config.get("max_iters", 4))
 MAX_NODES = int(config.get("max_nodes", 0))
 
+# How many times each measured command is re-run.
+REPS = int(config.get("reps", 1))
+
+PIN_CPU = config.get("pin_cpu", "")
+MEASURE = f"taskset -c {PIN_CPU} " if PIN_CPU != "" else ""
+
 # circt-synth knobs. The defaults reproduce the plain `circt-synth in -o out`
 # invocation the original automate_pipeline.py used, so the numbers stay
 # comparable; synth_until can stop the pipeline early (e.g. "mapping" to hand
@@ -77,6 +83,7 @@ wildcard_constraints:
     config = "|".join(re.escape(c) for c in CONFIGS),
     bench  = "|".join(re.escape(b) for b in BENCHMARKS),
     set    = "base|full",
+    rep    = r"\d+",
 
 # ---------------------------------------------------------------------------
 # Output layout. Results go to a directory at the top level of the repository
@@ -161,13 +168,30 @@ rule copy_input:
 # ---------------------------------------------------------------------------
 # 03/04/05 -- e-graph configurations
 #
+# The rules in this section come in pairs: one that produces IR the rest of the
+# pipeline consumes, and one that measures the same command REPS times and
+# keeps only the timing report. They are kept apart deliberately --
+#
+#   * the measured command is then byte-identical across every repetition, and
+#     does not also pay for writing out the IR that the artifact rule writes;
+#   * REPS does not multiply the synthesis work, which is deterministic and
+#     would only burn wall clock;
+#   * a rerun of the timing never invalidates the area/delay numbers.
+#
 # On timing: `-tamagoyaki-timing` and `-mlir-timing` both write JSON to stderr,
 # so enabling both in one process concatenates two documents into something
 # unparseable. Only one timing writer per invocation -- which is why
 # multi-persist below is three processes rather than one pipeline.
+#
+# On resolution: `-tamagoyaki-timing` prints nanoseconds (see the
+# HighPrecisionJsonStrategy in src/TamagoyakiTiming.cpp for why it has to).
+# `-mlir-timing` is MlirOptMain's own timing manager, which this tool cannot
+# substitute an output strategy into, so the CIRCT-pass durations in
+# *.canon.json are still MLIR's stock `%8.4f` seconds, i.e. rounded to 0.1 ms.
+# Repetitions are what makes those numbers usable until that is fixed.
 # ---------------------------------------------------------------------------
 # The saturation itself: identical for both rule sets, so the rules below differ
-# only in which matcher they load and where the graph and any timing land.
+# only in which matcher they load and where their output goes.
 SATURATE = (
     '{rover_opt} --rover-insert-graph {input.mlir}'
     ' --rover-saturate="patterns-file={input.rules}'
@@ -178,42 +202,65 @@ rule baseline_passthrough:
     input:
         f"{INPUT_DIR}/{{bench}}.mlir"
     output:
-        mlir = f"{EXTRACTED_DIR}/baseline/{{bench}}.mlir",
-        timing = f"{TIMING_DIR}/baseline/{{bench}}.json"
+        f"{EXTRACTED_DIR}/baseline/{{bench}}.mlir"
     shell:
-        # An empty report keeps the CSV builder uniform; it reports 0 ms.
-        "cp {input} {output.mlir} && echo '[]' > {output.timing}"
+        "cp {input} {output}"
+
+SATURATE_EXTRACT = (
+    SATURATE + ' --rover-extract=delay --remove-dead-values'
+)
 
 rule saturate_extract:
     input:
         mlir = f"{INPUT_DIR}/{{bench}}.mlir",
         rules = lambda w: f"{RULES_DIR}/{RULESET[w.config]}_pdl_interp.mlir"
     output:
-        mlir = f"{EXTRACTED_DIR}/{{config}}/{{bench}}.mlir",
-        timing = f"{TIMING_DIR}/{{config}}/{{bench}}.json"
+        f"{EXTRACTED_DIR}/{{config}}/{{bench}}.mlir"
     wildcard_constraints:
         config = "rover|multi"
     resources:
         bench = 1
     shell:
-        '{rover_opt} --rover-insert-graph {input.mlir}'
-        ' --rover-saturate="patterns-file={input.rules} max-iters={MAX_ITERS} max-nodes={MAX_NODES}"'
-        ' --rover-extract=delay --remove-dead-values'
+        SATURATE_EXTRACT + ' > {output}'
+
+rule measure_saturate_extract:
+    input:
+        mlir = f"{INPUT_DIR}/{{bench}}.mlir",
+        rules = lambda w: f"{RULES_DIR}/{RULESET[w.config]}_pdl_interp.mlir"
+    output:
+        f"{TIMING_DIR}/{{config}}/{{bench}}.r{{rep}}.json"
+    wildcard_constraints:
+        config = "rover|multi"
+    resources:
+        bench = 1
+    shell:
+        MEASURE + SATURATE_EXTRACT +
         ' -tamagoyaki-timing -tamagoyaki-timing-output=json'
-        ' 2> {output.timing} > {output.mlir}'
+        ' 2> {output} > /dev/null'
 
 rule persist_saturate:
     input:
         mlir = f"{INPUT_DIR}/{{bench}}.mlir",
         rules = f"{RULES_DIR}/full_pdl_interp.mlir"
     output:
-        mlir = f"{EGRAPH_DIR}/{{bench}}.full-sat.mlir",
-        timing = f"{TIMING_DIR}/multi-persist/{{bench}}.json"
+        f"{EGRAPH_DIR}/{{bench}}.full-sat.mlir"
     resources:
         bench = 1
     shell:
-        SATURATE + ' -tamagoyaki-timing -tamagoyaki-timing-output=json'
-                   ' 2> {output.timing} > {output.mlir}'
+        SATURATE + ' > {output}'
+
+rule measure_persist_saturate:
+    input:
+        mlir = f"{INPUT_DIR}/{{bench}}.mlir",
+        rules = f"{RULES_DIR}/full_pdl_interp.mlir"
+    output:
+        f"{TIMING_DIR}/multi-persist/{{bench}}.r{{rep}}.json"
+    resources:
+        bench = 1
+    shell:
+        MEASURE + SATURATE +
+        ' -tamagoyaki-timing -tamagoyaki-timing-output=json'
+        ' 2> {output} > /dev/null'
 
 # The e-graph size table needs a single-level graph to compare against, and the
 # `rover` configuration saturates and extracts in one process, so its graph is
@@ -233,18 +280,29 @@ rule saturate_base_egraph:
 
 # CIRCT passes over the persisted e-graph. Run in rover-mlir-opt, not circt-opt:
 # circt-opt does not know the equivalence dialect and cannot parse the graph.
+CIRCT_PASSES = '{rover_opt} {input} --canonicalize --comb-int-range-narrowing'
+
 rule persist_canonicalize:
     input:
         f"{EGRAPH_DIR}/{{bench}}.full-sat.mlir"
     output:
-        mlir = f"{EGRAPH_DIR}/{{bench}}.canon.mlir",
-        timing = f"{TIMING_DIR}/multi-persist/{{bench}}.canon.json"
+        f"{EGRAPH_DIR}/{{bench}}.canon.mlir"
     resources:
         bench = 1
     shell:
-        '{rover_opt} {input} --canonicalize --comb-int-range-narrowing'
+        CIRCT_PASSES + ' -o {output}'
+
+rule measure_persist_canonicalize:
+    input:
+        f"{EGRAPH_DIR}/{{bench}}.full-sat.mlir"
+    output:
+        f"{TIMING_DIR}/multi-persist/{{bench}}.canon.r{{rep}}.json"
+    resources:
+        bench = 1
+    shell:
+        MEASURE + CIRCT_PASSES +
         ' -mlir-timing -mlir-timing-display=tree -mlir-output-format=json'
-        ' 2> {output.timing} > {output.mlir}'
+        ' 2> {output} > /dev/null'
 
 # The size of each persisted graph, as the compiler itself counts it: the
 # analysis behind --equivalence-graph-size is the one the saturation loop prints
@@ -313,10 +371,11 @@ rule results_csv:
     input:
         abc = expand(f"{ABC_DIR}/{{config}}/{{bench}}.txt",
                      config=CONFIGS, bench=BENCHMARKS),
-        timing = expand(f"{TIMING_DIR}/{{config}}/{{bench}}.json",
-                        config=CONFIGS, bench=BENCHMARKS),
-        canon = expand(f"{TIMING_DIR}/multi-persist/{{bench}}.canon.json",
-                       bench=BENCHMARKS),
+        timing = expand(f"{TIMING_DIR}/{{config}}/{{bench}}.r{{rep}}.json",
+                        config=[c for c in CONFIGS if c != "baseline"],
+                        bench=BENCHMARKS, rep=range(REPS)),
+        canon = expand(f"{TIMING_DIR}/multi-persist/{{bench}}.canon.r{{rep}}.json",
+                       bench=BENCHMARKS, rep=range(REPS)),
     output:
         RESULTS_CSV
     params:
@@ -326,7 +385,7 @@ rule results_csv:
         "rover-results-csv"
         " --abc-dir {ABC_DIR} --timing-dir {TIMING_DIR}"
         " --configs {params.configs} --benchmarks {params.benchmarks}"
-        " -o {output}"
+        " --reps {REPS} -o {output}"
 
 rule latex_table:
     input:
@@ -394,6 +453,8 @@ rule provenance:
             parameters=[
                 ("max_iters", MAX_ITERS),
                 ("max_nodes", MAX_NODES),
+                ("timing_reps", REPS),
+                ("timing_pin_cpu", PIN_CPU or "<unpinned>"),
                 ("synthesis_strategy", SYNTH_STRATEGY or "<circt-synth default>"),
                 ("synth_until", SYNTH_UNTIL or "<full pipeline>"),
                 ("circt_synth_flags", SYNTH_FLAGS or "<none>"),

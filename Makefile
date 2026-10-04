@@ -18,6 +18,14 @@
 #   make herbie-eval HERBIE_OUT_DIR=herbie-eval-out-alt
 #   make rover-eval ROVER_BUILD_DIR=build         # measure a local compiler
 #   EXTRA_CONFIG='max_iters=8' make rover-eval    # Snakefile parameters
+#
+# Timing. The rover pipeline measures each timed command once by default. The
+# scopes it reports last around a millisecond, so a number that has to carry
+# weight in a paper wants repetitions, and a quiet core to run them on:
+#   EXTRA_CONFIG='reps=30 pin_cpu=3' make rover-eval CORES=1
+# 09-results.csv then carries the mean, the sample stdev and the minimum over
+# the repetitions; `rover-latex-table --show-stdev` puts the spread in the
+# table.
 
 CORES          ?= 1
 SNAKEMAKE_ARGS ?= --forceall

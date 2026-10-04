@@ -3,8 +3,12 @@
 #include "mlir/Support/Timing.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/Format.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/Signposts.h"
+#include "llvm/Support/raw_ostream.h"
+
+#include <memory>
 
 using namespace mlir;
 
@@ -25,6 +29,61 @@ struct TimingCLOptions {
                                   "json",
                                   "display the results in JSON format")),
       llvm::cl::init(DefaultTimingManager::OutputFormat::Text)};
+};
+
+/// nanosecond resolution
+class HighPrecisionJsonStrategy : public OutputStrategy {
+public:
+  HighPrecisionJsonStrategy(llvm::raw_ostream &os) : OutputStrategy(os) {}
+
+  void printHeader(const TimeRecord &total) override { os << "[" << "\n"; }
+
+  void printFooter() override {
+    os << "]" << "\n";
+    os.flush();
+  }
+
+  void printTime(const TimeRecord &time, const TimeRecord &total) override {
+    if (total.user != total.wall) {
+      os << "\"user\": {";
+      os << "\"duration\": " << llvm::format("%.9f", time.user) << ", ";
+      os << "\"percentage\": "
+         << llvm::format("%5.1f", 100.0 * time.user / total.user);
+      os << "}, ";
+    }
+    os << "\"wall\": {";
+    os << "\"duration\": " << llvm::format("%.9f", time.wall) << ", ";
+    os << "\"percentage\": "
+       << llvm::format("%5.1f", 100.0 * time.wall / total.wall);
+    os << "}";
+  }
+
+  void printListEntry(StringRef name, const TimeRecord &time,
+                      const TimeRecord &total, bool lastEntry) override {
+    os << "{";
+    printTime(time, total);
+    os << ", \"name\": " << "\"" << name << "\"";
+    os << "}";
+    if (!lastEntry)
+      os << ",";
+    os << "\n";
+  }
+
+  void printTreeEntry(unsigned indent, StringRef name, const TimeRecord &time,
+                      const TimeRecord &total) override {
+    os.indent(indent) << "{";
+    printTime(time, total);
+    os << ", \"name\": " << "\"" << name << "\"";
+    os << ", \"passes\": [" << "\n";
+  }
+
+  void printTreeEntryEnd(unsigned indent, bool lastEntry) override {
+    os.indent(indent) << "{}]";
+    os << "}";
+    if (!lastEntry)
+      os << ",";
+    os << "\n";
+  }
 };
 
 llvm::ManagedStatic<TimingCLOptions> clOptions;
@@ -48,8 +107,11 @@ void ensureInitialized() {
     return;
   globalTM = new DefaultTimingManager();
   globalTM->setEnabled(true);
-  globalTM->setOutput(
-      createOutputStrategy(clOptions->outputFormat, llvm::errs()));
+  if (clOptions->outputFormat == DefaultTimingManager::OutputFormat::Json)
+    globalTM->setOutput(std::make_unique<HighPrecisionJsonStrategy>(llvm::errs()));
+  else
+    globalTM->setOutput(
+        createOutputStrategy(clOptions->outputFormat, llvm::errs()));
   globalRootScope = globalTM->getRootScope();
 }
 

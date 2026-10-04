@@ -205,11 +205,13 @@ rover-eval-out/
   03-egraph/              persisted e-graphs (per rule set, and after the CIRCT
                           passes) and their reported sizes
   04-extracted/           per-configuration IR handed to the backend
-  05-timing/              saturation (and, for multi-persist, CIRCT pass) times
+  05-timing/              saturation (and, for multi-persist, CIRCT pass) times,
+                          one report per repetition (`<bench>.r<n>.json`)
   06-synth/               circt-synth output
   07-aiger/               AIGER netlists
   08-abc/                 raw abc print_stats reports
-  09-results.csv          area, delay and e-graph time per benchmark+config
+  09-results.csv          area, delay and e-graph time (mean, stdev, min over
+                          the repetitions) per benchmark+config
   10-table.tex            the comparison table, best area/delay in bold
   11-egraph.csv           e-classes and e-nodes per benchmark+config
   12-egraph-table.tex     the e-graph size table, ratios against single-level
@@ -218,6 +220,19 @@ rover-eval-out/
 ```
 
 The paper artifact is not built by default; ask for it with `rover-eval paper`.
+
+Each timed command runs once by default, which is enough to see the shape of
+the results but not to compare configurations: the scopes being measured last
+around a millisecond. Repeat them, on a core nothing else is using, for numbers
+that carry weight:
+
+```
+EXTRA_CONFIG='reps=30 pin_cpu=3' make rover-eval CORES=1
+```
+
+Repetitions cost only timing work -- the IR the synthesis backend consumes
+comes from separate rules, so area and delay are untouched by `reps` and are
+not re-derived when the timing is re-run.
 
 ## Shared Evaluation Infrastructure
 
