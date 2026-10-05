@@ -55,7 +55,7 @@ MAX_ITERS = int(config.get("max_iters", 4))
 MAX_NODES = int(config.get("max_nodes", 0))
 
 # How many times each measured command is re-run.
-REPS = int(config.get("reps", 20))
+REPS = int(config.get("reps", 100))
 
 # Which CPU the measured jobs are pinned to. "auto" (the default) picks one;
 # a number pins there; "none" runs unpinned.
