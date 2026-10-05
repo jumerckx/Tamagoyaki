@@ -221,13 +221,24 @@ rover-eval-out/
 
 The paper artifact is not built by default; ask for it with `rover-eval paper`.
 
-Each timed command runs once by default, which is enough to see the shape of
-the results but not to compare configurations: the scopes being measured last
-around a millisecond. Repeat them, on a core nothing else is using, for numbers
-that carry weight:
+Each timed command is run 20 times, pinned to a single CPU. The scopes being
+measured last around a millisecond, so a single shot is mostly machine noise;
+`09-results.csv` reports the mean, the sample standard deviation and the
+minimum over the repetitions, and `rover-latex-table --show-stdev` puts the
+spread in the table. Repetitions cost only timing work -- the IR the synthesis
+backend consumes comes from separate rules, so area and delay are untouched by
+`reps` and are not re-derived when the timing is re-run.
+
+By default the pinned CPU is the highest-numbered one the run is allowed on,
+which keeps the measurements off the low cores the kernel and everything else
+gravitate to; `taskset` is Linux-only, so elsewhere the pinning is silently
+skipped. Both knobs are overridable, and the choice is recorded in
+`13-provenance.txt`:
 
 ```
-EXTRA_CONFIG='reps=30 pin_cpu=3' make rover-eval CORES=1
+EXTRA_CONFIG='reps=1' make rover-eval          # quick iteration, not comparable
+EXTRA_CONFIG='pin_cpu=3' make rover-eval       # pin somewhere specific
+EXTRA_CONFIG='pin_cpu=none' make rover-eval    # do not pin at all
 ```
 
 Repetitions cost only timing work -- the IR the synthesis backend consumes

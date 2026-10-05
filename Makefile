@@ -19,13 +19,14 @@
 #   make rover-eval ROVER_BUILD_DIR=build         # measure a local compiler
 #   EXTRA_CONFIG='max_iters=8' make rover-eval    # Snakefile parameters
 #
-# Timing. The rover pipeline measures each timed command once by default. The
-# scopes it reports last around a millisecond, so a number that has to carry
-# weight in a paper wants repetitions, and a quiet core to run them on:
-#   EXTRA_CONFIG='reps=30 pin_cpu=3' make rover-eval CORES=1
-# 09-results.csv then carries the mean, the sample stdev and the minimum over
-# the repetitions; `rover-latex-table --show-stdev` puts the spread in the
-# table.
+# Timing. The rover pipeline repeats each timed command 20 times, pinned to one
+# CPU, because the scopes it reports last around a millisecond and a single
+# shot is mostly noise. 09-results.csv carries the mean, the sample stdev and
+# the minimum over the repetitions; `rover-latex-table --show-stdev` puts the
+# spread in the table. To override:
+#   EXTRA_CONFIG='reps=1' make rover-eval             # quick, not comparable
+#   EXTRA_CONFIG='pin_cpu=3' make rover-eval          # choose the CPU
+#   EXTRA_CONFIG='pin_cpu=none' make rover-eval       # do not pin
 
 CORES          ?= 1
 SNAKEMAKE_ARGS ?= --forceall

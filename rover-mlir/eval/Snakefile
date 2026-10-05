@@ -1,4 +1,6 @@
+import os
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -53,10 +55,28 @@ MAX_ITERS = int(config.get("max_iters", 4))
 MAX_NODES = int(config.get("max_nodes", 0))
 
 # How many times each measured command is re-run.
-REPS = int(config.get("reps", 1))
+REPS = int(config.get("reps", 20))
 
-PIN_CPU = config.get("pin_cpu", "")
-MEASURE = f"taskset -c {PIN_CPU} " if PIN_CPU != "" else ""
+# Which CPU the measured jobs are pinned to. "auto" (the default) picks one;
+# a number pins there; "none" runs unpinned.
+def _resolve_pin(value):
+    if value is None or value is False:
+        return None
+    if isinstance(value, str) and value.strip().lower() in ("", "none", "off"):
+        return None
+    # taskset is util-linux; elsewhere there is nothing to pin with.
+    if not shutil.which("taskset"):
+        return None
+    if not (isinstance(value, str) and value.strip().lower() == "auto"):
+        return int(value)
+    try:
+        allowed = os.sched_getaffinity(0)
+    except AttributeError:  # not Linux
+        return None
+    return max(allowed)
+
+PIN_CPU = _resolve_pin(config.get("pin_cpu", "auto"))
+MEASURE = f"taskset -c {PIN_CPU} " if PIN_CPU is not None else ""
 
 # circt-synth knobs. The defaults reproduce the plain `circt-synth in -o out`
 # invocation the original automate_pipeline.py used, so the numbers stay
@@ -454,7 +474,8 @@ rule provenance:
                 ("max_iters", MAX_ITERS),
                 ("max_nodes", MAX_NODES),
                 ("timing_reps", REPS),
-                ("timing_pin_cpu", PIN_CPU or "<unpinned>"),
+                ("timing_pin_cpu",
+                 "<unpinned>" if PIN_CPU is None else f"cpu {PIN_CPU}"),
                 ("synthesis_strategy", SYNTH_STRATEGY or "<circt-synth default>"),
                 ("synth_until", SYNTH_UNTIL or "<full pipeline>"),
                 ("circt_synth_flags", SYNTH_FLAGS or "<none>"),
