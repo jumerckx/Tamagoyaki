@@ -38,7 +38,7 @@ pdl.pattern @neg_sub_neg : benefit(1) {
   }
 }
 
-// -a + -b  ->  -(a - b)
+// -a + -b  ->  -(a + b)
 pdl.pattern @neg_add_neg : benefit(1) {
   %type = pdl.type
   %a = pdl.operand
@@ -58,12 +58,12 @@ pdl.pattern @neg_add_neg : benefit(1) {
   %root = pdl.operation "llvm.add" (%neg_a, %neg_b : !pdl.value, !pdl.value) -> (%type : !pdl.type)
 
   pdl.rewrite %root {
-    // -(a - b)  ==  0 - (a - b)
-    %sub_op = pdl.operation "llvm.sub" (%a, %b : !pdl.value, !pdl.value) -> (%type : !pdl.type)
-    %sub = pdl.result 0 of %sub_op
+    // -(a + b)  ==  0 - (a + b)
+    %add_op = pdl.operation "llvm.add" (%a, %b : !pdl.value, !pdl.value) -> (%type : !pdl.type)
+    %add = pdl.result 0 of %add_op
     %zero_r_op = pdl.operation "llvm.mlir.constant" {"value" = %zero_attr} -> (%type : !pdl.type)
     %zero_r = pdl.result 0 of %zero_r_op
-    %new_op = pdl.operation "llvm.sub" (%zero_r, %sub : !pdl.value, !pdl.value) -> (%type : !pdl.type)
+    %new_op = pdl.operation "llvm.sub" (%zero_r, %add : !pdl.value, !pdl.value) -> (%type : !pdl.type)
     %new = pdl.result 0 of %new_op
     pdl.replace %root with (%new : !pdl.value)
   }
