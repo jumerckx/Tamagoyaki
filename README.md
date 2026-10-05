@@ -210,8 +210,8 @@ rover-eval-out/
   06-synth/               circt-synth output
   07-aiger/               AIGER netlists
   08-abc/                 raw abc print_stats reports
-  09-results.csv          area, delay and e-graph time (mean, stdev, min over
-                          the repetitions) per benchmark+config
+  09-results.csv          area, delay and e-graph time (min of the batch means,
+                          their stdev, overall mean) per benchmark+config
   10-table.tex            the comparison table, best area/delay in bold
   11-egraph.csv           e-classes and e-nodes per benchmark+config
   12-egraph-table.tex     the e-graph size table, ratios against single-level
@@ -221,13 +221,13 @@ rover-eval-out/
 
 The paper artifact is not built by default; ask for it with `rover-eval paper`.
 
-Each timed command is run 20 times, pinned to a single CPU. The scopes being
-measured last around a millisecond, so a single shot is mostly machine noise;
-`09-results.csv` reports the mean, the sample standard deviation and the
-minimum over the repetitions, and `rover-latex-table --show-stdev` puts the
-spread in the table. Repetitions cost only timing work -- the IR the synthesis
-backend consumes comes from separate rules, so area and delay are untouched by
-`reps` and are not re-derived when the timing is re-run.
+Each timed command is run in 20 batches of 10 runs, pinned to a single CPU. The
+scopes being measured last around a millisecond, so a single shot is mostly
+machine noise. The reported time is the minimum over the batches of each
+batch's mean: averaging within a batch smooths out per-run jitter, and taking
+the best batch discards the ones the machine disturbed. `09-results.csv` also
+carries the sample standard deviation of the batch means and the plain mean
+over every run; `rover-latex-table --show-stdev` puts the spread in the table.
 
 By default the pinned CPU is the highest-numbered one the run is allowed on,
 which keeps the measurements off the low cores the kernel and everything else
@@ -236,14 +236,14 @@ skipped. Both knobs are overridable, and the choice is recorded in
 `13-provenance.txt`:
 
 ```
-EXTRA_CONFIG='reps=1' make rover-eval          # quick iteration, not comparable
+EXTRA_CONFIG='batches=1 batch_size=1' make rover-eval   # quick, not comparable
 EXTRA_CONFIG='pin_cpu=3' make rover-eval       # pin somewhere specific
 EXTRA_CONFIG='pin_cpu=none' make rover-eval    # do not pin at all
 ```
 
 Repetitions cost only timing work -- the IR the synthesis backend consumes
-comes from separate rules, so area and delay are untouched by `reps` and are
-not re-derived when the timing is re-run.
+comes from separate rules, so area and delay are untouched by `batches` and
+`batch_size` and are not re-derived when the timing is re-run.
 
 ## Shared Evaluation Infrastructure
 

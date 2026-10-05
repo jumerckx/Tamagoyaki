@@ -4,13 +4,13 @@ One row per benchmark, one column group per configuration, with the smallest
 area and the smallest delay in each row set in bold (all cells tied for the
 minimum are bolded).
 
-Times are the mean e-graph wall clock over the repetitions the CSV records, in
-milliseconds. Two decimals by default: the measured scopes last around a
-millisecond, so one decimal cannot separate the configurations at all -- which
+Times are the e-graph wall clock in milliseconds: the minimum over the batches
+the CSV records of each batch's mean. Two decimals by default: the measured
+scopes last around a millisecond, so one decimal cannot separate the configurations at all -- which
 is the whole reason the timing is repeated. `--decimals` overrides it, and
 `--show-stdev` appends the spread, which is what says whether a difference
-between two columns survives the noise. A row whose CSV says `reps` is 1 is a
-single shot; its time cell carries no error bar worth printing.
+between two columns survives the noise (the stdev of the batch means). A row
+whose CSV says `batches` is 1 has no spread; its time cell carries no error bar.
 
 Emits a bare ``tabular`` -- no preamble -- so it can be dropped into a paper
 with ``\\input{}``. The header uses ``\\multirow`` and ``\\cmidrule``, so the
@@ -59,13 +59,13 @@ def header_lines() -> list[str]:
 
 def time_cell(row: dict, decimals: int, show_stdev: bool) -> str:
     """The `Opt. Time` cell for one (benchmark, configuration) row."""
-    mean = f"{float(row['egraph_ms']):.{decimals}f}"
+    ms = f"{float(row['egraph_ms']):.{decimals}f}"
     # A single-shot run has no spread to report, and older CSVs predate the
     # column entirely.
-    if not show_stdev or int(row.get("reps") or 0) < 2:
-        return mean
+    if not show_stdev or int(row.get("batches") or 0) < 2:
+        return ms
     stdev = f"{float(row['egraph_ms_stdev']):.{decimals}f}"
-    return rf"${mean} \pm {stdev}$"
+    return rf"${ms} \pm {stdev}$"
 
 
 def main() -> int:
@@ -75,7 +75,7 @@ def main() -> int:
     ap.add_argument("--decimals", type=int, default=2,
                     help="decimal places on the time cells (default: 2)")
     ap.add_argument("--show-stdev", action="store_true",
-                    help="render times as mean \\pm stdev over the repetitions")
+                    help="render times as time \\pm stdev of the batch means")
     args = ap.parse_args()
 
     with args.csv_file.open(newline="") as fh:
@@ -90,8 +90,8 @@ def main() -> int:
     lines = [
         f"% Generated from {args.csv_file.name} by tamagoyaki_eval/rover/latex_table.py.",
         "% Bold marks the best area and the best delay in each row.",
-        "% Times are mean e-graph wall clock in ms over the repetitions recorded",
-        "% in the CSV; the no-eqsat run builds no e-graph.",
+        "% Times are e-graph wall clock in ms, the minimum over batches of each",
+        "% batch's mean; the no-eqsat run builds no e-graph.",
         "% Requires \\usepackage{multirow} and \\usepackage{booktabs}.",
         r"\begin{tabular}{" + " ".join(["l"] + ["r"] * (ncols - 1)) + "}",
         r"\toprule",

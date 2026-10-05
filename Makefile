@@ -19,12 +19,12 @@
 #   make rover-eval ROVER_BUILD_DIR=build         # measure a local compiler
 #   EXTRA_CONFIG='max_iters=8' make rover-eval    # Snakefile parameters
 #
-# Timing. The rover pipeline repeats each timed command 20 times, pinned to one
-# CPU, because the scopes it reports last around a millisecond and a single
-# shot is mostly noise. 09-results.csv carries the mean, the sample stdev and
-# the minimum over the repetitions; `rover-latex-table --show-stdev` puts the
-# spread in the table. To override:
-#   EXTRA_CONFIG='reps=1' make rover-eval             # quick, not comparable
+# Timing. The rover pipeline runs each timed command in 20 batches of 10, pinned
+# to one CPU, because the scopes it reports last around a millisecond and a
+# single shot is mostly noise. 09-results.csv reports the minimum over the
+# batches of each batch's mean, plus the stdev of the batch means;
+# `rover-latex-table --show-stdev` puts that spread in the table. To override:
+#   EXTRA_CONFIG='batches=1 batch_size=1' make rover-eval   # quick, not comparable
 #   EXTRA_CONFIG='pin_cpu=3' make rover-eval          # choose the CPU
 #   EXTRA_CONFIG='pin_cpu=none' make rover-eval       # do not pin
 

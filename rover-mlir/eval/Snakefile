@@ -54,8 +54,13 @@ GENLIB = str(_resolve_dir(config.get("genlib", EVAL_DIR / "lib" / "asap7.genlib"
 MAX_ITERS = int(config.get("max_iters", 4))
 MAX_NODES = int(config.get("max_nodes", 0))
 
-# How many times each measured command is re-run.
-REPS = int(config.get("reps", 100))
+# How each measured command is re-run: BATCHES batches of BATCH_SIZE runs. The
+# reported time is the minimum over the batches of each batch's mean, so a
+# single lucky run cannot set it, and a batch disturbed by the machine is
+# discarded rather than averaged in.
+BATCHES    = int(config.get("batches", 20))
+BATCH_SIZE = int(config.get("batch_size", 10))
+REPS       = BATCHES * BATCH_SIZE
 
 # Which CPU the measured jobs are pinned to. "auto" (the default) picks one;
 # a number pins there; "none" runs unpinned.
@@ -405,7 +410,7 @@ rule results_csv:
         "rover-results-csv"
         " --abc-dir {ABC_DIR} --timing-dir {TIMING_DIR}"
         " --configs {params.configs} --benchmarks {params.benchmarks}"
-        " --reps {REPS} -o {output}"
+        " --batches {BATCHES} --batch-size {BATCH_SIZE} -o {output}"
 
 rule latex_table:
     input:
@@ -473,7 +478,8 @@ rule provenance:
             parameters=[
                 ("max_iters", MAX_ITERS),
                 ("max_nodes", MAX_NODES),
-                ("timing_reps", REPS),
+                ("timing_batches", BATCHES),
+                ("timing_batch_size", BATCH_SIZE),
                 ("timing_pin_cpu",
                  "<unpinned>" if PIN_CPU is None else f"cpu {PIN_CPU}"),
                 ("synthesis_strategy", SYNTH_STRATEGY or "<circt-synth default>"),
