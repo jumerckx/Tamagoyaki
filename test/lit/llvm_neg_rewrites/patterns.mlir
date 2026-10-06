@@ -304,7 +304,7 @@ builtin.module {
     pdl_interp.func @neg_add_neg(%0: !pdl.value, %1: !pdl.value, %2: !pdl.type, %3: !pdl.attribute, %4: !pdl.operation) {
       %5 = ematch.get_class_result %0
       %6 = ematch.get_class_result %1
-      %7 = pdl_interp.create_operation "llvm.sub"(%5, %6 : !pdl.value, !pdl.value) -> (%2 : !pdl.type)
+      %7 = pdl_interp.create_operation "llvm.add"(%5, %6 : !pdl.value, !pdl.value) -> (%2 : !pdl.type)
       %8 = ematch.dedup %7
       %9 = pdl_interp.get_result 0 of %8
       %10 = ematch.get_class_result %9
@@ -322,4 +322,3 @@ builtin.module {
     }
   }
 }
-

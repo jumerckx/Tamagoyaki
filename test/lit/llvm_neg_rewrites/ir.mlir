@@ -2,7 +2,7 @@
 
 // Saturating with the two negation rewrites (see patterns.pdl.mlir):
 //   -a - -b  ->  b - a         (introduces %6, an e-node of %4-%5's e-class)
-//   -a + -b  ->  -(a - b)      (introduces 0 - (a - b), an e-node of %4+%5's e-class)
+//   -a + -b  ->  -(a + b)      (introduces 0 - (a + b), an e-node of %4+%5's e-class)
 
 // CHECK:      llvm.func @foo(%arg0: i32, %arg1: i32) -> i32 {
 // CHECK-NEXT:   %0 = equivalence.graph -> (i32) {
@@ -14,7 +14,7 @@
 // CHECK-NEXT:     %6 = llvm.sub %2, %1 : i32
 // CHECK-NEXT:     %7 = llvm.sub %4, %5 : i32
 // CHECK-NEXT:     %8 = equivalence.class %7, %6 : i32
-// CHECK-NEXT:     %9 = llvm.sub %1, %2 : i32
+// CHECK-NEXT:     %9 = llvm.add %1, %2 : i32
 // CHECK-NEXT:     %10 = llvm.sub %3, %9 : i32
 // CHECK-NEXT:     %11 = llvm.add %4, %5 : i32
 // CHECK-NEXT:     %12 = equivalence.class %11, %10 : i32
