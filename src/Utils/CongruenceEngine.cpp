@@ -128,6 +128,7 @@ void CongruenceEngine::queueClassUnion(mlir::ValueRange a, mlir::ValueRange b) {
 }
 
 void CongruenceEngine::processPendingClassUnions(PatternRewriter &rewriter) {
+  TAMAGOYAKI_SCOPED_TIMER("processPendingClassUnions");
   for (auto [a, b] : pendingClassUnions) {
     classUnion(rewriter, a, b);
   }

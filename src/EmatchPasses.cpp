@@ -88,6 +88,7 @@ resolvePatternAndIrModules(ModuleOp module, StringRef patternsFile,
   if (!patternsFile.empty()) {
     // Parse patterns from external file; the input module is the IR module.
     irModule = module;
+    TAMAGOYAKI_SCOPED_TIMER("parsePatternsFile");
     parsedPatternsModule = parseSourceFile<ModuleOp>(patternsFile, ctx);
     if (!parsedPatternsModule) {
       emitError(module.getLoc())
