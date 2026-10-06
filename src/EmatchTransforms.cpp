@@ -42,6 +42,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include <cassert>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -149,6 +150,9 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
                    ModuleOp irModule, int maxIters, int maxNodes,
                    RewriterBase::Listener *listener, bool eagerRewrite) {
   TAMAGOYAKI_SCOPED_TIMER("runSaturation");
+  // Declared before every other local so that, once started, it outlives them
+  // and covers their destruction (e-graph engine, hash-cons tables, bytecode).
+  std::optional<mlir::TimingScope> teardownTimer;
   RewritePatternSet patternList(ctx);
 
   CongruenceEngine uf{};
@@ -206,7 +210,10 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
       });
   patternList.add(std::move(pdlPattern));
 
-  FrozenRewritePatternSet frozenPatterns(std::move(patternList));
+  FrozenRewritePatternSet frozenPatterns = [&] {
+    TAMAGOYAKI_SCOPED_TIMER("freezePatterns");
+    return FrozenRewritePatternSet(std::move(patternList));
+  }();
 
   SmallVector<PendingMatch> allMatches;
 
@@ -314,6 +321,7 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
     }
   }
 
+  teardownTimer.emplace(tamagoyaki::getTimingScope("teardown"));
   return true;
 }
 
