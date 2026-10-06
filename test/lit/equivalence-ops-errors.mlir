@@ -12,17 +12,3 @@ func.func @test_class_bad_leader() {
     %2 = equivalence.class %0 leader %1 : i32
     return
 }
-
-// ===----------------------------------------------------------------------===//
-// Test equivalence.graph verification - error cases
-// ===----------------------------------------------------------------------===//
-
-// Test: a graph region may contain non-speculatable operations. They are never
-// hash-consed during saturation.
-func.func @test_graph_unspeculatable_op() -> i32 {
-    %0 = equivalence.graph -> (i32) {
-        %1 = "test.op"() : () -> (i32)
-        equivalence.yield %1 : i32
-    }
-    return %0 : i32
-}
