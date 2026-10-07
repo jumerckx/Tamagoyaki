@@ -52,7 +52,7 @@ builtin.module {
       %11 = ematch.get_class_result %10
       pdl_interp.is_not_null %11 : !pdl.value -> ^bb17, ^bb10
     ^bb17:
-      pdl_interp.are_equal %11, %1 : !pdl.value -> ^bb18, ^bb10
+      ematch.are_equivalent %11, %1 -> ^bb18, ^bb10
     ^bb18:
       %12 = ematch.get_class_vals %2
       pdl_interp.foreach %13 : !pdl.value in %12 {
@@ -79,7 +79,7 @@ builtin.module {
         %18 = ematch.get_class_result %17
         pdl_interp.is_not_null %18 : !pdl.value -> ^bb27, ^bb20
       ^bb27:
-        pdl_interp.are_equal %18, %2 : !pdl.value -> ^bb28, ^bb20
+        ematch.are_equivalent %18, %2 -> ^bb28, ^bb20
       ^bb28:
         %19 = ematch.get_class_vals %8
         pdl_interp.foreach %20 : !pdl.value in %19 {
@@ -103,7 +103,7 @@ builtin.module {
           %24 = ematch.get_class_result %23
           pdl_interp.is_not_null %24 : !pdl.value -> ^bb36, ^bb30
         ^bb36:
-          pdl_interp.are_equal %24, %8 : !pdl.value -> ^bb37, ^bb30
+          ematch.are_equivalent %24, %8 -> ^bb37, ^bb30
         ^bb37:
           %25 = pdl_interp.get_value_type of %24 : !pdl.type
           %26 = pdl_interp.get_value_type of %11 : !pdl.type
@@ -137,7 +137,7 @@ builtin.module {
             %34 = ematch.get_class_result %33
             pdl_interp.is_not_null %34 : !pdl.value -> ^bb48, ^bb42
           ^bb48:
-            pdl_interp.are_equal %34, %15 : !pdl.value -> ^bb49, ^bb42
+            ematch.are_equivalent %34, %15 -> ^bb49, ^bb42
           ^bb49:
             %35 = pdl_interp.get_value_type of %34 : !pdl.type
             pdl_interp.are_equal %25, %35 : !pdl.type -> ^bb50, ^bb42
@@ -191,7 +191,7 @@ builtin.module {
       %48 = ematch.get_class_result %47
       pdl_interp.is_not_null %48 : !pdl.value -> ^bb65, ^bb58
     ^bb65:
-      pdl_interp.are_equal %48, %38 : !pdl.value -> ^bb66, ^bb58
+      ematch.are_equivalent %48, %38 -> ^bb66, ^bb58
     ^bb66:
       %49 = ematch.get_class_vals %39
       pdl_interp.foreach %50 : !pdl.value in %49 {
@@ -218,7 +218,7 @@ builtin.module {
         %55 = ematch.get_class_result %54
         pdl_interp.is_not_null %55 : !pdl.value -> ^bb75, ^bb68
       ^bb75:
-        pdl_interp.are_equal %55, %39 : !pdl.value -> ^bb76, ^bb68
+        ematch.are_equivalent %55, %39 -> ^bb76, ^bb68
       ^bb76:
         %56 = ematch.get_class_vals %45
         pdl_interp.foreach %57 : !pdl.value in %56 {
@@ -242,7 +242,7 @@ builtin.module {
           %61 = ematch.get_class_result %60
           pdl_interp.is_not_null %61 : !pdl.value -> ^bb84, ^bb78
         ^bb84:
-          pdl_interp.are_equal %61, %45 : !pdl.value -> ^bb85, ^bb78
+          ematch.are_equivalent %61, %45 -> ^bb85, ^bb78
         ^bb85:
           %62 = pdl_interp.get_value_type of %61 : !pdl.type
           %63 = pdl_interp.get_value_type of %48 : !pdl.type
@@ -276,7 +276,7 @@ builtin.module {
             %71 = ematch.get_class_result %70
             pdl_interp.is_not_null %71 : !pdl.value -> ^bb96, ^bb90
           ^bb96:
-            pdl_interp.are_equal %71, %52 : !pdl.value -> ^bb97, ^bb90
+            ematch.are_equivalent %71, %52 -> ^bb97, ^bb90
           ^bb97:
             %72 = pdl_interp.get_value_type of %71 : !pdl.type
             pdl_interp.are_equal %62, %72 : !pdl.type -> ^bb98, ^bb90

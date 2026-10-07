@@ -63,6 +63,22 @@ mlir::ematch::getCanonicalLeader(equivalence::ClassOp classOp) {
   return root;
 }
 
+equivalence::ClassOp mlir::ematch::getRootLeader(equivalence::ClassOp classOp) {
+  while (Value leader = classOp.getLeader())
+    classOp = cast<equivalence::ClassOp>(leader.getDefiningOp());
+  return classOp;
+}
+
+bool mlir::ematch::areEquivalent(Value lhs, Value rhs) {
+  if (lhs == rhs)
+    return true;
+  auto lhsClass = lhs.getDefiningOp<equivalence::ClassOp>();
+  auto rhsClass = rhs.getDefiningOp<equivalence::ClassOp>();
+  if (!lhsClass || !rhsClass)
+    return false;
+  return getRootLeader(lhsClass) == getRootLeader(rhsClass);
+}
+
 mlir::Value mlir::ematch::getClassResult(mlir::PatternRewriter &rewriter,
                                          mlir::Value val) {
   if (val == nullptr) {

@@ -43,7 +43,7 @@ pdl_interp.foreach %6 : !pdl.value in %5 {
     %10 = ematch.get_class_result %9
     pdl_interp.is_not_null %10 : !pdl.value -> ^bb15, ^bb9
 ^bb15:
-    pdl_interp.are_equal %10, %1 : !pdl.value -> ^bb16, ^bb9
+    ematch.are_equivalent %10, %1 -> ^bb16, ^bb9
 ^bb16:
     %11 = ematch.get_class_vals %2
     pdl_interp.foreach %12 : !pdl.value in %11 {
@@ -67,7 +67,7 @@ pdl_interp.foreach %6 : !pdl.value in %5 {
     %16 = ematch.get_class_result %15
     pdl_interp.is_not_null %16 : !pdl.value -> ^bb24, ^bb18
     ^bb24:
-    pdl_interp.are_equal %16, %2 : !pdl.value -> ^bb25, ^bb18
+    ematch.are_equivalent %16, %2 -> ^bb25, ^bb18
     ^bb25:
     %17 = ematch.get_class_vals %8
     pdl_interp.foreach %18 : !pdl.value in %17 {
@@ -91,7 +91,7 @@ pdl_interp.foreach %6 : !pdl.value in %5 {
         %22 = ematch.get_class_result %21
         pdl_interp.is_not_null %22 : !pdl.value -> ^bb33, ^bb27
     ^bb33:
-        pdl_interp.are_equal %22, %8 : !pdl.value -> ^bb34, ^bb27
+        ematch.are_equivalent %22, %8 -> ^bb34, ^bb27
     ^bb34:
         %23 = pdl_interp.get_value_type of %20 : !pdl.type
         %24 = pdl_interp.get_value_type of %22 : !pdl.type
@@ -122,7 +122,7 @@ pdl_interp.foreach %6 : !pdl.value in %5 {
         pdl_interp.check_result_count of %30 is 1 -> ^bb44, ^bb41
         ^bb44:
         %31 = pdl_interp.get_operand 0 of %30
-        pdl_interp.are_equal %20, %31 : !pdl.value -> ^bb45, ^bb41
+        ematch.are_equivalent %20, %31 -> ^bb45, ^bb41
         ^bb45:
         %32 = pdl_interp.get_result 0 of %30
         pdl_interp.is_not_null %32 : !pdl.value -> ^bb46, ^bb41
@@ -130,7 +130,7 @@ pdl_interp.foreach %6 : !pdl.value in %5 {
         %33 = ematch.get_class_result %32
         pdl_interp.is_not_null %33 : !pdl.value -> ^bb47, ^bb41
         ^bb47:
-        pdl_interp.are_equal %33, %14 : !pdl.value -> ^bb48, ^bb41
+        ematch.are_equivalent %33, %14 -> ^bb48, ^bb41
         ^bb48:
         %34 = pdl_interp.get_value_type of %33 : !pdl.type
         pdl_interp.are_equal %23, %34 : !pdl.type -> ^bb49, ^bb41

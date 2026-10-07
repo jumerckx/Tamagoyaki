@@ -36,6 +36,14 @@ mlir::Value getClassRepresentative(mlir::PatternRewriter &rewriter,
 /// performing path compression along the way.
 equivalence::ClassOp getCanonicalLeader(equivalence::ClassOp classOp);
 
+/// Return the root of the leader chain of `classOp` without path compression,
+/// so it is safe to call while the IR must not be mutated (e.g. matching).
+equivalence::ClassOp getRootLeader(equivalence::ClassOp classOp);
+
+/// Return true if `lhs` and `rhs` are in the same e-class: either the same
+/// value, or equivalence.class results with the same root leader.
+bool areEquivalent(mlir::Value lhs, mlir::Value rhs);
+
 /// Helper function to get the result of a ClassOp
 mlir::Value getClassResult(mlir::PatternRewriter &rewriter, mlir::Value val);
 
