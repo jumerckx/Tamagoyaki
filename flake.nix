@@ -79,6 +79,12 @@
           # package that builds with setuptools but never declares it, so uv's
           # isolated build can't find the backend. Inject it explicitly.
           pyprojectOverrides = final: prev: {
+            tamagoyaki = prev.tamagoyaki.overrideAttrs (old: {
+              src = lib.fileset.toSource {
+                root = ./.;
+                fileset = ./pyproject.toml;
+              };
+            });
             connection-pool = prev.connection-pool.overrideAttrs (old: {
               nativeBuildInputs =
                 (old.nativeBuildInputs or [ ])
@@ -166,6 +172,31 @@
                 }
               );
 
+              tamagoyakiDeps = {
+                nativeBuildInputs = with pkgs; [
+                  cmake
+                  ninja
+                  python3
+                  lit
+                  git
+                  m4
+                  pkg-config
+                ];
+                buildInputs = [
+                  llvm-mlir
+                ]
+                ++ (with pkgs; [
+                  gmp
+                  mpfr
+                  libmpc
+                  zlib
+                  libffi
+                  # HiGHS solver for the equivalence-select-ilp pass. Disable
+                  # with -DTAMAGOYAKI_ENABLE_HIGHS=OFF to drop this dependency.
+                  highs
+                ]);
+              };
+
               tamagoyaki = stdenv.mkDerivation (
                 variantAttrs
                 // {
@@ -173,28 +204,7 @@
                   version = "0.1.0";
                   src = lib.cleanSource ./.;
 
-                  nativeBuildInputs = with pkgs; [
-                    cmake
-                    ninja
-                    python3
-                    lit
-                    git
-                    m4
-                    pkg-config
-                  ];
-                  buildInputs = [
-                    llvm-mlir
-                  ]
-                  ++ (with pkgs; [
-                    gmp
-                    mpfr
-                    libmpc
-                    zlib
-                    libffi
-                    # HiGHS solver for the equivalence-select-ilp pass. Disable
-                    # with -DTAMAGOYAKI_ENABLE_HIGHS=OFF to drop this dependency.
-                    highs
-                  ]);
+                  inherit (tamagoyakiDeps) nativeBuildInputs buildInputs;
 
                   cmakeFlags = [
                     "-DMLIR_DIR=${llvm-mlir}/lib/cmake/mlir"
@@ -220,7 +230,7 @@
                   "$@"
               '';
 
-              # inputsFrom = [ tamagoyaki ] supplies the build tooling and
+              # tamagoyakiDeps supplies the build tooling and
               # C/C++ deps. The dev shell (ci = false) adds uv and debuggers;
               # the CI shell is the minimum to run `check-all`. `docs = true`
               # adds Doxygen + the Sphinx toolchain so the docs build
@@ -233,7 +243,7 @@
                 (pkgs.mkShell.override { inherit stdenv; }) ({
                   name = "tamagoyaki${suffix}${lib.optionalString ci "-ci"}${lib.optionalString docs "-docs"}";
 
-                  inputsFrom = [ tamagoyaki ];
+                  inherit (tamagoyakiDeps) nativeBuildInputs buildInputs;
 
                   inherit (variantAttrs) hardeningDisable;
 
