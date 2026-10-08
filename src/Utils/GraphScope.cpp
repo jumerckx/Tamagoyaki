@@ -58,19 +58,19 @@ bool mlir::ematch::encloses(ScopeId outer, ScopeId inner) {
 }
 
 equivalence::ClassOp *
-mlir::ematch::findByScope(SmallVectorImpl<equivalence::ClassOp> &row,
+mlir::ematch::findByScope(SmallVectorImpl<equivalence::ClassOp> &instances,
                           ScopeId s) {
-  for (auto &c : row)
+  for (auto &c : instances)
     if (scopeOf(c) == s)
       return &c;
   return nullptr;
 }
 
 equivalence::ClassOp
-mlir::ematch::outermost(SmallVectorImpl<equivalence::ClassOp> &row) {
-  equivalence::ClassOp best = row.front();
+mlir::ematch::outermost(SmallVectorImpl<equivalence::ClassOp> &instances) {
+  equivalence::ClassOp best = instances.front();
   unsigned bestDepth = depthOf(best);
-  for (equivalence::ClassOp c : row) {
+  for (equivalence::ClassOp c : instances) {
     unsigned d = depthOf(c);
     if (d < bestDepth) {
       best = c;
@@ -80,20 +80,18 @@ mlir::ematch::outermost(SmallVectorImpl<equivalence::ClassOp> &row) {
   return best;
 }
 
-equivalence::ClassOp
-mlir::ematch::nearestEnclosingRep(SmallVectorImpl<equivalence::ClassOp> &row,
-                                  ScopeId s) {
+equivalence::ClassOp mlir::ematch::nearestEnclosingRep(
+    SmallVectorImpl<equivalence::ClassOp> &instances, ScopeId s) {
   for (ScopeId p = parentScope(s); p; p = parentScope(p))
-    if (equivalence::ClassOp *hit = findByScope(row, p))
+    if (equivalence::ClassOp *hit = findByScope(instances, p))
       return *hit;
   return {};
 }
 
-equivalence::ClassOp
-mlir::ematch::deepestRepEnclosing(SmallVectorImpl<equivalence::ClassOp> &row,
-                                  ScopeId s) {
+equivalence::ClassOp mlir::ematch::deepestRepEnclosing(
+    SmallVectorImpl<equivalence::ClassOp> &instances, ScopeId s) {
   for (ScopeId p = s; p; p = parentScope(p))
-    if (equivalence::ClassOp *hit = findByScope(row, p))
+    if (equivalence::ClassOp *hit = findByScope(instances, p))
       return *hit;
   return {};
 }

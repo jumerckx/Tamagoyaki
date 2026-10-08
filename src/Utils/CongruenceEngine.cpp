@@ -11,9 +11,9 @@
 #include "EquivalenceDialect.h"
 #include "TamagoyakiTiming.h"
 #include "Utils/ClassOpUtils.h"
+#include "Utils/EClassScopeMap.h"
 #include "Utils/GraphScope.h"
 #include "Utils/HashConsPatternRewriter.h"
-#include "Utils/ScopeRepIndex.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
@@ -77,9 +77,10 @@ void CongruenceEngine::classUnion(mlir::PatternRewriter &rewriter,
   assert(encloses(scopeOf(leader), scopeOf(other)) &&
          "incomparable scopes must not occur");
 
-  // Seed `other`'s row before merging so `mergeScopeRows` has a `{other}`-or-
-  // bigger row to fold in (it seeds `leader`'s `{leader}` row itself).
-  index.rowFor(other);
+  // Seed `other`'s instance set before merging so `mergeInstanceSets` has a
+  // `{other}`-or-bigger set to fold in (it seeds `leader`'s `{leader}` set
+  // itself).
+  index.instancesFor(other);
 
   // Inner -> outer (or same-scope): SSA-valid, never inward.
   other.getLeaderMutable().assign(leader.getResult());
@@ -90,7 +91,7 @@ void CongruenceEngine::classUnion(mlir::PatternRewriter &rewriter,
       ++rankLeader;
   }
 
-  index.mergeScopeRows(leader, other);
+  index.mergeInstanceSets(leader, other);
   dirtyRoots.insert(leader);
 }
 
@@ -183,22 +184,23 @@ void CongruenceEngine::fuseSameScope(HashConsPatternRewriter &rewriter,
 }
 
 void CongruenceEngine::retargetUsersToDeepest(
-    equivalence::ClassOp rep, SmallVectorImpl<equivalence::ClassOp> &row) {
+    equivalence::ClassOp rep,
+    SmallVectorImpl<equivalence::ClassOp> &instances) {
   SmallVector<OpOperand *> toFix;
   for (OpOperand &u : rep.getResult().getUses()) {
     Operation *user = u.getOwner();
-    // Skip leader links (a child class pointing at rep); `reorientComponent`
+    // Skip leader links (a child class pointing at rep); `reorientEClass`
     // owns those.
     if (auto uc = llvm::dyn_cast<equivalence::ClassOp>(user))
       if (uc.getLeader() == rep.getResult())
         continue;
-    equivalence::ClassOp want = deepestRepEnclosing(row, scopeOf(user));
+    equivalence::ClassOp want = deepestRepEnclosing(instances, scopeOf(user));
     if (want && want != rep)
       toFix.push_back(&u);
   }
   for (OpOperand *u : toFix) {
     equivalence::ClassOp want =
-        deepestRepEnclosing(row, scopeOf(u->getOwner()));
+        deepestRepEnclosing(instances, scopeOf(u->getOwner()));
     u->set(want.getResult());
     worklist.push_back(rep.getOperation());  // rep lost a user
     worklist.push_back(want.getOperation()); // want gained one
@@ -209,11 +211,11 @@ bool CongruenceEngine::rebuild(HashConsPatternRewriter &rewriter) {
   TAMAGOYAKI_SCOPED_TIMER("rebuild");
   LLVM_DEBUG({
     llvm::dbgs() << "Starting rebuild. Worklist=" << worklist.size()
-                 << " sameScopeDups=" << index.sameScopeDups.size()
+                 << " pendingFuses=" << index.pendingFuses.size()
                  << " dirtyRoots=" << dirtyRoots.size() << "\n";
   });
 
-  if (index.sameScopeDups.empty() && dirtyRoots.empty() && worklist.empty())
+  if (index.pendingFuses.empty() && dirtyRoots.empty() && worklist.empty())
     return false;
 
   // Track ops that get erased during the loop below. Operations queued in
@@ -244,12 +246,12 @@ bool CongruenceEngine::rebuild(HashConsPatternRewriter &rewriter) {
 
   LLVM_DEBUG(index.verify());
 
-  while (!index.sameScopeDups.empty() || !dirtyRoots.empty() ||
+  while (!index.pendingFuses.empty() || !dirtyRoots.empty() ||
          !worklist.empty()) {
     // Collapse same-scope duplicate classes.
     {
       SmallVector<std::pair<equivalence::ClassOp, equivalence::ClassOp>> batch;
-      std::swap(batch, index.sameScopeDups);
+      std::swap(batch, index.pendingFuses);
       for (auto [dup, survivor] : batch) {
         if (isDead(dup.getOperation()) || isDead(survivor.getOperation()))
           continue;
@@ -260,7 +262,7 @@ bool CongruenceEngine::rebuild(HashConsPatternRewriter &rewriter) {
       }
     }
 
-    // Collect the dirty components, re-canonicalized and deduped.
+    // Collect the dirty e-classes, re-canonicalized and deduped.
     SmallVector<equivalence::ClassOp> roots;
     {
       SmallVector<equivalence::ClassOp> dirty(dirtyRoots.begin(),
@@ -278,16 +280,16 @@ bool CongruenceEngine::rebuild(HashConsPatternRewriter &rewriter) {
       }
     }
 
-    // Per component (independent across components): reorient leaders outward,
+    // Per e-class (independent across e-classes): reorient leaders outward,
     // then push users down to the deepest visible rep.
     for (equivalence::ClassOp root : roots) {
-      auto it = index.scopeReps.find(root);
-      if (it == index.scopeReps.end())
+      auto it = index.instancesByRoot.find(root);
+      if (it == index.instancesByRoot.end())
         continue;
-      index.reorientComponent(it->second);
+      index.reorientEClass(it->second);
 
       // Snapshot the rep list: retargetUsersToDeepest pushes to the worklist
-      // but does not mutate the row, yet repairs later might.
+      // but does not mutate the instance set, yet repairs later might.
       SmallVector<equivalence::ClassOp> reps(it->second.begin(),
                                              it->second.end());
       for (equivalence::ClassOp rep : reps) {
