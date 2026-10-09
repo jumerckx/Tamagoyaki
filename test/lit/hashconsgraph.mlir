@@ -1,4 +1,4 @@
-// RUN: tamagoyaki-opt --ematch-saturate=max-iters=0 %s | FileCheck %s
+// RUN: tamagoyaki-opt --ematch-saturate %s | FileCheck %s
 
 module @ir {
 
