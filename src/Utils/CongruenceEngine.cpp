@@ -162,12 +162,23 @@ void CongruenceEngine::fuseSameScope(HashConsPatternRewriter &rewriter,
   assert(scopeOf(dup) == scopeOf(survivor) &&
          "fuseSameScope requires a shared scope");
 
-  // Dedup-append dup's inputs into survivor.
-  llvm::SmallPtrSet<Value, 16> existing(survivor.getInputs().begin(),
-                                        survivor.getInputs().end());
+  // Dedup-append dup's inputs into survivor. The survivor's input list can
+  // grow large, so instead of hashing all of it, test membership through the
+  // (short) use-list of each of dup's inputs. Inputs are the leading operand
+  // segment, so an operand number below the input count marks an input use
+  // (as opposed to the leader operand).
+  Operation *survivorOp = survivor.getOperation();
+  unsigned numSurvivorInputs = survivor.getInputs().size();
+  auto isSurvivorInput = [&](Value v) {
+    return llvm::any_of(v.getUses(), [&](OpOperand &use) {
+      return use.getOwner() == survivorOp &&
+             use.getOperandNumber() < numSurvivorInputs;
+    });
+  };
   SmallVector<Value> add;
+  llvm::SmallPtrSet<Value, 8> added;
   for (Value in : dup.getInputs())
-    if (existing.insert(in).second)
+    if (!isSurvivorInput(in) && added.insert(in).second)
       add.push_back(in);
   survivor.getInputsMutable().append(add);
 
