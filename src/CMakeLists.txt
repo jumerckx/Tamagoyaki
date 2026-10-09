@@ -93,7 +93,7 @@ add_mlir_dialect_library(MLIREmatch
   Utils/MutableScopedHashTable.cpp
   Utils/GraphScope.cpp
   Utils/ClassOpUtils.cpp
-  Utils/ScopeRepIndex.cpp
+  Utils/EClassScopeMap.cpp
   Utils/CongruenceEngine.cpp
   Utils/HashConsPatternRewriter.cpp
   PARTIAL_SOURCES_INTENDED

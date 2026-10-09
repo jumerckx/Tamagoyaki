@@ -16,7 +16,7 @@
 // Layering:
 //   GraphScope       (pure scope-tree queries)
 //   ClassOpUtils     (stateless ClassOp/value helpers)
-//   ScopeRepIndex    (per-component scope-rep bookkeeping)
+//   EClassScopeMap   (per-e-class scope-instance bookkeeping)
 //   CongruenceEngine (this file: worklist, rebuild, hash-cons + rewriter glue)
 //
 //===----------------------------------------------------------------------===//
@@ -26,8 +26,8 @@
 
 #include "EquivalenceDialect.h"
 #include "Utils/ClassOpUtils.h"
+#include "Utils/EClassScopeMap.h"
 #include "Utils/HashConsPatternRewriter.h"
-#include "Utils/ScopeRepIndex.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
@@ -111,10 +111,10 @@ public:
   SmallVector<mlir::Operation *> worklist;
 
 private:
-  /// Per-component scope-rep bookkeeping (see ScopeRepIndex.h).
-  ScopeRepIndex index;
+  /// Per-e-class scope-instance bookkeeping (see EClassScopeMap.h).
+  EClassScopeMap index;
 
-  // Component roots touched since the last rebuild. Entries may go stale;
+  // E-class roots touched since the last rebuild. Entries may go stale;
   // rebuild re-canonicalizes and skips dead ops.
   llvm::SetVector<equivalence::ClassOp> dirtyRoots;
 
@@ -125,10 +125,10 @@ private:
   void fuseSameScope(HashConsPatternRewriter &rewriter,
                      equivalence::ClassOp dup, equivalence::ClassOp survivor);
 
-  /// Move every user of `rep` to the deepest rep in `row` that still encloses
-  /// the user, queueing affected classes for congruence repair.
+  /// Move every user of `rep` to the deepest rep in `instances` that still
+  /// encloses the user, queueing affected classes for congruence repair.
   void retargetUsersToDeepest(equivalence::ClassOp rep,
-                              SmallVectorImpl<equivalence::ClassOp> &row);
+                              SmallVectorImpl<equivalence::ClassOp> &instances);
 };
 
 } // namespace mlir::ematch

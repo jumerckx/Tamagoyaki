@@ -12,8 +12,8 @@
 // null scope.
 //
 // These are pure, stateless queries over the IR-nesting tree. They form the
-// bottom layer of the scope-aware e-graph: the representative index
-// (`ScopeRepIndex`) and the congruence engine (`CongruenceEngine`) are both
+// bottom layer of the scope-aware e-graph: the per-e-class instance map
+// (`EClassScopeMap`) and the congruence engine (`CongruenceEngine`) are both
 // phrased in terms of them.
 //
 // NB: This graph-nesting "scope" is unrelated to the hash-cons dedup scope
@@ -55,23 +55,27 @@ unsigned depthOf(equivalence::ClassOp c);
 /// encloses itself, so equal scopes test true.
 bool encloses(ScopeId outer, ScopeId inner);
 
-/// Find the (unique) rep of `row` living in scope `s`, or null. Linear scan;
-/// rows have at most #scopes entries, so this beats a nested map.
-equivalence::ClassOp *findByScope(SmallVectorImpl<equivalence::ClassOp> &row,
-                                  ScopeId s);
+/// Find the (unique) rep of `instances` living in scope `s`, or null. Linear
+/// scan; instance sets have at most #scopes entries, so this beats a nested
+/// map.
+equivalence::ClassOp *
+findByScope(SmallVectorImpl<equivalence::ClassOp> &instances, ScopeId s);
 
-/// The outermost (minimum-depth) rep of a non-empty row.
-equivalence::ClassOp outermost(SmallVectorImpl<equivalence::ClassOp> &row);
-
-/// The nearest *strictly enclosing* rep of scope `s` present in `row`, or null
-/// if none (i.e. `s` is the outermost occupied scope).
+/// The outermost (minimum-depth) rep of a non-empty instance set.
 equivalence::ClassOp
-nearestEnclosingRep(SmallVectorImpl<equivalence::ClassOp> &row, ScopeId s);
+outermost(SmallVectorImpl<equivalence::ClassOp> &instances);
+
+/// The nearest *strictly enclosing* rep of scope `s` present in `instances`, or
+/// null if none (i.e. `s` is the outermost occupied scope).
+equivalence::ClassOp
+nearestEnclosingRep(SmallVectorImpl<equivalence::ClassOp> &instances,
+                    ScopeId s);
 
 /// The deepest rep enclosing scope `s` (walk `s` outward to the first rep in
-/// `row`), or null if none encloses `s`.
+/// `instances`), or null if none encloses `s`.
 equivalence::ClassOp
-deepestRepEnclosing(SmallVectorImpl<equivalence::ClassOp> &row, ScopeId s);
+deepestRepEnclosing(SmallVectorImpl<equivalence::ClassOp> &instances,
+                    ScopeId s);
 
 } // namespace mlir::ematch
 
