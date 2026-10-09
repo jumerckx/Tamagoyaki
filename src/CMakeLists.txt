@@ -90,6 +90,7 @@ add_mlir_dialect_library(MLIREmatch
   EmatchDialect.cpp
   EmatchTransforms.cpp
   EmatchPasses.cpp
+  EmatchCombineMatchers.cpp
   Utils/MutableScopedHashTable.cpp
   Utils/GraphScope.cpp
   Utils/ClassOpUtils.cpp
@@ -108,6 +109,9 @@ add_mlir_dialect_library(MLIREmatch
   LINK_LIBS PUBLIC
   MLIRIR
   MLIRRegisterAllDialects
+  MLIRMatchDialect
+  MLIRPDLDialect
+  MLIRPDLInterpDialect
   MLIREquivalence
   TamagoyakiTiming
 )
