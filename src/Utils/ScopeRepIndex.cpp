@@ -49,19 +49,6 @@ void ScopeRepIndex::mergeScopeRows(equivalence::ClassOp winRoot,
   }
 }
 
-void ScopeRepIndex::forgetClass(equivalence::ClassOp c) {
-  scopeReps.erase(c); // its own (root) row, if any.
-  for (auto &kv : scopeReps) {
-    auto &row = kv.second;
-    for (size_t i = 0, e = row.size(); i < e; ++i)
-      if (row[i] == c) {
-        row[i] = row.back();
-        row.pop_back();
-        break;
-      }
-  }
-}
-
 void ScopeRepIndex::reorientComponent(
     SmallVectorImpl<equivalence::ClassOp> &row) {
   if (row.empty())

@@ -87,10 +87,14 @@ public:
   void repair(HashConsPatternRewriter &rewriter, mlir::Operation *op);
 
   /// `dup` was found congruent to an existing e-node while being re-keyed
-  /// after an operand change. Schedule `repair` (via the worklist) so the
-  /// duplicate is collapsed through the same path as any other duplicate
-  /// parent. Safe to call mid-`rebuild`.
+  /// after an operand change. Queue it so `rebuild` merges it into the e-node
+  /// it collided with. Safe to call mid-`rebuild`.
   void repairDuplicate(mlir::Operation *dup);
+
+  /// Collapse the congruent e-node `other` into `keep`: refresh `keep`'s
+  /// hash-cons entry, reconcile their classes and replace `other`.
+  void mergeDuplicate(HashConsPatternRewriter &rewriter, mlir::Operation *other,
+                      mlir::Operation *keep);
 
   /// Merge the results of two duplicate parent operations
   /// (`other` -> `keep`), reconciling their owning ClassOps if any.
@@ -119,6 +123,10 @@ private:
   llvm::SetVector<equivalence::ClassOp> dirtyRoots;
 
   SmallVector<equivalence::ClassOp> pendingErase;
+
+  /// E-nodes whose re-keying collided with an existing hash-cons entry (see
+  /// `repairDuplicate`). Drained by `rebuild`.
+  SmallVector<mlir::Operation *> pendingDuplicates;
   SmallVector<std::pair<mlir::Value, mlir::Value>> pendingClassUnions;
 
   /// Fold same-scope `dup` into `survivor` and detach `dup` for erasure.
