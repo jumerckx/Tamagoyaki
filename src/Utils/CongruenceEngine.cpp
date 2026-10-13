@@ -14,6 +14,7 @@
 #include "Utils/GraphScope.h"
 #include "Utils/HashConsPatternRewriter.h"
 #include "Utils/ScopeRepIndex.h"
+#include "mlir/IR/Dominance.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
@@ -133,6 +134,129 @@ void CongruenceEngine::processPendingClassUnions(PatternRewriter &rewriter) {
     classUnion(rewriter, a, b);
   }
   pendingClassUnions.clear();
+}
+
+//===----------------------------------------------------------------------===//
+// Refinement operations
+//===----------------------------------------------------------------------===//
+
+/// The value a refinement of `val` is built on: its e-class if it has one,
+/// otherwise `val` itself. A refinement does not need a class, so none is
+/// created, except for a block argument: the refinement is placed after its
+/// operands' definitions, and the class gives the argument one.
+static Value getRefinementBase(PatternRewriter &rewriter, Value val) {
+  if (val.getDefiningOp<equivalence::RefineOp>())
+    return val;
+  if (equivalence::ClassOp classOp = getClassOpIfExists(val))
+    return classOp.getResult();
+  if (isa<BlockArgument>(val))
+    return getClassOp(rewriter, val).getResult();
+  return val;
+}
+
+void CongruenceEngine::classRefine(HashConsPatternRewriter &rewriter, Value a,
+                                   Value b) {
+  if (a == b)
+    return;
+
+  Value baseA = getRefinementBase(rewriter, a);
+  Value baseB = getRefinementBase(rewriter, b);
+
+  // Chain onto the latest refinements: `source` is what `a`'s users refer to,
+  // and refining into `target` keeps every refinement already known for `b`.
+  Value source = getRefinementTop(baseA);
+  Value target = getRefinementTop(baseB);
+
+  // `a` already refines into `b` (this includes `a` and `b` being equivalent).
+  if (refinesTo(source, baseB))
+    return;
+
+  // `b` already refines into `a`, so the two are equivalent. Union them rather
+  // than closing a cycle of refinements.
+  if (refinesTo(target, baseA)) {
+    if (!baseA.getDefiningOp<equivalence::RefineOp>() &&
+        !baseB.getDefiningOp<equivalence::RefineOp>())
+      classUnion(rewriter, baseA, baseB);
+    return;
+  }
+
+  // Place the refinement where both operands are visible: after the later
+  // definition in a shared block, otherwise after whichever definition is
+  // dominated by the other. Neither is a block argument (see
+  // getRefinementBase).
+  Operation *sourceDef = source.getDefiningOp();
+  Operation *targetDef = target.getDefiningOp();
+  DominanceInfo dom;
+  Operation *insertAfter = nullptr;
+  if (sourceDef->getBlock() == targetDef->getBlock())
+    insertAfter = sourceDef->isBeforeInBlock(targetDef) ? targetDef : sourceDef;
+  else if (dom.dominates(sourceDef, targetDef))
+    insertAfter = targetDef;
+  else if (dom.dominates(targetDef, sourceDef))
+    insertAfter = sourceDef;
+  else
+    return; // Neither operand is visible from the other's scope.
+
+  OpBuilder::InsertionGuard guard(rewriter);
+  rewriter.setInsertionPointAfter(insertAfter);
+  auto refineOp = equivalence::RefineOp::create(
+      rewriter, a.getLoc(), source.getType(), source, target);
+  [[maybe_unused]] bool inserted = rewriter.insert(refineOp).succeeded();
+  assert(inserted && "the top of a refinement chain is refined only once");
+
+  // Users of `source` may now use the refinement. Leader links must keep
+  // pointing at a class, and users the refinement does not dominate (e.g. in
+  // an enclosing scope) keep the unrefined value.
+  Value refined = refineOp.getResult();
+  rewriter.replaceUsesWithIf(source, refined, [&](OpOperand &use) {
+    Operation *user = use.getOwner();
+    return user != refineOp && !isa<equivalence::ClassOp>(user) &&
+           dom.properlyDominates(refined, user);
+  });
+
+  // The redirected users may have become congruent; this also signals rebuild
+  // that the e-graph changed.
+  worklist.push_back(refineOp);
+}
+
+void CongruenceEngine::classRefine(HashConsPatternRewriter &rewriter,
+                                   Operation *op, ValueRange vals) {
+  assert(op->getNumResults() == vals.size() &&
+         "Operation result count must match value range size");
+  for (auto [result, val] : llvm::zip(op->getResults(), vals))
+    classRefine(rewriter, result, val);
+}
+
+void CongruenceEngine::classRefine(HashConsPatternRewriter &rewriter,
+                                   ValueRange a, ValueRange b) {
+  assert(a.size() == b.size() && "Value ranges must have equal size");
+  for (auto [va, vb] : llvm::zip(a, b))
+    classRefine(rewriter, va, vb);
+}
+
+void CongruenceEngine::queueClassRefine(Value a, Value b) {
+  pendingClassRefines.emplace_back(a, b);
+}
+
+void CongruenceEngine::queueClassRefine(Operation *op, ValueRange vals) {
+  assert(op->getNumResults() == vals.size() &&
+         "Operation result count must match value range size");
+  for (auto [result, val] : llvm::zip(op->getResults(), vals))
+    queueClassRefine(result, val);
+}
+
+void CongruenceEngine::queueClassRefine(ValueRange a, ValueRange b) {
+  assert(a.size() == b.size() && "Value ranges must have equal size");
+  for (auto [va, vb] : llvm::zip(a, b))
+    queueClassRefine(va, vb);
+}
+
+void CongruenceEngine::processPendingClassRefines(
+    HashConsPatternRewriter &rewriter) {
+  TAMAGOYAKI_SCOPED_TIMER("processPendingClassRefines");
+  for (auto [a, b] : pendingClassRefines)
+    classRefine(rewriter, a, b);
+  pendingClassRefines.clear();
 }
 
 void CongruenceEngine::repairDuplicate(Operation *dup) {

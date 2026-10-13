@@ -66,6 +66,34 @@ public:
   /// Process all pending queued class unions
   void processPendingClassUnions(mlir::PatternRewriter &rewriter);
 
+  /// Record that `a` may be replaced by `b` (but not vice versa) by inserting
+  /// an `equivalence.refine` on top of `a`'s chain of refinements and
+  /// redirecting `a`'s users to it. No-op if `a` is already known to refine
+  /// into `b`; if `b` already refines into `a`, the two are unioned instead.
+  /// Refinements are not rebuilt: they are not revisited when classes merge.
+  void classRefine(HashConsPatternRewriter &rewriter, mlir::Value a,
+                   mlir::Value b);
+
+  /// Refine an operation's results into corresponding values
+  void classRefine(HashConsPatternRewriter &rewriter, mlir::Operation *op,
+                   mlir::ValueRange vals);
+
+  /// Refine one value range into another, pairwise
+  void classRefine(HashConsPatternRewriter &rewriter, mlir::ValueRange a,
+                   mlir::ValueRange b);
+
+  /// Queue a refinement of `a` into `b` for later processing
+  void queueClassRefine(mlir::Value a, mlir::Value b);
+
+  /// Queue refinements of an operation's results into corresponding values
+  void queueClassRefine(mlir::Operation *op, mlir::ValueRange vals);
+
+  /// Queue pairwise refinements of one value range into another
+  void queueClassRefine(mlir::ValueRange a, mlir::ValueRange b);
+
+  /// Process all pending queued refinements
+  void processPendingClassRefines(HashConsPatternRewriter &rewriter);
+
   /// Repair the parents of each ClassOp in the worklist.
   /// This also clears the worklist.
   /// Returns false when the worklist was empty, otherwise true.
@@ -120,6 +148,7 @@ private:
 
   SmallVector<equivalence::ClassOp> pendingErase;
   SmallVector<std::pair<mlir::Value, mlir::Value>> pendingClassUnions;
+  SmallVector<std::pair<mlir::Value, mlir::Value>> pendingClassRefines;
 
   /// Fold same-scope `dup` into `survivor` and detach `dup` for erasure.
   void fuseSameScope(HashConsPatternRewriter &rewriter,

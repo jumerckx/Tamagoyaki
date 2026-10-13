@@ -93,6 +93,7 @@ void populateEmatchToApplyRewritePatterns(RewritePatternSet &patterns) {
                EmatchToApplyRewritePattern<GetClassResultOp>,
                EmatchToApplyRewritePattern<GetClassResultsOp>,
                EmatchToApplyRewritePattern<UnionOp>,
+               EmatchToApplyRewritePattern<RefineOp>,
                EmatchToApplyRewritePattern<DedupOp>,
                AreEquivalentToApplyConstraintPattern>(patterns.getContext());
 }
@@ -146,10 +147,10 @@ struct PendingMatch {
 };
 
 template <typename UnionFn>
-PDLRewriteFunction makeUnionRewrite(UnionFn unionFn) {
+PDLRewriteFunction makePairRewrite(UnionFn unionFn) {
   return [unionFn](PatternRewriter &rewriter, PDLResultList &,
                    ArrayRef<PDLValue> args) -> LogicalResult {
-    assert(args.size() == 2 && "union expects 2 arguments");
+    assert(args.size() == 2 && "union/refine expects 2 arguments");
 
     PDLValue arg0 = args[0];
     PDLValue arg1 = args[1];
@@ -161,7 +162,7 @@ PDLRewriteFunction makeUnionRewrite(UnionFn unionFn) {
     } else if (arg0.isa<ValueRange>() && arg1.isa<ValueRange>()) {
       unionFn(rewriter, arg0.cast<ValueRange>(), arg1.cast<ValueRange>());
     } else {
-      llvm_unreachable("union: unsupported argument types");
+      llvm_unreachable("union/refine: unsupported argument types");
     }
     return success();
   };
@@ -204,14 +205,28 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
   registerEmatchRewrites(pdlPattern);
   if (eagerRewrite) {
     pdlPattern.registerRewriteFunction(
-        "union", makeUnionRewrite([&uf](PatternRewriter &, auto lhs, auto rhs) {
+        "union", makePairRewrite([&uf](PatternRewriter &, auto lhs, auto rhs) {
           uf.queueClassUnion(lhs, rhs);
         }));
   } else {
     pdlPattern.registerRewriteFunction(
         "union",
-        makeUnionRewrite([&uf](PatternRewriter &rewriter, auto lhs, auto rhs) {
+        makePairRewrite([&uf](PatternRewriter &rewriter, auto lhs, auto rhs) {
           uf.classUnion(rewriter, lhs, rhs);
+        }));
+  }
+  // Refinements go through the hash-cons rewriter so the new
+  // equivalence.refine is hash-consed like any other e-node.
+  if (eagerRewrite) {
+    pdlPattern.registerRewriteFunction(
+        "refine", makePairRewrite([&uf](PatternRewriter &, auto lhs, auto rhs) {
+          uf.queueClassRefine(lhs, rhs);
+        }));
+  } else {
+    pdlPattern.registerRewriteFunction(
+        "refine", makePairRewrite([&uf, &hashconsRewriter](PatternRewriter &,
+                                                           auto lhs, auto rhs) {
+          uf.classRefine(hashconsRewriter, lhs, rhs);
         }));
   }
   pdlPattern.registerRewriteFunction(
@@ -304,6 +319,7 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
       }
 
       uf.processPendingClassUnions(hashconsRewriter);
+      uf.processPendingClassRefines(hashconsRewriter);
     } else {
       {
         TAMAGOYAKI_SCOPED_TIMER("match");

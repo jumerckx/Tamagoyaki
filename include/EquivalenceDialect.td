@@ -28,8 +28,9 @@ def Equivalence_Dialect : Dialect {
     let summary = "A dialect for representing e-graphs as MLIR operations.";
     let description = [{
         The equivalence dialect represents e-graphs: `equivalence.graph` holds an
-        unordered region of operations, and `equivalence.class` groups values
-        that are known to be equivalent.
+        unordered region of operations, `equivalence.class` groups values
+        that are known to be equivalent, and `equivalence.refine` records that
+        one value may be replaced by another (but not vice versa).
     }];
     let cppNamespace = "::mlir::equivalence";
 
@@ -142,6 +143,36 @@ def Equivalence_ClassOp : Equivalence_Op<"class", [
     // established by the `equivalence-restore-invariants` pass, not enforced
     // here.
     let hasVerifier = 1;
+}
+
+def Equivalence_RefineOp : Equivalence_Op<"refine", [
+    Pure,
+    SameOperandsAndResultType,
+]> {
+    let summary = "A directed refinement of one value into another";
+    let description = [{
+        `%r = equivalence.refine %a into %b` states that `%a` may be replaced
+        by `%b`, but not the other way around. Users of `%r` may therefore be
+        matched against either `%b` or `%a`.
+
+        Unlike `equivalence.class`, which is symmetric and partitions values, a
+        value can be refined several times. Successive refinements form a chain
+        in which each refinement takes the previous one as its source:
+
+        ```mlir
+        %s = llvm.sub %x, %c1 : i32
+        %a = llvm.add %s, %c1 overflow<nsw> : i32
+        %r = equivalence.refine %a into %x : i32
+        %c = llvm.icmp "sgt" %r, %s : i32
+        ```
+    }];
+
+    let arguments = (ins AnyType:$source, AnyType:$target);
+    let results = (outs AnyType:$result);
+
+    let assemblyFormat = [{
+        $source `into` $target attr-dict `:` type($result)
+    }];
 }
 
 //===----------------------------------------------------------------------===//
