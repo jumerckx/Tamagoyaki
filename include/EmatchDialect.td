@@ -49,7 +49,12 @@ def Ematch_GetClassValsOp : Ematch_Op<"get_class_vals"> {
         Take a value and return all values in its equivalence class.
 
         If the value is an equivalence.class result, return the operands of the
-        class, otherwise return a range containing the value itself.
+        class and of the classes reachable through its leader chain. If the
+        value is an equivalence.refine result, return the values of the
+        refinement target followed by those of the source, following the
+        chain of refinements, e.g. for
+        `%r = equivalence.refine %a into %x` the result is `[%x, %a]`.
+        Otherwise return a range containing the value itself.
     }];
 
     let arguments = (ins PDL_Value:$value);
@@ -106,6 +111,29 @@ def Ematch_UnionOp : Ematch_Op<"union"> {
         - (value, value): merge two values
         - (operation, range<value>): merge operation results with values
         - (range<value>, range<value>): merge two value ranges
+    }];
+
+    let arguments = (ins
+        AnyTypeOf<[PDL_Value, PDL_Operation, PDL_RangeOf<PDL_Value>]>:$lhs,
+        AnyTypeOf<[PDL_Value, PDL_RangeOf<PDL_Value>]>:$rhs
+    );
+
+    let assemblyFormat = "$lhs `:` type($lhs) `,` $rhs `:` type($rhs) attr-dict";
+}
+
+def Ematch_RefineOp : Ematch_Op<"refine"> {
+    let summary = "Refine values or operations into other values.";
+    let description = [{
+        Record that `lhs` may be replaced by `rhs` (but not the other way
+        around) by inserting an `equivalence.refine` operation. The users of
+        `lhs` are redirected to the refinement, which is chained on top of any
+        earlier refinement of `lhs`.
+
+        Supported operand type combinations are the same as for
+        `ematch.union`:
+        - (value, value): refine a value into another value
+        - (operation, range<value>): refine operation results into values
+        - (range<value>, range<value>): refine one value range into another
     }];
 
     let arguments = (ins

@@ -21,6 +21,8 @@
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Support/LLVM.h"
+#include "llvm/ADT/SmallPtrSet.h"
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/iterator.h"
 #include "llvm/ADT/iterator_range.h"
 
@@ -32,6 +34,11 @@ namespace mlir::ematch {
 /// leader always lives in an enclosing graph scope, so every visited value
 /// dominates (is visible from) the starting class. A value that is not an
 /// equivalence.class result is visited on its own.
+///
+/// An equivalence.refine result is expanded into the values of its target
+/// followed by those of its source, recursively, so the whole chain of
+/// refinements is visited. Every class and refinement is visited at most once,
+/// which also makes the traversal terminate on cyclic refinements.
 class ClassValIterator
     : public llvm::iterator_facade_base<
           ClassValIterator, std::forward_iterator_tag, mlir::Value,
@@ -46,26 +53,45 @@ public:
   ClassValIterator &operator++();
   bool operator==(const ClassValIterator &other) const {
     return classOp == other.classOp && index == other.index &&
-           single == other.single;
+           single == other.single && pending.size() == other.pending.size();
   }
 
 private:
-  /// Advance to the next class in the leader chain while the current class
-  /// has no input left at `index`.
+  /// Start visiting `val`: a class, a refinement (whose operands are queued),
+  /// or a single value.
+  void enter(mlir::Value val);
+
+  /// Move to the next value to visit: follow the leader chain while the
+  /// current class has no input left at `index`, then continue with the
+  /// pending values of enclosing refinements.
   void skipExhausted();
 
   equivalence::ClassOp classOp;
   unsigned index = 0;
   /// Set when iterating over a value that is not part of a class.
   mlir::Value single;
+  /// Refinement operands still to be visited (LIFO).
+  SmallVector<mlir::Value, 2> pending;
+  /// Classes and refinements that were already entered.
+  SmallPtrSet<mlir::Operation *, 4> visited;
 };
 
 using ClassValRange = llvm::iterator_range<ClassValIterator>;
 
 /// Get all values in the e-class of `val`, including the values of the
-/// classes reachable through the leader chain. The range is lazy; use
+/// classes reachable through the leader chain and the chain of refinements.
+/// The range is lazy; use
 /// `llvm::to_vector` to materialize it.
 ClassValRange getClassVals(mlir::PatternRewriter &rewriter, mlir::Value val);
+
+/// Return true if the refinement tree of `from` (see ClassValIterator)
+/// reaches `to`, or a class equivalent to `to`, i.e. `from` is already known
+/// to be refinable into `to`.
+bool refinesTo(mlir::Value from, mlir::Value to);
+
+/// Return the last refinement in the chain built on top of `val` (the value
+/// that `val`'s users refer to), or `val` itself if it was never refined.
+mlir::Value getRefinementTop(mlir::Value val);
 
 /// Helper function to get the first value from a ClassOp
 mlir::Value getClassRepresentative(mlir::PatternRewriter &rewriter,
