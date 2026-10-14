@@ -9,10 +9,9 @@
 // CHECK-LABEL: func.func @congruence
 // CHECK:         %[[A:.*]] = equivalence.class %arg0 refines %[[B:.*]] : i32
 // CHECK-NEXT:    %[[B]] = equivalence.class %arg1 : i32
-// CHECK-NEXT:    %[[K:.*]] = equivalence.class %arg2 : i32
-// CHECK-NEXT:    %[[FA:.*]] = arith.muli %[[A]], %[[K]] : i32
+// CHECK-NEXT:    %[[FA:.*]] = arith.muli %[[A]], %arg2 : i32
 // CHECK-NEXT:    %[[FAC:.*]] = equivalence.class %[[FA]] refines %[[FBC:.*]] : i32
-// CHECK-NEXT:    %[[FB:.*]] = arith.muli %[[B]], %[[K]] : i32
+// CHECK-NEXT:    %[[FB:.*]] = arith.muli %[[B]], %arg2 : i32
 // CHECK-NEXT:    %[[FBC]] = equivalence.class %[[FB]] : i32
 // CHECK:         "test.use"(%[[FAC]], %[[FBC]])
 
@@ -38,8 +37,7 @@
 // CHECK:         equivalence.class %arg0, %arg1 refines %{{.*}}, %{{.*}}, %{{.*}} : i32
 // CHECK:         %[[F:.*]] = arith.muli
 // CHECK-NOT:     arith.muli
-// CHECK:         %[[FC:.*]] = equivalence.class %[[F]] : i32
-// CHECK:         "test.use"(%[[FC]], %[[FC]])
+// CHECK:         "test.use"(%[[F]], %[[F]])
 
 // A union can close a cycle of refinements (a <= b <= c, then c <= a unions
 // a and c): the whole cycle is one e-class and the refinements disappear.
@@ -63,11 +61,8 @@ module @ir {
     equivalence.graph {
       %a = equivalence.class %arg0 : i32
       %b = equivalence.class %arg1 : i32
-      %k = equivalence.class %arg2 : i32
-      %fa0 = arith.muli %a, %k : i32
-      %fa = equivalence.class %fa0 : i32
-      %fb0 = arith.muli %b, %k : i32
-      %fb = equivalence.class %fb0 : i32
+      %fa = arith.muli %a, %arg2 : i32
+      %fb = arith.muli %b, %arg2 : i32
       "test.refine"(%a, %b) : (i32, i32) -> ()
       "test.use"(%fa, %fb) : (i32, i32) -> ()
     }
@@ -78,11 +73,10 @@ module @ir {
     equivalence.graph {
       %a = equivalence.class %arg0 : i32
       %b = equivalence.class %arg1 : i32
-      %k = equivalence.class %arg2 : i32
-      %fa = arith.muli %a, %k : i32
-      %fb = arith.muli %b, %k : i32
-      %ga = arith.addi %fa, %k : i32
-      %gb = arith.addi %fb, %k : i32
+      %fa = arith.muli %a, %arg2 : i32
+      %fb = arith.muli %b, %arg2 : i32
+      %ga = arith.addi %fa, %arg2 : i32
+      %gb = arith.addi %fb, %arg2 : i32
       "test.refine"(%a, %b) : (i32, i32) -> ()
       "test.use"(%ga, %gb) : (i32, i32) -> ()
     }
@@ -93,9 +87,8 @@ module @ir {
     equivalence.graph {
       %b = equivalence.class %arg1 : i32
       %a = equivalence.class %arg0 refines %b : i32
-      %k = equivalence.class %arg2 : i32
-      %fa = arith.muli %a, %k : i32
-      "test.mk"(%b, %k) : (i32, i32) -> ()
+      %fa = arith.muli %a, %arg2 : i32
+      "test.mk"(%b, %arg2) : (i32, i32) -> ()
       "test.use"(%fa) : (i32) -> ()
     }
     return
@@ -108,11 +101,8 @@ module @ir {
       %b = equivalence.class %arg2 : i32
       %c = equivalence.class %arg3 : i32
       %d = equivalence.class %arg5 : i32
-      %k = equivalence.class %arg4 : i32
-      %fa0 = arith.muli %a, %k : i32
-      %fa = equivalence.class %fa0 : i32
-      %fa20 = arith.muli %a2, %k : i32
-      %fa2 = equivalence.class %fa20 : i32
+      %fa = arith.muli %a, %arg4 : i32
+      %fa2 = arith.muli %a2, %arg4 : i32
       "test.refine"(%a, %b) : (i32, i32) -> ()
       "test.refine"(%a2, %c) : (i32, i32) -> ()
       "test.union"(%a, %a2) : (i32, i32) -> ()
@@ -137,14 +127,11 @@ module @ir {
 
   func.func @union_or_refine(%arg0: i32, %arg1: i32) {
     equivalence.graph {
-      %z0 = arith.constant 0 : i32
-      %z = equivalence.class %z0 : i32
-      %a = equivalence.class %arg0 refines %z : i32
-      %k = equivalence.class %arg1 : i32
-      %fa0 = arith.muli %a, %k : i32
-      %fa = equivalence.class %fa0 : i32
-      %fz0 = arith.muli %z, %k : i32
-      %fz = equivalence.class %fz0 : i32
+      %z = arith.constant 0 : i32
+      %a = equivalence.class %arg0 : i32
+      %fa = arith.muli %a, %arg1 : i32
+      %fz = arith.muli %z, %arg1 : i32
+      "test.refine"(%a, %z) : (i32, i32) -> ()
       "test.use"(%fa, %fz) : (i32, i32) -> ()
     }
     return

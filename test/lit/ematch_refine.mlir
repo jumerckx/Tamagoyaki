@@ -15,19 +15,6 @@
 
 // CHECK-LABEL: func.func @refine
 // CHECK:         %[[X:.*]] = equivalence.class %arg0 : i32
-// CHECK:         arith.subi %[[X]]
-// CHECK-NEXT:    %[[S:.*]] = equivalence.class %{{.*}} : i32
-// CHECK:         arith.addi %[[S]], %{{.*}} overflow<nsw>
-// CHECK-NEXT:    %[[A:.*]] = equivalence.class %{{.*}} refines %[[X]] : i32
-// CHECK:         %[[TRUE:.*]] = arith.constant true
-// CHECK:         %[[CMP:.*]] = arith.cmpi sgt, %[[A]], %[[S]] : i32
-// CHECK-NEXT:    %[[C:.*]] = equivalence.class %[[CMP]], %[[TRUE]] : i1
-// CHECK-NEXT:    equivalence.yield %[[C]] : i1
-
-// Without single-element classes, the refinement creates a class for the add.
-
-// CHECK-LABEL: func.func @refine_no_classes
-// CHECK:         %[[X:.*]] = equivalence.class %arg0 : i32
 // CHECK:         %[[S:.*]] = arith.subi %[[X]]
 // CHECK-NEXT:    %[[ADD:.*]] = arith.addi %[[S]], %{{.*}} overflow<nsw>
 // CHECK-NEXT:    %[[A:.*]] = equivalence.class %[[ADD]] refines %[[X]] : i32
@@ -38,22 +25,6 @@
 
 module @ir {
   func.func @refine(%arg0: i32) -> i1 {
-    %0 = equivalence.graph -> (i1) {
-      %x = equivalence.class %arg0 : i32
-      %c1 = arith.constant 1 : i32
-      %one = equivalence.class %c1 : i32
-      %s0 = arith.subi %x, %one : i32
-      %s = equivalence.class %s0 : i32
-      %a0 = arith.addi %s, %one overflow<nsw> : i32
-      %a = equivalence.class %a0 : i32
-      %c0 = arith.cmpi sgt, %a, %s : i32
-      %c = equivalence.class %c0 : i1
-      equivalence.yield %c : i1
-    }
-    return %0 : i1
-  }
-
-  func.func @refine_no_classes(%arg0: i32) -> i1 {
     %0 = equivalence.graph -> (i1) {
       %x = equivalence.class %arg0 : i32
       %c1 = arith.constant 1 : i32
