@@ -65,7 +65,8 @@ void wrapValuesInClassOps(Region &region, OpBuilder &builder) {
       for (BlockArgument arg : block.getArguments()) {
         auto classOp = ClassOp::create(
             builder, arg.getLoc(), TypeRange{arg.getType()}, ValueRange{arg},
-            /*leader=*/Value{}, /*min_cost_index=*/nullptr);
+            /*leader=*/Value{}, /*refines=*/ValueRange{},
+            /*min_cost_index=*/nullptr);
         arg.replaceAllUsesExcept(classOp.getResult(), classOp);
       }
     }
@@ -91,10 +92,10 @@ void wrapValuesInClassOps(Region &region, OpBuilder &builder) {
       if (op->getNumResults() > 0) {
         builder.setInsertionPointAfter(op);
         for (OpResult result : op->getResults()) {
-          auto classOp = ClassOp::create(builder, result.getLoc(),
-                                         TypeRange{result.getType()},
-                                         ValueRange{result}, /*leader=*/Value{},
-                                         /*min_cost_index=*/nullptr);
+          auto classOp = ClassOp::create(
+              builder, result.getLoc(), TypeRange{result.getType()},
+              ValueRange{result}, /*leader=*/Value{}, /*refines=*/ValueRange{},
+              /*min_cost_index=*/nullptr);
           result.replaceAllUsesExcept(classOp.getResult(), classOp);
         }
       }
@@ -176,7 +177,8 @@ GraphOp wrapRegionBodyInGraph(Region &region, bool insertSingleElementEqs) {
         continue;
       auto classOp = ClassOp::create(
           builder, arg.getLoc(), TypeRange{arg.getType()}, ValueRange{arg},
-          /*leader=*/Value{}, /*min_cost_index=*/nullptr);
+          /*leader=*/Value{}, /*refines=*/ValueRange{},
+          /*min_cost_index=*/nullptr);
       arg.replaceAllUsesExcept(classOp.getResult(), classOp);
     }
   }
@@ -474,6 +476,10 @@ void extractFromGraph(GraphOp graphOp) {
       op->removeAttr("equivalence.cost");
     }
   });
+  // Extraction picks among equivalent values only. Drop the refinement edges
+  // first: they are uses of other classes that would keep them alive.
+  for (ClassOp classOp : classOps)
+    classOp.getRefinesMutable().clear();
 
   for (ClassOp classOp : classOps) {
     if (classOp.getResult().use_empty()) {

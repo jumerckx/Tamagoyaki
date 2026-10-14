@@ -35,10 +35,10 @@ namespace mlir::ematch {
 /// dominates (is visible from) the starting class. A value that is not an
 /// equivalence.class result is visited on its own.
 ///
-/// An equivalence.refine result is expanded into the values of its target
-/// followed by those of its source, recursively, so the whole chain of
-/// refinements is visited. Every class and refinement is visited at most once,
-/// which also makes the traversal terminate on cyclic refinements.
+/// With `followRefinements`, it then visits the e-classes reachable through
+/// the `refines` edges of every class visited so far, transitively. Every
+/// class is visited at most once, which also makes the traversal terminate on
+/// cyclic refinements.
 class ClassValIterator
     : public llvm::iterator_facade_base<
           ClassValIterator, std::forward_iterator_tag, mlir::Value,
@@ -47,7 +47,7 @@ public:
   /// The end iterator.
   ClassValIterator() = default;
   /// Iterate over the class of `val` (or just `val` if it is not a class).
-  explicit ClassValIterator(mlir::Value val);
+  explicit ClassValIterator(mlir::Value val, bool followRefinements);
 
   mlir::Value operator*() const;
   ClassValIterator &operator++();
@@ -57,41 +57,36 @@ public:
   }
 
 private:
-  /// Start visiting `val`: a class, a refinement (whose operands are queued),
-  /// or a single value.
+  /// Start visiting `val`: a class or a single value.
   void enter(mlir::Value val);
+
+  /// Start visiting the inputs of `next`, queueing its refinements.
+  void enterClass(equivalence::ClassOp next);
 
   /// Move to the next value to visit: follow the leader chain while the
   /// current class has no input left at `index`, then continue with the
-  /// pending values of enclosing refinements.
+  /// pending refinement targets.
   void skipExhausted();
 
   equivalence::ClassOp classOp;
   unsigned index = 0;
   /// Set when iterating over a value that is not part of a class.
   mlir::Value single;
-  /// Refinement operands still to be visited (LIFO).
+  bool followRefinements = false;
+  /// Refinement targets still to be visited (LIFO).
   SmallVector<mlir::Value, 2> pending;
-  /// Classes and refinements that were already entered.
+  /// Classes that were already entered.
   SmallPtrSet<mlir::Operation *, 4> visited;
 };
 
 using ClassValRange = llvm::iterator_range<ClassValIterator>;
 
 /// Get all values in the e-class of `val`, including the values of the
-/// classes reachable through the leader chain and the chain of refinements.
-/// The range is lazy; use
-/// `llvm::to_vector` to materialize it.
-ClassValRange getClassVals(mlir::PatternRewriter &rewriter, mlir::Value val);
-
-/// Return true if the refinement tree of `from` (see ClassValIterator)
-/// reaches `to`, or a class equivalent to `to`, i.e. `from` is already known
-/// to be refinable into `to`.
-bool refinesTo(mlir::Value from, mlir::Value to);
-
-/// Return the last refinement in the chain built on top of `val` (the value
-/// that `val`'s users refer to), or `val` itself if it was never refined.
-mlir::Value getRefinementTop(mlir::Value val);
+/// classes reachable through the leader chain, followed by the values of the
+/// e-classes it refines into (unless `followRefinements` is false). The range
+/// is lazy; use `llvm::to_vector` to materialize it.
+ClassValRange getClassVals(mlir::PatternRewriter &rewriter, mlir::Value val,
+                           bool followRefinements = true);
 
 /// Helper function to get the first value from a ClassOp
 mlir::Value getClassRepresentative(mlir::PatternRewriter &rewriter,
@@ -106,7 +101,8 @@ equivalence::ClassOp getCanonicalLeader(equivalence::ClassOp classOp);
 equivalence::ClassOp getRootLeader(equivalence::ClassOp classOp);
 
 /// Return true if `lhs` and `rhs` are in the same e-class: either the same
-/// value, or equivalence.class results with the same root leader.
+/// value, or values whose classes (the class they are the result or an input
+/// of) have the same root leader. Refinements do not make values equivalent.
 bool areEquivalent(mlir::Value lhs, mlir::Value rhs);
 
 /// Helper function to get the result of a ClassOp

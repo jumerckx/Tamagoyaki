@@ -94,6 +94,7 @@ void populateEmatchToApplyRewritePatterns(RewritePatternSet &patterns) {
                EmatchToApplyRewritePattern<GetClassResultsOp>,
                EmatchToApplyRewritePattern<UnionOp>,
                EmatchToApplyRewritePattern<RefineOp>,
+               EmatchToApplyRewritePattern<UnionOrRefineOp>,
                EmatchToApplyRewritePattern<DedupOp>,
                AreEquivalentToApplyConstraintPattern>(patterns.getContext());
 }
@@ -146,24 +147,47 @@ struct PendingMatch {
   mlir::detail::PDLByteCode::MatchResult matchResult;
 };
 
-template <typename UnionFn>
-PDLRewriteFunction makePairRewrite(UnionFn unionFn) {
-  return [unionFn](PatternRewriter &rewriter, PDLResultList &,
-                   ArrayRef<PDLValue> args) -> LogicalResult {
+/// Apply `pairFn` to the (lhs, rhs) arguments of a union or refinement.
+template <typename PairFn>
+void applyToPair(PatternRewriter &rewriter, PDLValue lhs, PDLValue rhs,
+                 PairFn pairFn) {
+  if (lhs.isa<Value>() && rhs.isa<Value>()) {
+    pairFn(rewriter, lhs.cast<Value>(), rhs.cast<Value>());
+  } else if (lhs.isa<Operation *>() && rhs.isa<ValueRange>()) {
+    pairFn(rewriter, lhs.cast<Operation *>(), rhs.cast<ValueRange>());
+  } else if (lhs.isa<ValueRange>() && rhs.isa<ValueRange>()) {
+    pairFn(rewriter, lhs.cast<ValueRange>(), rhs.cast<ValueRange>());
+  } else {
+    llvm_unreachable("union/refine: unsupported argument types");
+  }
+}
+
+template <typename PairFn> PDLRewriteFunction makePairRewrite(PairFn pairFn) {
+  return [pairFn](PatternRewriter &rewriter, PDLResultList &,
+                  ArrayRef<PDLValue> args) -> LogicalResult {
     assert(args.size() == 2 && "union/refine expects 2 arguments");
+    applyToPair(rewriter, args[0], args[1], pairFn);
+    return success();
+  };
+}
 
-    PDLValue arg0 = args[0];
-    PDLValue arg1 = args[1];
-
-    if (arg0.isa<Value>() && arg1.isa<Value>()) {
-      unionFn(rewriter, arg0.cast<Value>(), arg1.cast<Value>());
-    } else if (arg0.isa<Operation *>() && arg1.isa<ValueRange>()) {
-      unionFn(rewriter, arg0.cast<Operation *>(), arg1.cast<ValueRange>());
-    } else if (arg0.isa<ValueRange>() && arg1.isa<ValueRange>()) {
-      unionFn(rewriter, arg0.cast<ValueRange>(), arg1.cast<ValueRange>());
-    } else {
-      llvm_unreachable("union/refine: unsupported argument types");
-    }
+/// `union_or_refine(lhs, rhs, checks...)`: union if every (operand, matched)
+/// pair in `checks` is equivalent, otherwise refine `lhs` into `rhs`.
+template <typename UnionFn, typename RefineFn>
+PDLRewriteFunction makeUnionOrRefineRewrite(UnionFn unionFn,
+                                            RefineFn refineFn) {
+  return [unionFn, refineFn](PatternRewriter &rewriter, PDLResultList &,
+                             ArrayRef<PDLValue> args) -> LogicalResult {
+    assert(args.size() >= 2 && args.size() % 2 == 0 &&
+           "union_or_refine expects lhs, rhs and (operand, matched) pairs");
+    bool equivalent = true;
+    for (size_t i = 2; i < args.size() && equivalent; i += 2)
+      equivalent =
+          areEquivalent(args[i].cast<Value>(), args[i + 1].cast<Value>());
+    if (equivalent)
+      applyToPair(rewriter, args[0], args[1], unionFn);
+    else
+      applyToPair(rewriter, args[0], args[1], refineFn);
     return success();
   };
 }
@@ -203,32 +227,24 @@ bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,
   }
 
   registerEmatchRewrites(pdlPattern);
-  if (eagerRewrite) {
-    pdlPattern.registerRewriteFunction(
-        "union", makePairRewrite([&uf](PatternRewriter &, auto lhs, auto rhs) {
-          uf.queueClassUnion(lhs, rhs);
-        }));
-  } else {
-    pdlPattern.registerRewriteFunction(
-        "union",
-        makePairRewrite([&uf](PatternRewriter &rewriter, auto lhs, auto rhs) {
-          uf.classUnion(rewriter, lhs, rhs);
-        }));
-  }
-  // Refinements go through the hash-cons rewriter so the new
-  // equivalence.refine is hash-consed like any other e-node.
-  if (eagerRewrite) {
-    pdlPattern.registerRewriteFunction(
-        "refine", makePairRewrite([&uf](PatternRewriter &, auto lhs, auto rhs) {
-          uf.queueClassRefine(lhs, rhs);
-        }));
-  } else {
-    pdlPattern.registerRewriteFunction(
-        "refine", makePairRewrite([&uf, &hashconsRewriter](PatternRewriter &,
-                                                           auto lhs, auto rhs) {
-          uf.classRefine(hashconsRewriter, lhs, rhs);
-        }));
-  }
+  auto unionFn = [&uf, eagerRewrite](PatternRewriter &rewriter, auto lhs,
+                                     auto rhs) {
+    if (eagerRewrite)
+      uf.queueClassUnion(lhs, rhs);
+    else
+      uf.classUnion(rewriter, lhs, rhs);
+  };
+  auto refineFn = [&uf, eagerRewrite](PatternRewriter &rewriter, auto lhs,
+                                      auto rhs) {
+    if (eagerRewrite)
+      uf.queueClassRefine(lhs, rhs);
+    else
+      uf.classRefine(rewriter, lhs, rhs);
+  };
+  pdlPattern.registerRewriteFunction("union", makePairRewrite(unionFn));
+  pdlPattern.registerRewriteFunction("refine", makePairRewrite(refineFn));
+  pdlPattern.registerRewriteFunction(
+      "union_or_refine", makeUnionOrRefineRewrite(unionFn, refineFn));
   pdlPattern.registerRewriteFunction(
       "dedup", [&hashconsRewriter](PatternRewriter &rewriter, Operation *op) {
         if (Operation *existing = hashconsRewriter.lookup(op)) {

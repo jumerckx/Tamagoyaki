@@ -1,42 +1,39 @@
 // RUN: tamagoyaki-opt %s --ematch-saturate="max-iters=1" -allow-unregistered-dialect | FileCheck %s
 
-// ematch.get_class_vals on an equivalence.refine result visits the values of
-// the refinement target before those of the source, following the whole chain
-// of refinements (and the leader chain of each class). Each class and
-// refinement is visited once, so cyclic refinements terminate.
+// ematch.get_class_vals visits the values of the class (and its leader chain)
+// first, then those of the classes it refines into, transitively. Each class
+// is visited once, so cyclic refinements terminate. A cycle of refinements is
+// unioned when the graph is rebuilt, before matching.
 
 // CHECK-LABEL: func.func @chain
-// CHECK:         "test.seen"(%arg2)
-// CHECK-NEXT:    "test.seen"(%arg1)
-// CHECK-NEXT:    "test.seen"(%arg0)
+// CHECK:         "test.seen"(%arg0)
 // CHECK-NEXT:    "test.seen"(%arg3)
+// CHECK-NEXT:    "test.seen"(%arg1)
+// CHECK-NEXT:    "test.seen"(%arg2)
 // CHECK-NEXT:    "test.probe"
 
 // CHECK-LABEL: func.func @cycle
-// CHECK:         "test.seen"(%arg1)
-// CHECK-NEXT:    "test.seen"(%arg0)
-// CHECK-NEXT:    "test.probe"
+// CHECK:         %[[C:.*]] = equivalence.class %arg0, %arg1 : i32
+// CHECK:         "test.seen"(%arg0)
+// CHECK-NEXT:    "test.seen"(%arg1)
+// CHECK-NEXT:    "test.probe"(%[[C]])
 
 module @ir {
   func.func @chain(%arg0: i32, %arg1: i32, %arg2: i32, %arg3: i32) {
     equivalence.graph {
-      %a = equivalence.class %arg0, %arg3 : i32
-      %x = equivalence.class %arg1 : i32
+      %a = equivalence.class %arg0, %arg3 refines %x : i32
+      %x = equivalence.class %arg1 refines %y : i32
       %y = equivalence.class %arg2 : i32
-      %r1 = equivalence.refine %a into %x : i32
-      %r2 = equivalence.refine %r1 into %y : i32
-      "test.probe"(%r2) : (i32) -> ()
+      "test.probe"(%a) : (i32) -> ()
     }
     return
   }
 
   func.func @cycle(%arg0: i32, %arg1: i32) {
     equivalence.graph {
-      %p = equivalence.class %arg0 : i32
-      %q = equivalence.class %arg1 : i32
-      %r1 = equivalence.refine %p into %r2 : i32
-      %r2 = equivalence.refine %q into %r1 : i32
-      "test.probe"(%r1) : (i32) -> ()
+      %p = equivalence.class %arg0 refines %q : i32
+      %q = equivalence.class %arg1 refines %p : i32
+      "test.probe"(%p) : (i32) -> ()
     }
     return
   }

@@ -429,7 +429,8 @@ struct EquivalenceGraphContainsPass
                   ArrayRef<PDLValue> args) -> LogicalResult {
             if (args.empty() || !args[0].isa<Value>())
               return failure();
-            for (Value cv : getClassVals(rw, args[0].cast<Value>())) {
+            for (Value cv : getClassVals(rw, args[0].cast<Value>(),
+                                         /*followRefinements=*/false)) {
               if (auto ba = dyn_cast<BlockArgument>(cv))
                 if (ba.getArgNumber() == index)
                   return success();

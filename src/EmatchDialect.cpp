@@ -54,3 +54,9 @@ void mlir::ematch::EmatchDialect::printType(mlir::Type type,
 
 #define GET_OP_CLASSES
 #include "EmatchOps.cpp.inc"
+
+LogicalResult mlir::ematch::UnionOrRefineOp::verify() {
+  if (getChecks().size() % 2 != 0)
+    return emitOpError("expects `checks` to hold (operand, matched) pairs");
+  return success();
+}

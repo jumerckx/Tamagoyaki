@@ -66,20 +66,19 @@ public:
   /// Process all pending queued class unions
   void processPendingClassUnions(mlir::PatternRewriter &rewriter);
 
-  /// Record that `a` may be replaced by `b` (but not vice versa) by inserting
-  /// an `equivalence.refine` on top of `a`'s chain of refinements and
-  /// redirecting `a`'s users to it. No-op if `a` is already known to refine
-  /// into `b`; if `b` already refines into `a`, the two are unioned instead.
-  /// Refinements are not rebuilt: they are not revisited when classes merge.
-  void classRefine(HashConsPatternRewriter &rewriter, mlir::Value a,
+  /// Record that `a` may be replaced by `b` (but not vice versa) by adding a
+  /// `refines` edge from the e-class of `a` to that of `b`. No-op if they are
+  /// in the same e-class or the edge exists. Redundant edges and cycles are
+  /// left to `rebuild`. Returns true if the e-graph changed.
+  bool classRefine(mlir::PatternRewriter &rewriter, mlir::Value a,
                    mlir::Value b);
 
   /// Refine an operation's results into corresponding values
-  void classRefine(HashConsPatternRewriter &rewriter, mlir::Operation *op,
+  void classRefine(mlir::PatternRewriter &rewriter, mlir::Operation *op,
                    mlir::ValueRange vals);
 
   /// Refine one value range into another, pairwise
-  void classRefine(HashConsPatternRewriter &rewriter, mlir::ValueRange a,
+  void classRefine(mlir::PatternRewriter &rewriter, mlir::ValueRange a,
                    mlir::ValueRange b);
 
   /// Queue a refinement of `a` into `b` for later processing
@@ -92,11 +91,16 @@ public:
   void queueClassRefine(mlir::ValueRange a, mlir::ValueRange b);
 
   /// Process all pending queued refinements
-  void processPendingClassRefines(HashConsPatternRewriter &rewriter);
+  void processPendingClassRefines(mlir::PatternRewriter &rewriter);
 
-  /// Repair the parents of each ClassOp in the worklist.
+  /// `op` was (re-)inserted into the hash-cons table. If one of its operands
+  /// has refinements, schedule it for congruence (see `rebuildRefinements`).
+  void notifyENodeInserted(mlir::Operation *op);
+
+  /// Repair the parents of each ClassOp in the worklist, then restore the
+  /// refinement invariants (see `rebuildRefinements`), to a fixpoint.
   /// This also clears the worklist.
-  /// Returns false when the worklist was empty, otherwise true.
+  /// Returns false when there was nothing to do, otherwise true.
   bool rebuild(HashConsPatternRewriter &rewriter);
 
   /// Create a hash-cons scope for the given graph's region and insert every
@@ -146,6 +150,19 @@ private:
   // rebuild re-canonicalizes and skips dead ops.
   llvm::SetVector<equivalence::ClassOp> dirtyRoots;
 
+  /// Set once any refinement exists, so e-graphs without refinements never
+  /// pay for `rebuildRefinements`.
+  bool hasRefinements = false;
+
+  /// Classes with outgoing `refines` edges, and classes that are the target
+  /// of one. Fused classes are dropped by `fuseSameScope`.
+  llvm::SetVector<equivalence::ClassOp> refinedClasses;
+  llvm::SetVector<equivalence::ClassOp> refineTargets;
+
+  /// Classes whose refinements (in either direction) or whose e-nodes changed
+  /// since the last `rebuildRefinements`.
+  llvm::SetVector<equivalence::ClassOp> dirtyRefinements;
+
   SmallVector<equivalence::ClassOp> pendingErase;
   SmallVector<std::pair<mlir::Value, mlir::Value>> pendingClassUnions;
   SmallVector<std::pair<mlir::Value, mlir::Value>> pendingClassRefines;
@@ -158,6 +175,24 @@ private:
   /// the user, queueing affected classes for congruence repair.
   void retargetUsersToDeepest(equivalence::ClassOp rep,
                               SmallVectorImpl<equivalence::ClassOp> &row);
+
+  /// Restore the invariants of refinement edges after unions (drop edges
+  /// into the own e-class and duplicates), union the e-classes on cycles, and
+  /// close refinements under congruence: if `a` refines into `b`, then `f(a)`
+  /// refines into `f(b)` whenever both e-nodes exist. Only the classes in
+  /// `dirtyRefinements` are checked for congruence. Returns true if the
+  /// e-graph changed.
+  bool rebuildRefinements(mlir::PatternRewriter &rewriter);
+
+  /// Union the e-classes on every cycle of `refines` edges. Returns true if
+  /// any were unioned.
+  bool unionRefinementCycles(mlir::PatternRewriter &rewriter);
+
+  /// Collect pairs of e-nodes `(f(.., a, ..), f(.., b, ..))`, given that `a`
+  /// refines into `b`.
+  void collectCongruentRefinements(
+      mlir::Value a, mlir::Value b,
+      SmallVectorImpl<std::pair<mlir::Operation *, mlir::Operation *>> &pairs);
 };
 
 } // namespace mlir::ematch

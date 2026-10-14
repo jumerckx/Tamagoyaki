@@ -144,7 +144,8 @@ mlir::OpFoldResult mlir::equivalence::ClassOp::fold(FoldAdaptor adaptor) {
   }
 
   // A trivial e-class — a single input — is interchangeable with that input.
-  if (!getLeader() && (getInputs().size() == 1))
+  // Refinement edges would be lost.
+  if (!getLeader() && getRefines().empty() && (getInputs().size() == 1))
     return getInputs().front();
 
   return {};
@@ -197,6 +198,7 @@ mlir::equivalence::ClassOp::canonicalize(ClassOp op,
         // Operand indices change, so any precomputed selection is stale.
         innerClass->removeAttr("min_cost_index");
         innerClass.getInputsMutable().assign(merged);
+        innerClass.getRefinesMutable().append(op.getRefines());
       });
       rewriter.replaceOp(op, innerClass.getResult());
       return success();

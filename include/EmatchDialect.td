@@ -46,15 +46,17 @@ class Ematch_Op<string mnemonic, list<Trait> traits = []> :
 def Ematch_GetClassValsOp : Ematch_Op<"get_class_vals"> {
     let summary = "Get all values in the equivalence class of a value.";
     let description = [{
-        Take a value and return all values in its equivalence class.
+        Take a value and return all values in its equivalence class, followed
+        by the values it may be refined into.
 
         If the value is an equivalence.class result, return the operands of the
-        class and of the classes reachable through its leader chain. If the
-        value is an equivalence.refine result, return the values of the
-        refinement target followed by those of the source, following the
-        chain of refinements, e.g. for
-        `%r = equivalence.refine %a into %x` the result is `[%x, %a]`.
-        Otherwise return a range containing the value itself.
+        class and of the classes reachable through its leader chain, then the
+        values of the e-classes reachable through `refines` edges
+        (transitively). Otherwise return a range containing the value itself.
+
+        A value reached through a refinement is not equivalent to the matched
+        value: rewrites whose match may have used one should use
+        `ematch.union_or_refine`.
     }];
 
     let arguments = (ins PDL_Value:$value);
@@ -125,9 +127,8 @@ def Ematch_RefineOp : Ematch_Op<"refine"> {
     let summary = "Refine values or operations into other values.";
     let description = [{
         Record that `lhs` may be replaced by `rhs` (but not the other way
-        around) by inserting an `equivalence.refine` operation. The users of
-        `lhs` are redirected to the refinement, which is chained on top of any
-        earlier refinement of `lhs`.
+        around) by adding a `refines` edge from the e-class of `lhs` to that
+        of `rhs`.
 
         Supported operand type combinations are the same as for
         `ematch.union`:
@@ -142,6 +143,36 @@ def Ematch_RefineOp : Ematch_Op<"refine"> {
     );
 
     let assemblyFormat = "$lhs `:` type($lhs) `,` $rhs `:` type($rhs) attr-dict";
+}
+
+def Ematch_UnionOrRefineOp : Ematch_Op<"union_or_refine"> {
+    let summary = "Union, or refine if the match went through a refinement.";
+    let description = [{
+        Behaves like `ematch.union` if every pair in `checks` is equivalent, and
+        like `ematch.refine` otherwise. `checks` holds pairs
+        `(operand, matched)`: an operand of a matched e-node and the value the
+        pattern bound for it from `ematch.get_class_vals`. If `matched` was
+        only reached through a refinement edge, the matched term merely
+        refines `lhs`, so `lhs` may be refined into `rhs` but is not
+        equivalent to it.
+
+        ```mlir
+        ematch.union_or_refine %root : !pdl.operation, %range : !pdl.range<value>
+            checks(%operand, %matched : !pdl.value, !pdl.value)
+        ```
+    }];
+
+    let arguments = (ins
+        AnyTypeOf<[PDL_Value, PDL_Operation, PDL_RangeOf<PDL_Value>]>:$lhs,
+        AnyTypeOf<[PDL_Value, PDL_RangeOf<PDL_Value>]>:$rhs,
+        Variadic<PDL_Value>:$checks
+    );
+
+    let assemblyFormat = [{
+        $lhs `:` type($lhs) `,` $rhs `:` type($rhs)
+        (`checks` `(` $checks^ `:` type($checks) `)`)? attr-dict
+    }];
+    let hasVerifier = 1;
 }
 
 def Ematch_IsArgOp : Ematch_Op<"is_arg", [Terminator]> {

@@ -14,13 +14,14 @@
 #include "Utils/GraphScope.h"
 #include "Utils/HashConsPatternRewriter.h"
 #include "Utils/ScopeRepIndex.h"
-#include "mlir/IR/Dominance.h"
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/IR/Value.h"
 #include "mlir/IR/ValueRange.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
 #include "mlir/Support/LLVM.h"
 #include "vendor/mlir/SimpleOperationInfo.h"
+#include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/MapVector.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -140,95 +141,51 @@ void CongruenceEngine::processPendingClassUnions(PatternRewriter &rewriter) {
 // Refinement operations
 //===----------------------------------------------------------------------===//
 
-/// The value a refinement of `val` is built on: its e-class if it has one,
-/// otherwise `val` itself. A refinement does not need a class, so none is
-/// created, except for a block argument: the refinement is placed after its
-/// operands' definitions, and the class gives the argument one.
-static Value getRefinementBase(PatternRewriter &rewriter, Value val) {
-  if (val.getDefiningOp<equivalence::RefineOp>())
-    return val;
-  if (equivalence::ClassOp classOp = getClassOpIfExists(val))
-    return classOp.getResult();
-  if (isa<BlockArgument>(val))
-    return getClassOp(rewriter, val).getResult();
-  return val;
-}
-
-void CongruenceEngine::classRefine(HashConsPatternRewriter &rewriter, Value a,
+bool CongruenceEngine::classRefine(PatternRewriter &rewriter, Value a,
                                    Value b) {
   if (a == b)
-    return;
+    return false;
 
-  Value baseA = getRefinementBase(rewriter, a);
-  Value baseB = getRefinementBase(rewriter, b);
+  equivalence::ClassOp classA = getClassOp(rewriter, a);
+  equivalence::ClassOp classB = getClassOp(rewriter, b);
+  equivalence::ClassOp rootA = getCanonicalLeader(classA);
+  equivalence::ClassOp target = getCanonicalLeader(classB);
+  if (rootA == target)
+    return false;
 
-  // Chain onto the latest refinements: `source` is what `a`'s users refer to,
-  // and refining into `target` keeps every refinement already known for `b`.
-  Value source = getRefinementTop(baseA);
-  Value target = getRefinementTop(baseB);
-
-  // `a` already refines into `b` (this includes `a` and `b` being equivalent).
-  if (refinesTo(source, baseB))
-    return;
-
-  // `b` already refines into `a`, so the two are equivalent. Union them rather
-  // than closing a cycle of refinements.
-  if (refinesTo(target, baseA)) {
-    if (!baseA.getDefiningOp<equivalence::RefineOp>() &&
-        !baseB.getDefiningOp<equivalence::RefineOp>())
-      classUnion(rewriter, baseA, baseB);
-    return;
+  // The edge is a use of the target, so the target must be visible from the
+  // class holding it. Leaders point outward, so the root of `b` is its most
+  // visible class, and an edge on the root of `a` is seen from every class of
+  // `a` (through the leader chain).
+  equivalence::ClassOp source = rootA;
+  if (!encloses(scopeOf(target), scopeOf(source))) {
+    source = classA;
+    if (!encloses(scopeOf(target), scopeOf(source)))
+      return false; // `b` only exists in a scope nested in `a`'s.
   }
 
-  // Place the refinement where both operands are visible: after the later
-  // definition in a shared block, otherwise after whichever definition is
-  // dominated by the other. Neither is a block argument (see
-  // getRefinementBase).
-  Operation *sourceDef = source.getDefiningOp();
-  Operation *targetDef = target.getDefiningOp();
-  DominanceInfo dom;
-  Operation *insertAfter = nullptr;
-  if (sourceDef->getBlock() == targetDef->getBlock())
-    insertAfter = sourceDef->isBeforeInBlock(targetDef) ? targetDef : sourceDef;
-  else if (dom.dominates(sourceDef, targetDef))
-    insertAfter = targetDef;
-  else if (dom.dominates(targetDef, sourceDef))
-    insertAfter = sourceDef;
-  else
-    return; // Neither operand is visible from the other's scope.
+  for (Value existing : source.getRefines())
+    if (areEquivalent(existing, target.getResult()))
+      return false;
 
-  OpBuilder::InsertionGuard guard(rewriter);
-  rewriter.setInsertionPointAfter(insertAfter);
-  auto refineOp = equivalence::RefineOp::create(
-      rewriter, a.getLoc(), source.getType(), source, target);
-  [[maybe_unused]] bool inserted = rewriter.insert(refineOp).succeeded();
-  assert(inserted && "the top of a refinement chain is refined only once");
-
-  // Users of `source` may now use the refinement. Leader links must keep
-  // pointing at a class, and users the refinement does not dominate (e.g. in
-  // an enclosing scope) keep the unrefined value.
-  Value refined = refineOp.getResult();
-  rewriter.replaceUsesWithIf(source, refined, [&](OpOperand &use) {
-    Operation *user = use.getOwner();
-    return user != refineOp && !isa<equivalence::ClassOp>(user) &&
-           dom.properlyDominates(refined, user);
-  });
-
-  // The redirected users may have become congruent; this also signals rebuild
-  // that the e-graph changed.
-  worklist.push_back(refineOp);
+  source.getRefinesMutable().append(target.getResult());
+  hasRefinements = true;
+  refinedClasses.insert(source);
+  refineTargets.insert(target);
+  dirtyRefinements.insert(source);
+  return true;
 }
 
-void CongruenceEngine::classRefine(HashConsPatternRewriter &rewriter,
-                                   Operation *op, ValueRange vals) {
+void CongruenceEngine::classRefine(PatternRewriter &rewriter, Operation *op,
+                                   ValueRange vals) {
   assert(op->getNumResults() == vals.size() &&
          "Operation result count must match value range size");
   for (auto [result, val] : llvm::zip(op->getResults(), vals))
     classRefine(rewriter, result, val);
 }
 
-void CongruenceEngine::classRefine(HashConsPatternRewriter &rewriter,
-                                   ValueRange a, ValueRange b) {
+void CongruenceEngine::classRefine(PatternRewriter &rewriter, ValueRange a,
+                                   ValueRange b) {
   assert(a.size() == b.size() && "Value ranges must have equal size");
   for (auto [va, vb] : llvm::zip(a, b))
     classRefine(rewriter, va, vb);
@@ -251,12 +208,188 @@ void CongruenceEngine::queueClassRefine(ValueRange a, ValueRange b) {
     queueClassRefine(va, vb);
 }
 
-void CongruenceEngine::processPendingClassRefines(
-    HashConsPatternRewriter &rewriter) {
+void CongruenceEngine::processPendingClassRefines(PatternRewriter &rewriter) {
   TAMAGOYAKI_SCOPED_TIMER("processPendingClassRefines");
   for (auto [a, b] : pendingClassRefines)
     classRefine(rewriter, a, b);
   pendingClassRefines.clear();
+}
+
+void CongruenceEngine::notifyENodeInserted(Operation *op) {
+  if (!hasRefinements)
+    return;
+  for (Value operand : op->getOperands())
+    if (auto classOp = operand.getDefiningOp<equivalence::ClassOp>())
+      if (refinedClasses.contains(classOp) || refineTargets.contains(classOp))
+        dirtyRefinements.insert(classOp);
+}
+
+void CongruenceEngine::collectCongruentRefinements(
+    Value a, Value b,
+    SmallVectorImpl<std::pair<Operation *, Operation *>> &pairs) {
+  auto isENode = [](Operation *op) {
+    return !isa<equivalence::ClassOp>(op) && op->getNumResults() > 0 &&
+           op->getNumRegions() == 0 && mlir::isSpeculatable(op);
+  };
+  // Hash an e-node with `val` replaced by a placeholder, so `f(.., a, ..)`
+  // and `f(.., b, ..)` collide.
+  auto hashWith = [](Operation *op, Value val) {
+    return OperationEquivalence::computeHash(
+        op,
+        [&](Value v) { return v == val ? llvm::hash_code(0) : hash_value(v); },
+        OperationEquivalence::ignoreHashValue,
+        OperationEquivalence::IgnoreLocations |
+            OperationEquivalence::IgnoreCommutativity);
+  };
+
+  llvm::DenseMap<llvm::hash_code, SmallVector<Operation *, 1>> byHash;
+  llvm::SmallPtrSet<Operation *, 8> seen;
+  for (Operation *v : b.getUsers())
+    if (isENode(v) && seen.insert(v).second)
+      byHash[hashWith(v, b)].push_back(v);
+  if (byHash.empty())
+    return;
+
+  seen.clear();
+  for (Operation *u : a.getUsers()) {
+    if (!isENode(u) || !seen.insert(u).second)
+      continue;
+    auto it = byHash.find(hashWith(u, a));
+    if (it == byHash.end())
+      continue;
+    for (Operation *v : it->second) {
+      bool congruent = OperationEquivalence::isEquivalentTo(
+          u, v, [&](Value l, Value r) { return success(l == a && r == b); },
+          /*markEquivalent=*/nullptr,
+          OperationEquivalence::IgnoreLocations |
+              OperationEquivalence::IgnoreCommutativity);
+      if (congruent)
+        pairs.emplace_back(u, v);
+    }
+  }
+}
+
+bool CongruenceEngine::unionRefinementCycles(PatternRewriter &rewriter) {
+  // The refinement graph between e-classes, keyed by root class results.
+  auto key = [](Value val) {
+    if (auto classOp = val.getDefiningOp<equivalence::ClassOp>())
+      return getRootLeader(classOp).getResult();
+    return val;
+  };
+  llvm::MapVector<Value, SmallVector<Value, 2>> succs;
+  for (equivalence::ClassOp classOp : refinedClasses) {
+    Value from = key(classOp.getResult());
+    succs[from];
+    for (Value target : classOp.getRefines()) {
+      succs[from].push_back(key(target));
+      succs.try_emplace(key(target));
+    }
+  }
+
+  // Tarjan's strongly connected components, iteratively.
+  struct Frame {
+    Value val;
+    unsigned nextSucc;
+  };
+  llvm::DenseMap<Value, unsigned> order, lowLink;
+  llvm::DenseSet<Value> onStack;
+  SmallVector<Value> sccStack;
+  SmallVector<Frame> dfs;
+  bool changed = false;
+  auto push = [&](Value val) {
+    unsigned index = order.size();
+    order[val] = index;
+    lowLink[val] = index;
+    sccStack.push_back(val);
+    onStack.insert(val);
+    dfs.push_back({val, 0});
+  };
+  for (auto &entry : succs) {
+    if (order.count(entry.first))
+      continue;
+    push(entry.first);
+    while (!dfs.empty()) {
+      Value val = dfs.back().val;
+      ArrayRef<Value> out = succs.find(val)->second;
+      if (dfs.back().nextSucc < out.size()) {
+        Value succ = out[dfs.back().nextSucc++];
+        if (!order.count(succ))
+          push(succ);
+        else if (onStack.contains(succ))
+          lowLink[val] = std::min(lowLink[val], order[succ]);
+        continue;
+      }
+      dfs.pop_back();
+      if (!dfs.empty())
+        lowLink[dfs.back().val] =
+            std::min(lowLink[dfs.back().val], lowLink[val]);
+      if (lowLink[val] != order[val])
+        continue;
+      // `val` is the root of a component: everything in it refines into
+      // everything else, so it is a single e-class.
+      while (true) {
+        Value member = sccStack.pop_back_val();
+        onStack.erase(member);
+        if (member == val)
+          break;
+        classUnion(rewriter, val, member);
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
+bool CongruenceEngine::rebuildRefinements(PatternRewriter &rewriter) {
+  TAMAGOYAKI_SCOPED_TIMER("rebuildRefinements");
+
+  // Unions turn edges into edges within one e-class, or into duplicates.
+  for (equivalence::ClassOp classOp : llvm::to_vector(refinedClasses)) {
+    equivalence::ClassOp root = getRootLeader(classOp);
+    SmallVector<Value> kept;
+    SmallPtrSet<Operation *, 4> seen;
+    for (Value target : classOp.getRefines()) {
+      if (auto targetClass = target.getDefiningOp<equivalence::ClassOp>()) {
+        equivalence::ClassOp targetRoot = getRootLeader(targetClass);
+        if (targetRoot == root || !seen.insert(targetRoot).second)
+          continue;
+      }
+      kept.push_back(target);
+    }
+    if (kept.size() != classOp.getRefines().size())
+      classOp.getRefinesMutable().assign(kept);
+    if (kept.empty())
+      refinedClasses.remove(classOp);
+  }
+
+  // classRefine does not look for cycles, and a union can close one (`a`
+  // refines into `b`, `b` into `c`, then `a == c`). Merge them first: the
+  // next round fuses the classes and drops the edges between them.
+  if (unionRefinementCycles(rewriter))
+    return true;
+
+  // Congruence, for the edges out of and into each dirty class. Collect
+  // before refining: refining appends to the operand lists being scanned.
+  SmallVector<std::pair<Operation *, Operation *>> pairs;
+  for (equivalence::ClassOp classOp : dirtyRefinements.takeVector()) {
+    Value result = classOp.getResult();
+    for (Value target : classOp.getRefines())
+      collectCongruentRefinements(result, target, pairs);
+    if (!refineTargets.contains(classOp))
+      continue;
+    for (OpOperand &use : result.getUses()) {
+      // `refines` is the last operand segment.
+      auto source = dyn_cast<equivalence::ClassOp>(use.getOwner());
+      if (source && use.getOperandNumber() >=
+                        source->getNumOperands() - source.getRefines().size())
+        collectCongruentRefinements(source.getResult(), result, pairs);
+    }
+  }
+  bool changed = false;
+  for (auto [u, v] : pairs)
+    for (auto [resU, resV] : llvm::zip_equal(u->getResults(), v->getResults()))
+      changed |= classRefine(rewriter, resU, resV);
+  return changed;
 }
 
 void CongruenceEngine::repairDuplicate(Operation *dup) {
@@ -294,16 +427,34 @@ void CongruenceEngine::fuseSameScope(HashConsPatternRewriter &rewriter,
     if (existing.insert(in).second)
       add.push_back(in);
   survivor.getInputsMutable().append(add);
+  // Refinement edges out of dup move to survivor; edges into dup follow the
+  // replacement below. Edges that now stay within the e-class are dropped by
+  // rebuildRefinements.
+  survivor.getRefinesMutable().append(dup.getRefines());
 
-  // Redirect every user of dup (e-nodes and any child class whose leader
-  // operand pointed at dup) onto survivor. Same scope => still SSA-valid.
+  // Redirect every user of dup (e-nodes, child classes whose leader operand
+  // pointed at dup, and refinement edges into dup) onto survivor. Same scope
+  // => still SSA-valid.
   rewriter.replaceAllUsesWith(dup.getResult(), survivor.getResult());
 
   dup.getInputsMutable().clear();
   dup.getLeaderMutable().clear();
+  dup.getRefinesMutable().clear();
   dup->remove();
   pendingErase.push_back(dup);
   index.forgetClass(dup);
+
+  if (hasRefinements) {
+    bool refined = refinedClasses.remove(dup);
+    bool targeted = refineTargets.remove(dup);
+    dirtyRefinements.remove(dup);
+    if (refined || !survivor.getRefines().empty())
+      refinedClasses.insert(survivor);
+    if (targeted)
+      refineTargets.insert(survivor);
+    if (refinedClasses.contains(survivor) || refineTargets.contains(survivor))
+      dirtyRefinements.insert(survivor);
+  }
 }
 
 void CongruenceEngine::retargetUsersToDeepest(
@@ -311,11 +462,11 @@ void CongruenceEngine::retargetUsersToDeepest(
   SmallVector<OpOperand *> toFix;
   for (OpOperand &u : rep.getResult().getUses()) {
     Operation *user = u.getOwner();
-    // Skip leader links (a child class pointing at rep); `reorientComponent`
-    // owns those.
-    if (auto uc = llvm::dyn_cast<equivalence::ClassOp>(user))
-      if (uc.getLeader() == rep.getResult())
-        continue;
+    // Skip leader links (a child class pointing at rep), which
+    // `reorientComponent` owns, and refinement edges, which are valid from
+    // any scope rep encloses.
+    if (llvm::isa<equivalence::ClassOp>(user))
+      continue;
     equivalence::ClassOp want = deepestRepEnclosing(row, scopeOf(user));
     if (want && want != rep)
       toFix.push_back(&u);
@@ -337,7 +488,8 @@ bool CongruenceEngine::rebuild(HashConsPatternRewriter &rewriter) {
                  << " dirtyRoots=" << dirtyRoots.size() << "\n";
   });
 
-  if (index.sameScopeDups.empty() && dirtyRoots.empty() && worklist.empty())
+  if (index.sameScopeDups.empty() && dirtyRoots.empty() && worklist.empty() &&
+      dirtyRefinements.empty())
     return false;
 
   // Track ops that get erased during the loop below. Operations queued in
@@ -368,8 +520,15 @@ bool CongruenceEngine::rebuild(HashConsPatternRewriter &rewriter) {
 
   LLVM_DEBUG(index.verify());
 
-  while (!index.sameScopeDups.empty() || !dirtyRoots.empty() ||
-         !worklist.empty()) {
+  // Unions and refinements feed each other: merging classes can merge
+  // refinement chains, and new refinements can make e-nodes congruent. Once
+  // the unions settle, rebuild the refinements and go again if that changed
+  // anything.
+  auto hasWork = [&] {
+    return !index.sameScopeDups.empty() || !dirtyRoots.empty() ||
+           !worklist.empty();
+  };
+  while (hasWork() || (hasRefinements && rebuildRefinements(rewriter))) {
     // Collapse same-scope duplicate classes.
     {
       SmallVector<std::pair<equivalence::ClassOp, equivalence::ClassOp>> batch;
@@ -482,8 +641,18 @@ void CongruenceEngine::hashconsGraph(HashConsPatternRewriter &rewriter,
 
   for (Operation &opRef : graph.getBody().getOps()) {
     Operation *op = &opRef;
-    if (llvm::isa<equivalence::ClassOp>(op))
+    if (auto classOp = llvm::dyn_cast<equivalence::ClassOp>(op)) {
+      // Register the refinements present in the input.
+      if (!classOp.getRefines().empty()) {
+        hasRefinements = true;
+        refinedClasses.insert(classOp);
+        dirtyRefinements.insert(classOp);
+        for (Value target : classOp.getRefines())
+          if (auto targetClass = target.getDefiningOp<equivalence::ClassOp>())
+            refineTargets.insert(targetClass);
+      }
       continue;
+    }
     if (succeeded(rewriter.insert(op)))
       continue;
 
@@ -519,13 +688,10 @@ void CongruenceEngine::repair(HashConsPatternRewriter &rewriter,
   SmallPtrSet<Operation *, 8> scheduledForMerge;
 
   for (Operation *op1 : op->getUsers()) {
-    if (classOp) {
-      // Skip ClassOps that use this result as their leader pointer.
-      if (auto op1class = llvm::dyn_cast<equivalence::ClassOp>(op1)) {
-        assert(op1class.getLeader() == classOp.getResult());
-        continue;
-      }
-    }
+    // Skip ClassOps that use this result as their leader or as a refinement
+    // edge.
+    if (classOp && llvm::isa<equivalence::ClassOp>(op1))
+      continue;
     // Non-speculatable users are never hash-consed, so they must not be merged
     // here either: collapsing two side-effecting users would drop side effects.
     if (!mlir::isSpeculatable(op1))
