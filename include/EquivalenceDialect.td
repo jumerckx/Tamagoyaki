@@ -28,9 +28,9 @@ def Equivalence_Dialect : Dialect {
     let summary = "A dialect for representing e-graphs as MLIR operations.";
     let description = [{
         The equivalence dialect represents e-graphs: `equivalence.graph` holds an
-        unordered region of operations, `equivalence.class` groups values
-        that are known to be equivalent, and `equivalence.refine` records that
-        one value may be replaced by another (but not vice versa).
+        unordered region of operations, and `equivalence.class` groups values
+        that are known to be equivalent and records which e-classes they may
+        be replaced by (refinements).
     }];
     let cppNamespace = "::mlir::equivalence";
 
@@ -114,18 +114,34 @@ def Equivalence_ClassOp : Equivalence_Op<"class", [
         An e-class operation representing a set of equivalent values.
         Optionally carries a `leader` operand for lazy union-find: when
         present, `leader` points to the canonical representative e-class.
+
+        The `refines` operands are refinement edges: the e-class may be
+        replaced by any of them (or what they refine into), but not the other
+        way around. Refinement is a preorder between distinct e-classes, never
+        part of an e-class: the users of each e-class keep referring to it.
+
+        ```mlir
+        %x = equivalence.class %arg0 : i32
+        %a = equivalence.class %add refines %x : i32
+        ```
+
+        Rebuilding the e-graph closes refinements under congruence (if `%a`
+        refines into `%b`, then `f(%a)` refines into `f(%b)` whenever both
+        exist) and unions the e-classes on a cycle of refinements. Extraction
+        ignores refinements.
     }];
 
     let arguments = (ins 
         Variadic<AnyType>:$inputs,
         Optional<AnyType>:$leader,
+        Variadic<AnyType>:$refines,
         OptionalAttr<I64Attr>:$min_cost_index
     );
 
     let results = (outs AnyType:$result);
 
     let assemblyFormat = [{
-        $inputs (`leader` $leader^)? (` ` `(` `min_cost_index` `=` $min_cost_index^ `)` )? attr-dict `:` type($result)
+        $inputs (`leader` $leader^)? (`refines` $refines^)? (` ` `(` `min_cost_index` `=` $min_cost_index^ `)` )? attr-dict `:` type($result)
     }];
 
     let hasFolder = 1;
@@ -143,36 +159,6 @@ def Equivalence_ClassOp : Equivalence_Op<"class", [
     // established by the `equivalence-restore-invariants` pass, not enforced
     // here.
     let hasVerifier = 1;
-}
-
-def Equivalence_RefineOp : Equivalence_Op<"refine", [
-    Pure,
-    SameOperandsAndResultType,
-]> {
-    let summary = "A directed refinement of one value into another";
-    let description = [{
-        `%r = equivalence.refine %a into %b` states that `%a` may be replaced
-        by `%b`, but not the other way around. Users of `%r` may therefore be
-        matched against either `%b` or `%a`.
-
-        Unlike `equivalence.class`, which is symmetric and partitions values, a
-        value can be refined several times. Successive refinements form a chain
-        in which each refinement takes the previous one as its source:
-
-        ```mlir
-        %s = llvm.sub %x, %c1 : i32
-        %a = llvm.add %s, %c1 overflow<nsw> : i32
-        %r = equivalence.refine %a into %x : i32
-        %c = llvm.icmp "sgt" %r, %s : i32
-        ```
-    }];
-
-    let arguments = (ins AnyType:$source, AnyType:$target);
-    let results = (outs AnyType:$result);
-
-    let assemblyFormat = [{
-        $source `into` $target attr-dict `:` type($result)
-    }];
 }
 
 //===----------------------------------------------------------------------===//

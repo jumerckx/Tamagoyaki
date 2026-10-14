@@ -151,7 +151,7 @@ convertToSoN(mlir::FunctionOpInterface funcOp,
     auto classOp = mlir::equivalence::ClassOp::create(
         builder, value.getLoc(), mlir::TypeRange{value.getType()},
         mlir::ValueRange{value}, /*leader=*/mlir::Value{},
-        /*min_cost_index=*/nullptr);
+        /*refines=*/mlir::ValueRange{}, /*min_cost_index=*/nullptr);
     value.replaceUsesWithIf(classOp.getResult(), [&](mlir::OpOperand &use) {
       return use.getOwner() != classOp &&
              use.getOwner()->getBlock() == &graphBlock;

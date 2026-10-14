@@ -8,34 +8,31 @@
 // 1. add nsw (sub x, c), c  ~>  x   (a refinement: x is defined where a is
 //                                    poison, but not the other way around)
 // 2. icmp sgt (add nsw s, 1), s  -->  true
-// Rule 2 must still match after rule 1 redirected the icmp to the refinement:
-// get_class_vals of the refinement yields both %x and %a. Rule 1 keeps firing
-// in later iterations but must not insert a second refinement.
+// Rule 1 adds a refinement edge from the add's e-class to x's; the icmp keeps
+// using the add's e-class. Rule 2 still matches the add itself, so it is a
+// union and not a refinement. Rule 1 keeps firing in later iterations but
+// must not add a second edge.
 
 // CHECK-LABEL: func.func @refine
 // CHECK:         %[[X:.*]] = equivalence.class %arg0 : i32
 // CHECK:         arith.subi %[[X]]
 // CHECK-NEXT:    %[[S:.*]] = equivalence.class %{{.*}} : i32
 // CHECK:         arith.addi %[[S]], %{{.*}} overflow<nsw>
-// CHECK-NEXT:    %[[A:.*]] = equivalence.class %{{.*}} : i32
-// CHECK-NEXT:    %[[R:.*]] = equivalence.refine %[[A]] into %[[X]] : i32
-// CHECK-NOT:     equivalence.refine
+// CHECK-NEXT:    %[[A:.*]] = equivalence.class %{{.*}} refines %[[X]] : i32
 // CHECK:         %[[TRUE:.*]] = arith.constant true
-// CHECK:         %[[CMP:.*]] = arith.cmpi sgt, %[[R]], %[[S]] : i32
+// CHECK:         %[[CMP:.*]] = arith.cmpi sgt, %[[A]], %[[S]] : i32
 // CHECK-NEXT:    %[[C:.*]] = equivalence.class %[[CMP]], %[[TRUE]] : i1
 // CHECK-NEXT:    equivalence.yield %[[C]] : i1
 
-// Without single-element classes, the refinement uses the add directly rather
-// than wrapping it in a class of its own.
+// Without single-element classes, the refinement creates a class for the add.
 
 // CHECK-LABEL: func.func @refine_no_classes
 // CHECK:         %[[X:.*]] = equivalence.class %arg0 : i32
 // CHECK:         %[[S:.*]] = arith.subi %[[X]]
-// CHECK-NEXT:    %[[A:.*]] = arith.addi %[[S]], %{{.*}} overflow<nsw>
-// CHECK-NEXT:    %[[R:.*]] = equivalence.refine %[[A]] into %[[X]] : i32
-// CHECK-NOT:     equivalence.refine
+// CHECK-NEXT:    %[[ADD:.*]] = arith.addi %[[S]], %{{.*}} overflow<nsw>
+// CHECK-NEXT:    %[[A:.*]] = equivalence.class %[[ADD]] refines %[[X]] : i32
 // CHECK:         %[[TRUE:.*]] = arith.constant true
-// CHECK:         %[[CMP:.*]] = arith.cmpi sgt, %[[R]], %[[S]] : i32
+// CHECK:         %[[CMP:.*]] = arith.cmpi sgt, %[[A]], %[[S]] : i32
 // CHECK-NEXT:    %[[C:.*]] = equivalence.class %[[CMP]], %[[TRUE]] : i1
 // CHECK-NEXT:    equivalence.yield %[[C]] : i1
 
@@ -133,7 +130,7 @@ module @patterns {
         %value = pdl_interp.get_attribute "value" of %cst
         pdl_interp.check_attribute %value is 1 : i32 -> ^cst2, ^cstNext
       ^cst2:
-        pdl_interp.record_match @rewriters::@sgt_true(%root : !pdl.operation) : benefit(1), loc([]), root("arith.cmpi") -> ^cstNext
+        pdl_interp.record_match @rewriters::@sgt_true(%root, %cmpLhs, %w, %addRhs, %k : !pdl.operation, !pdl.value, !pdl.value, !pdl.value, !pdl.value) : benefit(1), loc([]), root("arith.cmpi") -> ^cstNext
       } -> ^addNext
     } -> ^end
   }
@@ -145,14 +142,14 @@ module @patterns {
       ematch.refine %res : !pdl.value, %xClass : !pdl.value
       pdl_interp.finalize
     }
-    pdl_interp.func @sgt_true(%root: !pdl.operation) {
+    pdl_interp.func @sgt_true(%root: !pdl.operation, %cmpLhs: !pdl.value, %add: !pdl.value, %addRhs: !pdl.value, %one: !pdl.value) {
       %i1 = pdl_interp.create_type i1
       %true = pdl_interp.create_attribute true
       %op = pdl_interp.create_operation "arith.constant" {"value" = %true} -> (%i1 : !pdl.type)
       %dedup = ematch.dedup %op
       %res = pdl_interp.get_result 0 of %dedup
       %range = pdl_interp.create_range %res : !pdl.value
-      ematch.union %root : !pdl.operation, %range : !pdl.range<value>
+      ematch.union_or_refine %root : !pdl.operation, %range : !pdl.range<value> checks(%cmpLhs, %add, %addRhs, %one : !pdl.value, !pdl.value, !pdl.value, !pdl.value)
       pdl_interp.finalize
     }
   }

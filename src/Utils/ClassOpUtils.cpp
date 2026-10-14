@@ -22,26 +22,27 @@
 using namespace mlir;
 using namespace mlir::ematch;
 
-ClassValIterator::ClassValIterator(Value val) {
+ClassValIterator::ClassValIterator(Value val, bool followRefinements)
+    : followRefinements(followRefinements) {
   enter(val);
   skipExhausted();
 }
 
 void ClassValIterator::enter(Value val) {
-  if (auto refineOp = val.getDefiningOp<equivalence::RefineOp>()) {
-    // Visit the target before the source: the source is pushed first so the
-    // target is popped first.
-    if (visited.insert(refineOp).second) {
-      pending.push_back(refineOp.getSource());
-      pending.push_back(refineOp.getTarget());
-    }
-  } else if (auto classOp = val.getDefiningOp<equivalence::ClassOp>()) {
-    if (visited.insert(classOp).second) {
-      this->classOp = classOp;
-      index = 0;
-    }
+  if (auto next = val.getDefiningOp<equivalence::ClassOp>()) {
+    if (visited.insert(next).second)
+      enterClass(next);
   } else {
     single = val;
+  }
+}
+
+void ClassValIterator::enterClass(equivalence::ClassOp next) {
+  classOp = next;
+  index = 0;
+  if (followRefinements) {
+    // Reversed, so the targets are popped in order.
+    llvm::append_range(pending, llvm::reverse(next.getRefines()));
   }
 }
 
@@ -71,9 +72,10 @@ void ClassValIterator::skipExhausted() {
       Value leader = classOp.getLeader();
       auto next = leader ? leader.getDefiningOp<equivalence::ClassOp>()
                          : equivalence::ClassOp();
-      classOp =
-          next && visited.insert(next).second ? next : equivalence::ClassOp();
+      classOp = nullptr;
       index = 0;
+      if (next && visited.insert(next).second)
+        enterClass(next);
       continue;
     }
     if (pending.empty())
@@ -83,14 +85,16 @@ void ClassValIterator::skipExhausted() {
 }
 
 ClassValRange mlir::ematch::getClassVals(mlir::PatternRewriter &rewriter,
-                                         mlir::Value val) {
-  return ClassValRange(ClassValIterator(val), ClassValIterator());
+                                         mlir::Value val,
+                                         bool followRefinements) {
+  return ClassValRange(ClassValIterator(val, followRefinements),
+                       ClassValIterator());
 }
 
 mlir::Value
 mlir::ematch::getClassRepresentative(mlir::PatternRewriter &rewriter,
                                      mlir::Value val) {
-  return *ClassValIterator(val);
+  return *ClassValIterator(val, /*followRefinements=*/false);
 }
 
 equivalence::ClassOp
@@ -120,50 +124,11 @@ equivalence::ClassOp mlir::ematch::getRootLeader(equivalence::ClassOp classOp) {
 bool mlir::ematch::areEquivalent(Value lhs, Value rhs) {
   if (lhs == rhs)
     return true;
-  auto lhsClass = lhs.getDefiningOp<equivalence::ClassOp>();
-  auto rhsClass = rhs.getDefiningOp<equivalence::ClassOp>();
+  auto lhsClass = getClassOpIfExists(lhs);
+  auto rhsClass = getClassOpIfExists(rhs);
   if (!lhsClass || !rhsClass)
     return false;
   return getRootLeader(lhsClass) == getRootLeader(rhsClass);
-}
-
-bool mlir::ematch::refinesTo(Value from, Value to) {
-  auto toClass = to.getDefiningOp<equivalence::ClassOp>();
-  equivalence::ClassOp toRoot = toClass ? getRootLeader(toClass) : nullptr;
-  SmallVector<Value> worklist{from};
-  SmallPtrSet<Operation *, 8> visited;
-  while (!worklist.empty()) {
-    Value val = worklist.pop_back_val();
-    if (val == to)
-      return true;
-    Operation *def = val.getDefiningOp();
-    if (!def || !visited.insert(def).second)
-      continue;
-    if (auto refineOp = dyn_cast<equivalence::RefineOp>(def)) {
-      worklist.push_back(refineOp.getSource());
-      worklist.push_back(refineOp.getTarget());
-    } else if (auto classOp = dyn_cast<equivalence::ClassOp>(def)) {
-      if (toRoot && getRootLeader(classOp) == toRoot)
-        return true;
-    }
-  }
-  return false;
-}
-
-Value mlir::ematch::getRefinementTop(Value val) {
-  bool advanced = true;
-  while (advanced) {
-    advanced = false;
-    for (OpOperand &use : val.getUses()) {
-      auto refineOp = dyn_cast<equivalence::RefineOp>(use.getOwner());
-      if (refineOp && &use == &refineOp.getSourceMutable()) {
-        val = refineOp.getResult();
-        advanced = true;
-        break;
-      }
-    }
-  }
-  return val;
 }
 
 mlir::Value mlir::ematch::getClassResult(mlir::PatternRewriter &rewriter,
@@ -217,7 +182,7 @@ equivalence::ClassOp mlir::ematch::getClassOp(mlir::PatternRewriter &rewriter,
   builder.setInsertionPointAfterValue(val);
   auto classOp = equivalence::ClassOp::create(
       builder, val.getLoc(), TypeRange{val.getType()}, ValueRange{val},
-      /*leader=*/Value{}, /*min_cost_index=*/nullptr);
+      /*leader=*/Value{}, /*refines=*/ValueRange{}, /*min_cost_index=*/nullptr);
   rewriter.replaceUsesWithIf(
       val, classOp.getResult(),
       [&classOp](OpOperand &operand) { return operand.getOwner() != classOp; });

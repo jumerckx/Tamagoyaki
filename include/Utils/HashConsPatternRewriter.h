@@ -74,7 +74,7 @@ public:
 
   /// Register the congruence engine so that congruences discovered while
   /// re-keying modified ops (see `finalizeOpModification`) can be turned into
-  /// unions.
+  /// unions, and so it learns about inserted e-nodes.
   void setEngine(CongruenceEngine *e) { engine = e; }
 
 private:

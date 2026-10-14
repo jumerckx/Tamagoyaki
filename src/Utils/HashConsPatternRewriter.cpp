@@ -104,6 +104,8 @@ LogicalResult HashConsPatternRewriter::insert(Operation *op) {
 
   scope->insert(op, op);
   nodeCount++;
+  if (engine)
+    engine->notifyENodeInserted(op);
   LLVM_DEBUG(llvm::dbgs() << "inserted operation into hash-cons scope: " << *op
                           << "\n");
   return success();
