@@ -4,6 +4,7 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/MLIRContext.h"
 #include "mlir/IR/PatternMatch.h"
+#include <mlir/Support/LLVM.h>
 
 namespace mlir::ematch {
 
@@ -12,6 +13,30 @@ namespace mlir::ematch {
 /// get_class_representative, get_class_result, get_class_results, union, dedup)
 /// is replaced by a pdl_interp.apply_rewrite with the same name and signature.
 void convertEmatchOpsToApplyRewrites(ModuleOp module);
+
+/// Rewrite the `match.matcher` and `match.rewriter` ops in the given module, as
+/// produced by convert-pdl-to-match, so that they match and rewrite over the
+/// e-classes of an e-graph. Expects one matcher per pattern, i.e. it runs
+/// before the matchers are combined. The e-matching logic is expressed with
+/// ematch ops, which convertEmatchOpsToMatch lowers.
+void ematchifyMatchPatterns(ModuleOp module);
+
+/// Lower the ematch ops in the `match.matcher` and `match.rewriter` ops of the
+/// given module to `match.apply_native_rewrite`/`apply_native_constraint` ops
+/// with the names under which runSaturation registers their implementations.
+void convertEmatchOpsToMatch(ModuleOp module);
+
+/// Lower the `pdl.pattern` ops in the given module to e-matching `pdl_interp`
+/// by going through the match dialect: convert-pdl-to-match, ematchify,
+/// match-combine-matchers (with deferred loops), convert-ematch-to-match and
+/// convert-match-to-pdl-interp. Before the ematch ops are lowered, the e-class
+/// helpers are moved to their first use.
+LogicalResult convertPDLToEmatchPDLInterp(ModuleOp module);
+
+/// The e-matching passes take their patterns as either e-matching `pdl_interp`
+/// or `pdl`. Lower the `pdl.pattern` ops in the given patterns module, if any,
+/// with convertPDLToEmatchPDLInterp.
+LogicalResult lowerPDLPatterns(ModuleOp patternsModule);
 
 /// Run equality saturation on the given IR module using the provided PDL
 /// pattern module. Returns true on success.

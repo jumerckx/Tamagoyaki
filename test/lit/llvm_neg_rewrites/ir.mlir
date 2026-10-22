@@ -1,6 +1,6 @@
 // RUN: tamagoyaki-opt -equivalence-insert-graph -ematch-saturate=patterns-file=%p/patterns.mlir %s | FileCheck %s
 
-// Saturating with the two negation rewrites (see patterns.pdl.mlir):
+// Saturating with the two negation rewrites (see patterns.mlir):
 //   -a - -b  ->  b - a         (introduces %6, an e-node of %4-%5's e-class)
 //   -a + -b  ->  -(a + b)      (introduces 0 - (a + b), an e-node of %4+%5's e-class)
 

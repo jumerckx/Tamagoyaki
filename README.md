@@ -44,7 +44,9 @@ The `ematch` dialect extends the `pdl_interp` dialect to support e-matching for 
 
 #### Passes
 
-- **`-ematch-saturate`**: Applies pattern rewriting to the program using equality saturation. This pass takes PDL-defined patterns and repeatedly applies matching and rewriting rules until a fixed point is reached (saturation), ensuring all possible equivalent expressions are explored.
+- **`-ematch-saturate`**: Applies pattern rewriting to the program using equality saturation. This pass takes PDL-defined patterns and repeatedly applies matching and rewriting rules until a fixed point is reached (saturation), ensuring all possible equivalent expressions are explored. Patterns can be provided as `pdl_interp` instructions, or as `pdl` patterns, in which case they are first lowered with `-ematch-convert-pdl-to-pdl-interp`.
+
+- **`-ematch-convert-pdl-to-pdl-interp`**: Lowers `pdl` patterns to `pdl_interp` that matches and rewrites over e-classes. It goes through the `match` dialect: `-convert-pdl-to-match`, `-ematchify`, `-match-combine-matchers=defer-loops`, `-convert-ematch-to-match`, `-convert-match-to-pdl-interp`.
 
 - **`-ematch-saturate-benchmark`**: Runs the equality saturation process N times for benchmarking and profiling. Each iteration clones the input IR to ensure fresh state, making it useful for performance analysis and optimization validation.
 

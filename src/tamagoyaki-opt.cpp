@@ -10,6 +10,9 @@
 #include "EquivalenceDialect.h"
 #include "TamagoyakiTiming.h"
 
+#include "mlir/Conversion/MatchConversionPasses.h"
+#include "mlir/Dialect/Match/IR/Match.h"
+#include "mlir/Dialect/Match/Transforms/Passes.h"
 #include "mlir/InitAllDialects.h"
 #include "mlir/InitAllPasses.h"
 #include "mlir/Tools/mlir-opt/MlirOptMain.h"
@@ -24,9 +27,11 @@ int main(int argc, char **argv) {
   mlir::registerAllPasses();
   mlir::equivalence::registerEquivalencePasses();
   mlir::ematch::registerEmatchPasses();
+  mlir::registerMatchConversionPasses();
+  mlir::match::registerMatchPasses();
   mlir::DialectRegistry registry;
   registry.insert<mlir::equivalence::EquivalenceDialect,
-                  mlir::ematch::EmatchDialect>();
+                  mlir::ematch::EmatchDialect, mlir::match::MatchDialect>();
   registerAllDialects(registry);
 
   int result = mlir::asMainReturnCode(

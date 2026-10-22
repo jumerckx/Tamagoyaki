@@ -58,6 +58,8 @@ separate_arguments(LLVM_DEFINITIONS_LIST NATIVE_COMMAND ${LLVM_DEFINITIONS})
 add_definitions(${LLVM_DEFINITIONS_LIST})
 
 add_subdirectory(include)
+# Out-of-tree copy of the (not yet upstreamed) match dialect; see match/README.md.
+add_subdirectory(match)
 add_subdirectory(src)
 add_subdirectory(test)
 
@@ -71,7 +73,7 @@ endif()
 # check-all: run all test suites that are enabled. Subprojects without a
 # lit suite are still pulled in as build deps so CI fails on a compile
 # break instead of silently skipping them.
-set(CHECK_ALL_DEPENDS check-tamagoyaki)
+set(CHECK_ALL_DEPENDS check-tamagoyaki check-match)
 if(BUILD_CRANELIFT_MLIR)
   list(APPEND CHECK_ALL_DEPENDS check-cranelift-mlir)
 endif()

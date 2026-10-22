@@ -77,17 +77,12 @@ We have also written custom python tools to convert rewrite rules in a different
 :::
 
 To execute `pdl` patterns, the IR first needs to be lowered to [`pdl_interp`](https://mlir.llvm.org/docs/Dialects/PDLInterpOps/).
-MLIR has a pass `--convert-pdl-to-pdl-interp`, but that pass is (currently) unaware of the changes to matching logic that need to be made to achieve e-matching.
-We have implemented a version of the pdl lowering procedure in [xDSL](https://xdsl.dev), a Python compiler framework that is compatible with MLIR:
+MLIR has a pass `--convert-pdl-to-pdl-interp`, but that pass is unaware of the changes to matching logic that need to be made to achieve e-matching.
+Instead you can use:
 ```sh
-xdsl-opt -p convert-pdl-to-pdl-interp{optimize_for_eqsat=true} pattern.mlir > pattern_pdl_interp.mlir
+tamagoyaki-opt -ematch-convert-pdl-to-pdl-interp pattern.mlir > pattern_pdl_interp.mlir
 ```
-:::{note}
-If you're using [`uv`](https://github.com/astral-sh/uv), you don't have to install `xdsl` explicitly and can instead run:
-```sh
-uv run --with=xdsl xdsl-opt ...
-```
-:::
+`-ematch-saturate` also accepts the `pdl` patterns directly and runs this lowering itself.
 
 ## Saturating
 To run equality saturation:
