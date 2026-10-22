@@ -23,6 +23,9 @@
 #include "TamagoyakiTiming.h"
 #include "Utils/ClassOpUtils.h"
 #include "Utils/HashConsPatternRewriter.h"
+#include "mlir/Dialect/Match/IR/Match.h"
+#include "mlir/Dialect/PDL/IR/PDL.h"
+#include "mlir/Dialect/PDL/IR/PDLOps.h"
 #include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -66,6 +69,8 @@ namespace mlir::ematch {
 #define GEN_PASS_DEF_CONVERTEMATCHTOPDLINTERPPASS
 #define GEN_PASS_DEF_APPLYPDLINTERPPASS
 #define GEN_PASS_DEF_EQUIVALENCEGRAPHCONTAINSPASS
+#define GEN_PASS_DEF_EMATCHIFYPASS
+#define GEN_PASS_DEF_CONVERTPDLTOEMATCHPDLINTERPPASS
 #include "EmatchPasses.h.inc"
 
 namespace {
@@ -109,6 +114,14 @@ resolvePatternAndIrModules(ModuleOp module, StringRef patternsFile,
     return failure();
   }
   return success();
+}
+
+/// The e-matching passes take their patterns as either e-matching `pdl_interp`
+/// or `pdl`. Lower the `pdl.pattern` ops, if any, to the former.
+LogicalResult lowerPDLPatterns(ModuleOp patternsModule) {
+  if (patternsModule.getOps<pdl::PatternOp>().empty())
+    return success();
+  return convertPDLToEmatchPDLInterp(patternsModule);
 }
 
 //===----------------------------------------------------------------------===//
@@ -229,6 +242,8 @@ struct EmatchSaturatePass
       return;
     }
 
+    if (failed(lowerPDLPatterns(patternsModule)))
+      return signalPassFailure();
     convertEmatchOpsToApplyRewrites(patternsModule);
 
     patternsModule.getOperation()->remove();
@@ -265,6 +280,8 @@ struct EmatchSaturateBenchmarkPass
     if (!patternsModule || !irModule)
       return;
 
+    if (failed(lowerPDLPatterns(patternsModule)))
+      return signalPassFailure();
     convertEmatchOpsToApplyRewrites(patternsModule);
 
     auto totalStartTime = std::chrono::high_resolution_clock::now();
@@ -349,6 +366,28 @@ struct ConvertEmatchToPDLInterpPass
   }
 };
 
+struct EmatchifyPass : public impl::EmatchifyPassBase<EmatchifyPass> {
+  using impl::EmatchifyPassBase<EmatchifyPass>::EmatchifyPassBase;
+
+  void runOnOperation() final { ematchifyMatchPatterns(getOperation()); }
+};
+
+struct ConvertPDLToEmatchPDLInterpPass
+    : public impl::ConvertPDLToEmatchPDLInterpPassBase<
+          ConvertPDLToEmatchPDLInterpPass> {
+  using impl::ConvertPDLToEmatchPDLInterpPassBase<
+      ConvertPDLToEmatchPDLInterpPass>::ConvertPDLToEmatchPDLInterpPassBase;
+
+  void runOnOperation() final {
+    ModuleOp module = getOperation();
+    if (ModuleOp patternsModule = module.lookupSymbol<ModuleOp>(
+            StringAttr::get(module->getContext(), "patterns")))
+      module = patternsModule;
+    if (failed(convertPDLToEmatchPDLInterp(module)))
+      signalPassFailure();
+  }
+};
+
 struct EquivalenceGraphContainsPass
     : public impl::EquivalenceGraphContainsPassBase<
           EquivalenceGraphContainsPass> {
@@ -374,6 +413,8 @@ struct EquivalenceGraphContainsPass
             parsedPatternsModule, patternsModule, irModule)))
       return signalPassFailure();
 
+    if (failed(lowerPDLPatterns(patternsModule)))
+      return signalPassFailure();
     // Lower the e-class helper ops used by the matcher (get_class_*, ...) to
     // pdl_interp.apply_rewrite.
     convertEmatchOpsToApplyRewrites(patternsModule);

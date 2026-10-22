@@ -199,9 +199,14 @@ def EmatchSaturatePass : Pass<"ematch-saturate", "::mlir::ModuleOp"> {
     let summary = "Run equality saturation on the program with the provided patterns.";
     let description = [{
         This pass applies pattern rewriting to operations in the ematch dialect.
+
+        The patterns are either e-matching `pdl_interp` or `pdl` patterns. The
+        latter are lowered with `ematch-convert-pdl-to-pdl-interp` first.
     }];
     let dependentDialects = [
         "::mlir::ematch::EmatchDialect",
+        "::mlir::match::MatchDialect",
+        "::mlir::pdl::PDLDialect",
         "::mlir::pdl_interp::PDLInterpDialect",
     ];
     let options = [
@@ -223,9 +228,12 @@ def EmatchSaturateBenchmarkPass : Pass<"ematch-saturate-benchmark", "::mlir::Mod
     let description = [{
         This pass runs the ematch-saturate pass N times, cloning the IR module
         each time to ensure fresh input. Useful for profiling and benchmarking.
+        Like `ematch-saturate`, it accepts `pdl` patterns too.
     }];
     let dependentDialects = [
         "::mlir::ematch::EmatchDialect",
+        "::mlir::match::MatchDialect",
+        "::mlir::pdl::PDLDialect",
         "::mlir::pdl_interp::PDLInterpDialect",
     ];
     let options = [
@@ -263,10 +271,15 @@ def EquivalenceGraphContainsPass : Pass<"equivalence-graph-contains", "::mlir::M
         `ematch.is_arg` to pin operands to concrete block arguments, fully
         grounding the query. For each pattern the pass prints whether some
         recorded match has its root in the e-class of a yielded value.
+
+        Like `ematch-saturate`, it accepts `pdl` patterns too (which cannot use
+        `ematch.is_arg`).
     }];
     let dependentDialects = [
         "::mlir::ematch::EmatchDialect",
         "::mlir::equivalence::EquivalenceDialect",
+        "::mlir::match::MatchDialect",
+        "::mlir::pdl::PDLDialect",
         "::mlir::pdl_interp::PDLInterpDialect",
     ];
     let options = [
@@ -284,6 +297,66 @@ def ConvertEmatchToPDLInterpPass : Pass<"convert-ematch-to-pdl-interp", "::mlir:
         Note that this transformation also happens in ematch-saturate by default.
     }];
     let dependentDialects = ["::mlir::pdl_interp::PDLInterpDialect"];
+}
+
+def EmatchifyPass : Pass<"ematchify", "::mlir::ModuleOp"> {
+    let summary = "Make match-dialect patterns match and rewrite over e-classes.";
+    let description = [{
+        Rewrites the `match.matcher` and `match.rewriter` ops produced by
+        `convert-pdl-to-match` so that they operate on the e-classes of an
+        e-graph instead of on concrete values and operations. The e-class
+        helpers are emitted as `match.apply_native_rewrite` and
+        `match.apply_native_constraint` ops named after the corresponding
+        ematch operations.
+
+        In the matchers:
+
+        * A matched result (`match.get_result(s)` unwrapped by
+          `match.is_not_null`) is mapped to its e-class result with
+          `get_class_result(s)`.
+        * `match.get_defining_op %v` is tried for every member of the e-class
+          of `%v`: it moves, together with the rest of its block, into a
+          `match.foreach` over `get_class_vals %v`. The defining op of a value
+          range is still taken from the range itself.
+        * `match.equal` on values becomes the `are_equivalent` constraint.
+        * A matched operand passed to `match.success` is replaced by its
+          `get_class_representative`, and an e-class result by the value it
+          was computed from.
+
+        In the rewriters:
+
+        * Value (range) arguments, `pdl.result(s)` of created ops are mapped to
+          their e-class result(s).
+        * Created operations, including operations returned by native
+          rewrites, are deduplicated against the hash-cons with `dedup`.
+        * `match.replace` becomes a `union` of the replaced operation with its
+          replacement values, and `match.erase` is dropped.
+
+        The pass expects one matcher per pattern, i.e. it runs before
+        `match-combine-matchers`. That pass should run with `defer-loops`, so
+        that the e-class loops end up nested under the checks that do not need
+        them.
+    }];
+    let dependentDialects = ["::mlir::match::MatchDialect"];
+}
+
+def ConvertPDLToEmatchPDLInterpPass
+    : Pass<"ematch-convert-pdl-to-pdl-interp", "::mlir::ModuleOp"> {
+    let summary = "Lower PDL patterns to e-matching pdl_interp.";
+    let description = [{
+        Lowers the `pdl.pattern` ops in the module to a `pdl_interp` matcher
+        and rewriters that match and rewrite over e-classes, as consumed by
+        `ematch-saturate`. This runs `convert-pdl-to-match`, `ematchify`,
+        `match-combine-matchers{defer-loops}` and
+        `convert-match-to-pdl-interp`.
+
+        If the module has a `@patterns` submodule, that submodule is lowered
+        instead.
+    }];
+    let dependentDialects = [
+        "::mlir::match::MatchDialect",
+        "::mlir::pdl_interp::PDLInterpDialect",
+    ];
 }
 
 #endif // EMATCH_DIALECT
