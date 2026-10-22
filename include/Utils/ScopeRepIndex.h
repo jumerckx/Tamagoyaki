@@ -60,9 +60,6 @@ struct ScopeRepIndex {
   void mergeScopeRows(equivalence::ClassOp winRoot,
                       equivalence::ClassOp loseRoot);
 
-  /// Drop every trace of `c` from the index. Harmless if `c` is absent.
-  void forgetClass(equivalence::ClassOp c);
-
   /// Point every non-outermost rep's leader at its nearest enclosing rep in
   /// `row`; clear the outermost rep's leader. Rewires leader operands directly.
   void reorientComponent(SmallVectorImpl<equivalence::ClassOp> &row);

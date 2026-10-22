@@ -137,19 +137,10 @@ void CongruenceEngine::processPendingClassUnions(PatternRewriter &rewriter) {
 
 void CongruenceEngine::repairDuplicate(Operation *dup) {
   // `dup` was found congruent to an existing e-node while being re-keyed after
-  // an operand change. Both share operands, so scheduling repair of an
-  // operand-defining op lets repair()'s normal duplicate-merging path collapse
-  // them.
-  for (Value operand : dup->getOperands())
-    if (Operation *def = operand.getDefiningOp()) {
-      worklist.push_back(def);
-      return;
-    }
-
-  // The congruence is detected while re-keying `dup` after one of its operands
-  // was rewritten to a ClassOp result, so at least one operand must have a
-  // defining op. If none does, the duplicate would silently leak.
-  llvm_unreachable("repairDuplicate: congruent op has no defining-op operand");
+  // an operand change. Remember it so rebuild can merge it straight into the
+  // hash-cons entry it collided with, instead of re-scanning all users of a
+  // shared operand (which may have a very large fan-out).
+  pendingDuplicates.push_back(dup);
 }
 
 //===----------------------------------------------------------------------===//
@@ -162,12 +153,23 @@ void CongruenceEngine::fuseSameScope(HashConsPatternRewriter &rewriter,
   assert(scopeOf(dup) == scopeOf(survivor) &&
          "fuseSameScope requires a shared scope");
 
-  // Dedup-append dup's inputs into survivor.
-  llvm::SmallPtrSet<Value, 16> existing(survivor.getInputs().begin(),
-                                        survivor.getInputs().end());
+  // Dedup-append dup's inputs into survivor. The survivor's input list can
+  // grow large, so instead of hashing all of it, test membership through the
+  // (short) use-list of each of dup's inputs. Inputs are the leading operand
+  // segment, so an operand number below the input count marks an input use
+  // (as opposed to the leader operand).
+  Operation *survivorOp = survivor.getOperation();
+  unsigned numSurvivorInputs = survivor.getInputs().size();
+  auto isSurvivorInput = [&](Value v) {
+    return llvm::any_of(v.getUses(), [&](OpOperand &use) {
+      return use.getOwner() == survivorOp &&
+             use.getOperandNumber() < numSurvivorInputs;
+    });
+  };
   SmallVector<Value> add;
+  llvm::SmallPtrSet<Value, 8> added;
   for (Value in : dup.getInputs())
-    if (existing.insert(in).second)
+    if (!isSurvivorInput(in) && added.insert(in).second)
       add.push_back(in);
   survivor.getInputsMutable().append(add);
 
@@ -179,7 +181,7 @@ void CongruenceEngine::fuseSameScope(HashConsPatternRewriter &rewriter,
   dup.getLeaderMutable().clear();
   dup->remove();
   pendingErase.push_back(dup);
-  index.forgetClass(dup);
+  index.unionRank.erase(dup.getOperation());
 }
 
 void CongruenceEngine::retargetUsersToDeepest(
@@ -213,7 +215,8 @@ bool CongruenceEngine::rebuild(HashConsPatternRewriter &rewriter) {
                  << " dirtyRoots=" << dirtyRoots.size() << "\n";
   });
 
-  if (index.sameScopeDups.empty() && dirtyRoots.empty() && worklist.empty())
+  if (index.sameScopeDups.empty() && dirtyRoots.empty() && worklist.empty() &&
+      pendingDuplicates.empty())
     return false;
 
   // Track ops that get erased during the loop below. Operations queued in
@@ -245,7 +248,7 @@ bool CongruenceEngine::rebuild(HashConsPatternRewriter &rewriter) {
   LLVM_DEBUG(index.verify());
 
   while (!index.sameScopeDups.empty() || !dirtyRoots.empty() ||
-         !worklist.empty()) {
+         !worklist.empty() || !pendingDuplicates.empty()) {
     // Collapse same-scope duplicate classes.
     {
       SmallVector<std::pair<equivalence::ClassOp, equivalence::ClassOp>> batch;
@@ -256,7 +259,6 @@ bool CongruenceEngine::rebuild(HashConsPatternRewriter &rewriter) {
         fuseSameScope(rewriter, dup, survivor);
         equivalence::ClassOp root = getCanonicalLeader(survivor);
         dirtyRoots.insert(root);
-        worklist.push_back(survivor.getOperation());
       }
     }
 
@@ -297,6 +299,23 @@ bool CongruenceEngine::rebuild(HashConsPatternRewriter &rewriter) {
       }
     }
 
+    // Merge e-nodes that collided in the hash-cons table when re-keyed.
+    {
+      SmallVector<Operation *> dups;
+      std::swap(dups, pendingDuplicates);
+      for (Operation *dup : dups) {
+        if (isDead(dup))
+          continue;
+        Operation *keep = rewriter.lookup(dup);
+        if (!keep || keep == dup) {
+          // The collision went away (e.g. `keep` was itself merged away).
+          (void)rewriter.insert(dup);
+          continue;
+        }
+        mergeDuplicate(rewriter, dup, keep);
+      }
+    }
+
     // Congruence repair.
     {
       llvm::SetVector<Operation *> todo;
@@ -331,10 +350,8 @@ bool CongruenceEngine::rebuild(HashConsPatternRewriter &rewriter) {
   // detached by `fuseSameScope`.
   SmallPtrSet<Operation *, 8> erased;
   for (equivalence::ClassOp dead : pendingErase) {
-    if (erased.insert(dead.getOperation()).second) {
-      index.forgetClass(dead);
+    if (erased.insert(dead.getOperation()).second)
       rewriter.eraseOp(dead);
-    }
   }
   pendingErase.clear();
 
@@ -395,12 +412,12 @@ void CongruenceEngine::repair(HashConsPatternRewriter &rewriter,
   SmallPtrSet<Operation *, 8> scheduledForMerge;
 
   for (Operation *op1 : op->getUsers()) {
-    if (classOp) {
-      // Skip ClassOps that use this result as their leader pointer.
-      if (auto op1class = llvm::dyn_cast<equivalence::ClassOp>(op1)) {
-        assert(op1class.getLeader() == classOp.getResult());
-        continue;
-      }
+    // ClassOp users are never congruent duplicates: for a ClassOp they are
+    // leader links, for an e-node it is the (single) class owning the result.
+    // Skipping them also avoids hashing a class's whole input list.
+    if (auto op1class = llvm::dyn_cast<equivalence::ClassOp>(op1)) {
+      assert(!classOp || op1class.getLeader() == classOp.getResult());
+      continue;
     }
     // Non-speculatable users are never hash-consed, so they must not be merged
     // here either: collapsing two side-effecting users would drop side effects.
@@ -420,18 +437,22 @@ void CongruenceEngine::repair(HashConsPatternRewriter &rewriter,
   for (auto [other, keep] : toMerge) {
     if (keep == other)
       continue;
-
-    [[maybe_unused]] bool erased = rewriter.erase(keep).succeeded();
-    assert(erased);
-    [[maybe_unused]] bool inserted = rewriter.insert(keep).succeeded();
-    assert(inserted);
-
-    mergeResults(rewriter, other, keep);
-    // Don't just erase the op, instead, replace. Listeners such as the
-    // OriginalOpTracker used in herbie-mlir should be able to tell what
-    // `other` is replaced with:
-    rewriter.replaceOp(other, keep);
+    mergeDuplicate(rewriter, other, keep);
   }
+}
+
+void CongruenceEngine::mergeDuplicate(HashConsPatternRewriter &rewriter,
+                                      Operation *other, Operation *keep) {
+  [[maybe_unused]] bool erased = rewriter.erase(keep).succeeded();
+  assert(erased);
+  [[maybe_unused]] bool inserted = rewriter.insert(keep).succeeded();
+  assert(inserted);
+
+  mergeResults(rewriter, other, keep);
+  // Don't just erase the op, instead, replace. Listeners such as the
+  // OriginalOpTracker used in herbie-mlir should be able to tell what
+  // `other` is replaced with:
+  rewriter.replaceOp(other, keep);
 }
 
 void CongruenceEngine::mergeResults(HashConsPatternRewriter &rewriter,
