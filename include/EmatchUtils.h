@@ -33,6 +33,11 @@ void convertEmatchOpsToMatch(ModuleOp module);
 /// helpers are moved to their first use.
 LogicalResult convertPDLToEmatchPDLInterp(ModuleOp module);
 
+/// The e-matching passes take their patterns as either e-matching `pdl_interp`
+/// or `pdl`. Lower the `pdl.pattern` ops in the given patterns module, if any,
+/// with convertPDLToEmatchPDLInterp.
+LogicalResult lowerPDLPatterns(ModuleOp patternsModule);
+
 /// Run equality saturation on the given IR module using the provided PDL
 /// pattern module. Returns true on success.
 bool runSaturation(MLIRContext *ctx, PDLPatternModule pdlPattern,

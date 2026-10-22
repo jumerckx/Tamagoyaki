@@ -323,6 +323,12 @@ void convertEmatchOpsToMatch(ModuleOp module) {
   }
 }
 
+LogicalResult lowerPDLPatterns(ModuleOp patternsModule) {
+  if (patternsModule.getOps<pdl::PatternOp>().empty())
+    return success();
+  return convertPDLToEmatchPDLInterp(patternsModule);
+}
+
 LogicalResult convertPDLToEmatchPDLInterp(ModuleOp module) {
   TAMAGOYAKI_SCOPED_TIMER("convertPDLToEmatchPDLInterp");
   if (failed(convertPDLToMatch(module)))

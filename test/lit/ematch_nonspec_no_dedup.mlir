@@ -6,13 +6,7 @@
 // by hash-consing, while the two non-speculatable "test.op" duplicates are kept
 // distinct.
 
-module @patterns {
-    pdl_interp.func @matcher(%arg0: !pdl.operation) {
-        pdl_interp.finalize
-    }
-    module @rewriters {
-    }
-}
+module @patterns {}
 
 module @ir {
     // CHECK:      func.func @dup(%arg0: i32) -> i32 {

@@ -274,8 +274,15 @@ def ApplyPDLInterpPass : Pass<"ematch-apply-pdl-interp", "::mlir::ModuleOp"> {
     let description = [{
         A debugging pass that applies pdl_interp patterns to the IR module using
         MLIR's greedy pattern rewrite driver, similar to TestPDLByteCode in MLIR.
+        `pdl` patterns are lowered to `pdl_interp` through the match dialect
+        first (without e-matching): `convert-pdl-to-match`,
+        `match-combine-matchers`, `convert-match-to-pdl-interp`.
     }];
-    let dependentDialects = ["::mlir::pdl_interp::PDLInterpDialect"];
+    let dependentDialects = [
+        "::mlir::match::MatchDialect",
+        "::mlir::pdl::PDLDialect",
+        "::mlir::pdl_interp::PDLInterpDialect",
+    ];
 }
 
 def EquivalenceGraphContainsPass : Pass<"equivalence-graph-contains", "::mlir::ModuleOp"> {

@@ -22,11 +22,14 @@ def CraneliftOptimizePass : InterfacePass<"cranelift-optimize", "::mlir::Functio
   let dependentDialects = [
     "::mlir::equivalence::EquivalenceDialect",
     "::mlir::ematch::EmatchDialect",
+    "::mlir::match::MatchDialect",
+    "::mlir::pdl::PDLDialect",
     "::mlir::pdl_interp::PDLInterpDialect",
   ];
   let options = [
     Option<"patternsFile", "patterns-file", "std::string", /*default=*/"\"\"",
-           "Path to an MLIR file containing the PDL patterns module.">,
+           "Path to an MLIR file containing the patterns module, as pdl or as "
+           "e-matching pdl_interp.">,
     Option<"maxIters", "max-iters", "int", "4",
            "Maximum number of equality saturation iterations.">,
     Option<"maxNodes", "max-nodes", "int", "0",

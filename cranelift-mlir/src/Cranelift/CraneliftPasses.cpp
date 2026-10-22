@@ -3,6 +3,8 @@
 #include "EquivalenceDialect.h"
 #include "EquivalenceUtils.h"
 #include "Utils/HashConsPatternRewriter.h"
+#include "mlir/Dialect/Match/IR/Match.h"
+#include "mlir/Dialect/PDL/IR/PDL.h"
 #include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
 #include "mlir/IR/Block.h"
 #include "mlir/IR/Builders.h"
@@ -235,6 +237,8 @@ public:
         return this->signalPassFailure();
       }
 
+      if (mlir::failed(mlir::ematch::lowerPDLPatterns(parsedPatterns.get())))
+        return this->signalPassFailure();
       mlir::ematch::convertEmatchOpsToApplyRewrites(parsedPatterns.get());
 
       parsedPatterns.get().getOperation()->remove();

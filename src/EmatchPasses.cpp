@@ -23,7 +23,10 @@
 #include "TamagoyakiTiming.h"
 #include "Utils/ClassOpUtils.h"
 #include "Utils/HashConsPatternRewriter.h"
+#include "mlir/Conversion/MatchToPDLInterp/MatchToPDLInterp.h"
+#include "mlir/Conversion/PDLToMatch/PDLToMatch.h"
 #include "mlir/Dialect/Match/IR/Match.h"
+#include "mlir/Dialect/Match/Transforms/Passes.h"
 #include "mlir/Dialect/PDL/IR/PDL.h"
 #include "mlir/Dialect/PDL/IR/PDLOps.h"
 #include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
@@ -115,14 +118,6 @@ resolvePatternAndIrModules(ModuleOp module, StringRef patternsFile,
     return failure();
   }
   return success();
-}
-
-/// The e-matching passes take their patterns as either e-matching `pdl_interp`
-/// or `pdl`. Lower the `pdl.pattern` ops, if any, to the former.
-LogicalResult lowerPDLPatterns(ModuleOp patternsModule) {
-  if (patternsModule.getOps<pdl::PatternOp>().empty())
-    return success();
-  return convertPDLToEmatchPDLInterp(patternsModule);
 }
 
 //===----------------------------------------------------------------------===//
@@ -335,6 +330,13 @@ struct ApplyPDLInterpPass
 
     if (!patternsModule || !irModule)
       return;
+
+    // Lower `pdl` patterns through the match dialect, without e-matching.
+    if (!patternsModule.getOps<pdl::PatternOp>().empty() &&
+        (failed(convertPDLToMatch(patternsModule)) ||
+         failed(match::combineMatchers(patternsModule)) ||
+         failed(convertMatchToPDLInterp(patternsModule))))
+      return signalPassFailure();
 
     patternsModule.getOperation()->remove();
     PDLPatternModule pdlPattern(patternsModule);
