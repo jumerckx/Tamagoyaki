@@ -177,6 +177,29 @@ def Ematch_AreEquivalentOp : Ematch_Op<"are_equivalent", [Terminator]> {
     }];
 }
 
+def Ematch_EquivalentOp : Ematch_Op<"equivalent"> {
+    let summary = "Test that two values are in the same equivalence class.";
+    let description = [{
+        The `ematch.equivalent` operation is the `match` dialect counterpart of
+        `ematch.are_equivalent`: a test inside a `match.matcher` that succeeds if
+        the two `!pdl.value`s belong to the same e-class, and otherwise fails
+        the enclosing scope like the other `match` tests (e.g. `match.equal`).
+
+        It is produced by `ematchify` and lowered to a
+        `match.apply_native_constraint` by `convert-ematch-to-match`.
+
+        Example:
+
+        ```mlir
+        ematch.equivalent %a, %b
+        ```
+    }];
+
+    let arguments = (ins PDL_Value:$lhs, PDL_Value:$rhs);
+
+    let assemblyFormat = "$lhs `,` $rhs attr-dict";
+}
+
 def Ematch_DedupOp : Ematch_Op<"dedup"> {
     let summary = "Deduplicate an operation against the hashcons.";
     let description = [{
@@ -304,38 +327,56 @@ def EmatchifyPass : Pass<"ematchify", "::mlir::ModuleOp"> {
     let description = [{
         Rewrites the `match.matcher` and `match.rewriter` ops produced by
         `convert-pdl-to-match` so that they operate on the e-classes of an
-        e-graph instead of on concrete values and operations. The e-class
-        helpers are emitted as `match.apply_native_rewrite` and
-        `match.apply_native_constraint` ops named after the corresponding
-        ematch operations.
+        e-graph instead of on concrete values and operations.
 
-        In the matchers:
+        In the matchers, using the ematch operations:
 
         * A matched result (`match.get_result(s)` unwrapped by
           `match.is_not_null`) is mapped to its e-class result with
-          `get_class_result(s)`.
+          `ematch.get_class_result(s)`.
         * `match.get_defining_op %v` is tried for every member of the e-class
           of `%v`: it moves, together with the rest of its block, into a
-          `match.foreach` over `get_class_vals %v`. The defining op of a value
-          range is still taken from the range itself.
-        * `match.equal` on values becomes the `are_equivalent` constraint.
+          `match.foreach` over `ematch.get_class_vals %v`. The defining op of a
+          value range is still taken from the range itself.
+        * `match.equal` on values becomes `ematch.equivalent`.
         * A matched operand passed to `match.success` is replaced by its
-          `get_class_representative`, and an e-class result by the value it
-          was computed from.
+          `ematch.get_class_representative`, and an e-class result by the
+          value it was computed from.
 
         In the rewriters:
 
         * Value (range) arguments, `pdl.result(s)` of created ops are mapped to
-          their e-class result(s).
+          their e-class result(s) with `ematch.get_class_result(s)`.
         * Created operations, including operations returned by native
-          rewrites, are deduplicated against the hash-cons with `dedup`.
-        * `match.replace` becomes a `union` of the replaced operation with its
-          replacement values, and `match.erase` is dropped.
+          rewrites, are deduplicated against the hash-cons with `ematch.dedup`.
+        * `match.replace` becomes an `ematch.union` of the replaced operation
+          with its replacement values, and `match.erase` is dropped.
 
         The pass expects one matcher per pattern, i.e. it runs before
         `match-combine-matchers`. That pass should run with `defer-loops`, so
         that the e-class loops end up nested under the checks that do not need
-        them.
+        them. Afterwards, `convert-ematch-to-match` lowers the ematch
+        operations for `convert-match-to-pdl-interp`.
+    }];
+    let dependentDialects = [
+        "::mlir::ematch::EmatchDialect",
+        "::mlir::match::MatchDialect",
+    ];
+}
+
+def ConvertEmatchToMatchPass : Pass<"convert-ematch-to-match", "::mlir::ModuleOp"> {
+    let summary = "Lower the ematch operations in match matchers and rewriters to native calls.";
+    let description = [{
+        Lowers the ematch operations that `ematchify` puts in `match.matcher`
+        and `match.rewriter` ops: `ematch.equivalent` becomes a
+        `match.apply_native_constraint` named `are_equivalent`, and the others
+        (`get_class_*`, `union`, `dedup`) become `match.apply_native_rewrite`
+        ops with the same name. They lower further to the `pdl_interp` calls
+        whose implementations `ematch-saturate` registers.
+
+        This runs after `match-combine-matchers`, which would otherwise keep
+        the `are_equivalent` constraints behind every predicate that preceded
+        them in their pattern.
     }];
     let dependentDialects = ["::mlir::match::MatchDialect"];
 }
@@ -347,13 +388,16 @@ def ConvertPDLToEmatchPDLInterpPass
         Lowers the `pdl.pattern` ops in the module to a `pdl_interp` matcher
         and rewriters that match and rewrite over e-classes, as consumed by
         `ematch-saturate`. This runs `convert-pdl-to-match`, `ematchify`,
-        `match-combine-matchers{defer-loops}` and
-        `convert-match-to-pdl-interp`.
+        `match-combine-matchers{defer-loops}`, `convert-ematch-to-match` and
+        `convert-match-to-pdl-interp`. Before the ematch operations are lowered,
+        the e-class helpers are moved right before their first use, but not
+        into a loop, so that they are not computed when an earlier check fails.
 
         If the module has a `@patterns` submodule, that submodule is lowered
         instead.
     }];
     let dependentDialects = [
+        "::mlir::ematch::EmatchDialect",
         "::mlir::match::MatchDialect",
         "::mlir::pdl_interp::PDLInterpDialect",
     ];

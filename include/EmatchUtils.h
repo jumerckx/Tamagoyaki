@@ -17,12 +17,20 @@ void convertEmatchOpsToApplyRewrites(ModuleOp module);
 /// Rewrite the `match.matcher` and `match.rewriter` ops in the given module, as
 /// produced by convert-pdl-to-match, so that they match and rewrite over the
 /// e-classes of an e-graph. Expects one matcher per pattern, i.e. it runs
-/// before the matchers are combined.
+/// before the matchers are combined. The e-matching logic is expressed with
+/// ematch ops, which convertEmatchOpsToMatch lowers.
 void ematchifyMatchPatterns(ModuleOp module);
+
+/// Lower the ematch ops in the `match.matcher` and `match.rewriter` ops of the
+/// given module to `match.apply_native_rewrite`/`apply_native_constraint` ops
+/// with the names under which runSaturation registers their implementations.
+void convertEmatchOpsToMatch(ModuleOp module);
 
 /// Lower the `pdl.pattern` ops in the given module to e-matching `pdl_interp`
 /// by going through the match dialect: convert-pdl-to-match, ematchify,
-/// match-combine-matchers (with deferred loops), convert-match-to-pdl-interp.
+/// match-combine-matchers (with deferred loops), convert-ematch-to-match and
+/// convert-match-to-pdl-interp. Before the ematch ops are lowered, the e-class
+/// helpers are moved to their first use.
 LogicalResult convertPDLToEmatchPDLInterp(ModuleOp module);
 
 /// Run equality saturation on the given IR module using the provided PDL

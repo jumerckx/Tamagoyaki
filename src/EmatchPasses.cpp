@@ -70,6 +70,7 @@ namespace mlir::ematch {
 #define GEN_PASS_DEF_APPLYPDLINTERPPASS
 #define GEN_PASS_DEF_EQUIVALENCEGRAPHCONTAINSPASS
 #define GEN_PASS_DEF_EMATCHIFYPASS
+#define GEN_PASS_DEF_CONVERTEMATCHTOMATCHPASS
 #define GEN_PASS_DEF_CONVERTPDLTOEMATCHPDLINTERPPASS
 #include "EmatchPasses.h.inc"
 
@@ -370,6 +371,14 @@ struct EmatchifyPass : public impl::EmatchifyPassBase<EmatchifyPass> {
   using impl::EmatchifyPassBase<EmatchifyPass>::EmatchifyPassBase;
 
   void runOnOperation() final { ematchifyMatchPatterns(getOperation()); }
+};
+
+struct ConvertEmatchToMatchPass
+    : public impl::ConvertEmatchToMatchPassBase<ConvertEmatchToMatchPass> {
+  using impl::ConvertEmatchToMatchPassBase<
+      ConvertEmatchToMatchPass>::ConvertEmatchToMatchPassBase;
+
+  void runOnOperation() final { convertEmatchOpsToMatch(getOperation()); }
 };
 
 struct ConvertPDLToEmatchPDLInterpPass

@@ -18,6 +18,7 @@
 #include <llvm/ADT/Sequence.h>
 #include <llvm/Support/Casting.h>
 #include <memory>
+#include <mlir/Dialect/PDL/IR/PDL.h>
 #include <mlir/IR/Attributes.h>
 #include <mlir/IR/Block.h>
 #include <mlir/IR/Builders.h>
@@ -435,11 +436,14 @@ LogicalResult RewriterOp::verifyRegions() {
       return emitOpError("expected rewriter arguments to have PDL types, but "
                          "got ")
              << arg.getType();
-  for (Operation &op : getBody().front())
+  for (Operation &op : getBody().front()) {
+    if (!isa_and_present<MatchDialect, pdl::PDLDialect>(op.getDialect()))
+      continue;
     if (!isa<ApplyNativeRewriteOp, ConstantAttributeOp, ConstantTypeOp,
              ConstantTypesOp, CreateOperationOp, CreateRangeOp, EraseOp,
              GetValueTypeOp, ReplaceOp, pdl::ResultOp, pdl::ResultsOp>(op))
       return op.emitOpError("is not allowed in a `match.rewriter`");
+  }
   return success();
 }
 

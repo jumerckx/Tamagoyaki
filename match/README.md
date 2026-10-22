@@ -38,6 +38,9 @@ Only the `pdl` -> `pdl_interp` flow is copied. Not copied:
 * `MatchOps.td`: `match.matcher` and `match.rewriter` drop the `SymbolName` and
   `SymbolVisibility` traits, which do not exist in the pinned MLIR. Its
   `SymbolOpInterface` still provides the default implementations they replace.
+* The `match.rewriter` verifier only restricts the `match` and `pdl` ops in
+  its body: ops of other dialects are allowed, so that a rewriter can hold ops
+  that are lowered later (Tamagoyaki's `ematch` ops). Not upstream (yet).
 * `match-combine-matchers` has a `defer-loops` option (`combineMatchers(...,
   deferLoops)`), not upstream (yet). It enters a `match.foreach` only after all
   predicates that do not depend on it, so that loops are nested under the
@@ -53,4 +56,6 @@ Only the `pdl` -> `pdl_interp` flow is copied. Not copied:
 
 The e-matching specific parts live in Tamagoyaki proper (`src/Ematchify.cpp`):
 `-ematchify` rewrites the per-pattern matchers and rewriters to work on
-e-classes, and `-ematch-convert-pdl-to-pdl-interp` runs the whole lowering.
+e-classes, `-convert-ematch-to-match` lowers the ematch ops it puts in the
+matchers to native calls after combining, and
+`-ematch-convert-pdl-to-pdl-interp` runs the whole lowering.

@@ -7,24 +7,20 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// Implements `ematchifyMatchPatterns` and `convertPDLToEmatchPDLInterp`
-// declared in EmatchUtils.h: the lowering of `pdl` patterns to `pdl_interp`
-// that match and rewrite over the e-classes of an e-graph, going through the
-// `match` dialect:
+// Implements `ematchifyMatchPatterns`, `convertEmatchOpsToMatch` and
+// `convertPDLToEmatchPDLInterp` declared in EmatchUtils.h: the lowering of
+// `pdl` patterns to `pdl_interp` that match and rewrite over the e-classes of
+// an e-graph, going through the `match` dialect:
 //
 //   convert-pdl-to-match -> ematchify -> match-combine-matchers{defer-loops}
-//     -> convert-match-to-pdl-interp
+//     -> convert-ematch-to-match -> convert-match-to-pdl-interp
 //
-// The e-class helpers are emitted as `match.apply_native_rewrite` and
-// `match.apply_native_constraint` ops named after the ematch ops they stand
-// for (get_class_vals, get_class_result, union, dedup, ...). They lower to the
-// `pdl_interp.apply_rewrite`/`apply_constraint` ops whose implementations
-// runSaturation registers.
 //
 //===----------------------------------------------------------------------===//
 
 #include "EmatchUtils.h"
 
+#include "EmatchDialect.h"
 #include "TamagoyakiTiming.h"
 #include "mlir/Conversion/MatchToPDLInterp/MatchToPDLInterp.h"
 #include "mlir/Conversion/PDLToMatch/PDLToMatch.h"
@@ -68,25 +64,30 @@ match::ApplyNativeRewriteOp createNativeRewrite(OpBuilder &builder,
                                              builder.getStringAttr(name), args);
 }
 
-/// Map `v` (a value or a range of values) to its e-class result(s) right after
-/// `after`, and redirect the uses of `v` to the e-class result(s).
+/// Create the e-class result(s) of `v`, a value or a range of values.
+Value createClassResult(OpBuilder &builder, Value v) {
+  Location loc = v.getLoc();
+  if (isValue(v))
+    return GetClassResultOp::create(builder, loc, v.getType(), v);
+  return GetClassResultsOp::create(builder, loc, v.getType(), v);
+}
+
+/// Map `v` to its e-class result(s) right after `after`, and redirect the uses
+/// of `v` to the e-class result(s).
 void replaceWithClassResult(OpBuilder &builder, Value v, Operation *after) {
   builder.setInsertionPointAfter(after);
-  auto classResult = createNativeRewrite(
-      builder, v.getLoc(),
-      isValue(v) ? "get_class_result" : "get_class_results", v.getType(), v);
-  v.replaceAllUsesExcept(classResult.getResult(0), classResult);
+  Value classResult = createClassResult(builder, v);
+  v.replaceAllUsesExcept(classResult, classResult.getDefiningOp());
 }
 
 /// Return the value an e-class result was computed from, or null if `v` is not
-/// produced by get_class_result(s).
+/// produced by ematch.get_class_result(s).
 Value getClassResultInput(Value v) {
-  auto rewrite = v.getDefiningOp<match::ApplyNativeRewriteOp>();
-  if (!rewrite || !llvm::is_contained({StringRef("get_class_result"),
-                                       StringRef("get_class_results")},
-                                      rewrite.getName()))
-    return nullptr;
-  return rewrite.getArgs().front();
+  if (auto op = v.getDefiningOp<GetClassResultOp>())
+    return op.getValue();
+  if (auto op = v.getDefiningOp<GetClassResultsOp>())
+    return op.getValues();
+  return nullptr;
 }
 
 void ematchifyMatcher(match::MatcherOp matcher) {
@@ -121,9 +122,8 @@ void ematchifyMatcher(match::MatcherOp matcher) {
   });
   for (match::GetDefiningOpOp op : definingOps) {
     builder.setInsertionPoint(op);
-    Value members = createNativeRewrite(builder, op.getLoc(), "get_class_vals",
-                                        valueRangeTy, op.getValue())
-                        .getResult(0);
+    Value members = GetClassValsOp::create(builder, op.getLoc(), valueRangeTy,
+                                           op.getValue());
     auto loop = match::ForEachOp::create(builder, op.getLoc(), members);
     Block &body = loop.getBody().front();
     Block *block = op->getBlock();
@@ -140,11 +140,7 @@ void ematchifyMatcher(match::MatcherOp matcher) {
   });
   for (match::EqualOp op : equalities) {
     builder.setInsertionPoint(op);
-    match::ApplyNativeConstraintOp::create(
-        builder, op.getLoc(), /*results=*/TypeRange(),
-        builder.getStringAttr("are_equivalent"),
-        ValueRange{op.getLhs(), op.getRhs()},
-        /*isNegated=*/builder.getBoolAttr(false));
+    EquivalentOp::create(builder, op.getLoc(), op.getLhs(), op.getRhs());
     op.erase();
   }
 
@@ -167,10 +163,8 @@ void ematchifyMatcher(match::MatcherOp matcher) {
         continue;
       Value &representative = representatives[value];
       if (!representative)
-        representative = createNativeRewrite(builder, op.getLoc(),
-                                             "get_class_representative",
-                                             value.getType(), value)
-                             .getResult(0);
+        representative = GetClassRepresentativeOp::create(
+            builder, op.getLoc(), value.getType(), value);
       input.set(representative);
     }
   });
@@ -190,19 +184,16 @@ void ematchifyRewriter(match::RewriterOp rewriter) {
   for (BlockArgument arg : body.getArguments()) {
     if (!isValue(arg) && !isValueRange(arg))
       continue;
-    auto classResult = createNativeRewrite(builder, arg.getLoc(),
-                                           isValue(arg) ? "get_class_result"
-                                                        : "get_class_results",
-                                           arg.getType(), arg);
-    arg.replaceAllUsesExcept(classResult.getResult(0), classResult);
+    Value classResult = createClassResult(builder, arg);
+    arg.replaceAllUsesExcept(classResult, classResult.getDefiningOp());
   }
 
   // An operation is only added to the e-graph if no equivalent e-node exists.
   auto dedup = [&](Value createdOp) {
     builder.setInsertionPointAfterValue(createdOp);
-    auto deduped = createNativeRewrite(builder, createdOp.getLoc(), "dedup",
-                                       createdOp.getType(), createdOp);
-    createdOp.replaceAllUsesExcept(deduped.getResult(0), deduped);
+    auto deduped = DedupOp::create(builder, createdOp.getLoc(),
+                                   createdOp.getType(), createdOp);
+    createdOp.replaceAllUsesExcept(deduped, deduped);
   };
 
   for (Operation *op : ops) {
@@ -225,13 +216,63 @@ void ematchifyRewriter(match::RewriterOp rewriter) {
       if (replValues.size() != 1 || !isValueRange(replacement))
         replacement = match::CreateRangeOp::create(builder, replace.getLoc(),
                                                    valueRangeTy, replValues);
-      createNativeRewrite(builder, replace.getLoc(), "union",
-                          /*resultTypes=*/TypeRange(),
-                          {replace.getInputOp(), replacement});
+      UnionOp::create(builder, replace.getLoc(), replace.getInputOp(),
+                      replacement);
       replace.erase();
     } else if (isa<match::EraseOp, match::ReplaceOp>(op)) {
       // Nothing is ever removed from an e-graph.
       op->erase();
+    }
+  }
+}
+
+/// Return the ancestor of `op` in `block`.
+Operation *getAncestorInBlock(Operation *op, Block *block) {
+  while (op->getBlock() != block)
+    op = op->getParentOp();
+  return op;
+}
+
+/// match-combine-matchers only moves its own navigation ops to their first
+/// use, so the e-class helpers end up computed early in their scope, even when
+/// a later check fails. Move each of them right before its first use, into the
+/// `try`/switch case that holds all of its uses. They never move into a loop,
+/// which would recompute them on every iteration.
+void sinkClassHelpers(match::MatcherOp matcher) {
+  SmallVector<Operation *> helpers;
+  matcher.walk([&](Operation *op) {
+    if (isa<GetClassValsOp, GetClassResultOp, GetClassResultsOp,
+            GetClassRepresentativeOp>(op))
+      helpers.push_back(op);
+  });
+  // Later helpers first, so that a helper used by another one follows it.
+  for (Operation *helper : llvm::reverse(helpers)) {
+    Block *block = helper->getBlock();
+    while (true) {
+      Operation *earliest = nullptr;
+      for (Operation *user : helper->getUsers()) {
+        Operation *anchor = getAncestorInBlock(user, block);
+        if (!earliest || anchor->isBeforeInBlock(earliest))
+          earliest = anchor;
+      }
+      if (!earliest)
+        break;
+      Block *nested = nullptr;
+      if (!isa<match::ForEachOp>(earliest) &&
+          !llvm::is_contained(helper->getUsers(), earliest)) {
+        for (Region &region : earliest->getRegions()) {
+          Block *candidate = &region.front();
+          if (llvm::all_of(helper->getUsers(), [&](Operation *user) {
+                return candidate->findAncestorOpInBlock(*user);
+              }))
+            nested = candidate;
+        }
+      }
+      if (!nested) {
+        helper->moveBefore(earliest);
+        break;
+      }
+      block = nested;
     }
   }
 }
@@ -254,6 +295,34 @@ void ematchifyMatchPatterns(ModuleOp module) {
     ematchifyRewriter(rewriter);
 }
 
+void convertEmatchOpsToMatch(ModuleOp module) {
+  TAMAGOYAKI_SCOPED_TIMER("convertEmatchOpsToMatch");
+  SmallVector<Operation *> ops;
+  module.walk([&](Operation *op) {
+    if (isa<GetClassValsOp, GetClassResultOp, GetClassResultsOp,
+            GetClassRepresentativeOp, EquivalentOp, UnionOp, DedupOp>(op) &&
+        (op->getParentOfType<match::MatcherOp>() ||
+         op->getParentOfType<match::RewriterOp>()))
+      ops.push_back(op);
+  });
+  OpBuilder builder(module.getContext());
+  for (Operation *op : ops) {
+    builder.setInsertionPoint(op);
+    Operation *native;
+    if (isa<EquivalentOp>(op))
+      native = match::ApplyNativeConstraintOp::create(
+          builder, op->getLoc(), /*results=*/TypeRange(),
+          builder.getStringAttr("are_equivalent"), op->getOperands(),
+          /*isNegated=*/builder.getBoolAttr(false));
+    else
+      native = createNativeRewrite(builder, op->getLoc(),
+                                   op->getName().stripDialect(),
+                                   op->getResultTypes(), op->getOperands());
+    op->replaceAllUsesWith(native);
+    op->erase();
+  }
+}
+
 LogicalResult convertPDLToEmatchPDLInterp(ModuleOp module) {
   TAMAGOYAKI_SCOPED_TIMER("convertPDLToEmatchPDLInterp");
   if (failed(convertPDLToMatch(module)))
@@ -262,6 +331,9 @@ LogicalResult convertPDLToEmatchPDLInterp(ModuleOp module) {
   if (failed(match::combineMatchers(module, /*groupByRoot=*/false,
                                     /*deferLoops=*/true)))
     return failure();
+  for (auto matcher : module.getOps<match::MatcherOp>())
+    sinkClassHelpers(matcher);
+  convertEmatchOpsToMatch(module);
   return convertMatchToPDLInterp(module);
 }
 
