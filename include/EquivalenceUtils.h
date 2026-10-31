@@ -71,8 +71,9 @@ inline int64_t costReductionMax(int64_t baseCost,
 
 /// Compute total costs for all operations in a GraphOp using bottom-up
 /// fixed-point iteration. Returns the cost map. For each ClassOp, the cost
-/// is the minimum among its operands. For other ops, the cost is computed
-/// via the reductionFn applied to base cost and child costs.
+/// is the minimum among its inputs and the classes it refines into. For other
+/// ops, the cost is computed via the reductionFn applied to base cost and child
+/// costs.
 DenseMap<Operation *, int64_t>
 computeGraphCosts(GraphOp graphOp, const NodeCostFn &nodeCostFn,
                   llvm::StringRef costAttributeName = "equivalence.cost",
@@ -90,7 +91,8 @@ computeGraphCosts(GraphOp graphOp, int64_t defaultCost,
 
 /// Run greedy cost-based selection on a single GraphOp.
 /// Assigns min_cost_index attributes to ClassOps based on minimum-cost
-/// operands.
+/// operands. A refinement target is selected (with an index past the inputs)
+/// only when it is strictly cheaper than all inputs.
 void selectGreedy(GraphOp graphOp, const NodeCostFn &nodeCostFn,
                   llvm::StringRef costAttributeName = "equivalence.cost",
                   const CostReductionFn &reductionFn = costReductionSum);
@@ -118,9 +120,9 @@ void clearSelection(GraphOp graphOp,
 
 /// Extract selected nodes from equivalence classes in a GraphOp.
 /// For each ClassOp with min_cost_index set, replaces its result with the
-/// selected operand, erases non-selected operand ops, and removes the cost
-/// attribute. ClassOps with no uses are erased entirely. ClassOps without
-/// min_cost_index are left untouched.
+/// selected operand (or the selected refinement target), erases non-selected
+/// operand ops, and removes the cost attribute. ClassOps with no uses are
+/// erased entirely. ClassOps without min_cost_index are left untouched.
 void extractFromGraph(GraphOp graphOp);
 
 /// Inline a GraphOp by splicing its body into the parent block, replacing

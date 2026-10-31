@@ -276,6 +276,14 @@ static bool isFreeLeaf(Value v, Region *graphRegion) {
   return !defOp || !graphRegion->isAncestor(defOp->getParentRegion());
 }
 
+// The known cost of using `v`, or -1 if it is not known (yet).
+static int64_t lookupCost(Value v, Region *graphRegion,
+                          const DenseMap<Operation *, int64_t> &opCosts) {
+  if (isFreeLeaf(v, graphRegion))
+    return 0;
+  return opCosts.lookup_or(v.getDefiningOp(), -1);
+}
+
 // Compute the total cost of a non-class operation given current known costs.
 // Returns -1 if any dependency is unresolved.
 static int64_t computeNodeCost(Operation *op, Region *graphRegion,
@@ -360,6 +368,13 @@ computeGraphCosts(GraphOp graphOp, const NodeCostFn &nodeCostFn,
         minCost = std::min(minCost, cost);
       }
 
+      // The class may also be replaced by any class it refines into.
+      for (Value target : classOp.getRefines()) {
+        int64_t cost = lookupCost(target, graphRegion, opCosts);
+        if (cost != -1)
+          minCost = std::min(minCost, cost);
+      }
+
       if (minCost < std::numeric_limits<int64_t>::max()) {
         auto it = opCosts.find(classOp);
         if (it == opCosts.end() || minCost < it->second) {
@@ -396,38 +411,80 @@ void selectGreedy(GraphOp graphOp, const NodeCostFn &nodeCostFn,
 
   Region *graphRegion = &graphOp.getBody();
 
+  auto select = [](ClassOp classOp, int64_t index) {
+    if (classOp.getMinCostIndex() != static_cast<uint64_t>(index))
+      classOp.setMinCostIndex(index);
+  };
+
+  // Classes whose selection is final, and for each class the classes that
+  // refine into it, with the min_cost_index that selects it.
+  DenseSet<Operation *> selected;
+  SmallVector<ClassOp> worklist;
+  DenseMap<Operation *, SmallVector<std::pair<ClassOp, int64_t>>> refiners;
+  // The cheapest input of each waiting class, the fallback selection.
+  DenseMap<Operation *, int64_t> waitingFallback;
+
   // Set min_cost_index on each ClassOp based on the computed costs.
   graphOp.walk([&](ClassOp classOp) {
     int64_t minCost = std::numeric_limits<int64_t>::max();
     int minIndex = -1;
 
     for (size_t i = 0; i < classOp.getInputs().size(); ++i) {
-      Value operand = classOp.getInputs()[i];
-      // Free leaves are free, and the cost map only tracks graph nodes.
-      int64_t cost = 0;
-      if (!isFreeLeaf(operand, graphRegion)) {
-        auto it = opCosts.find(operand.getDefiningOp());
-        if (it == opCosts.end() || it->second == -1)
-          continue;
-        cost = it->second;
-      }
-
-      if (cost < minCost) {
+      int64_t cost = lookupCost(classOp.getInputs()[i], graphRegion, opCosts);
+      if (cost != -1 && cost < minCost) {
         minCost = cost;
         minIndex = i;
       }
     }
 
-    if (minIndex >= 0) {
-      int64_t currentMinIndex = -1;
-      if (auto attr = classOp->getAttrOfType<IntegerAttr>("min_cost_index"))
-        currentMinIndex = attr.getValue().getSExtValue();
-      if (currentMinIndex != minIndex) {
-        OpBuilder builder(classOp);
-        classOp->setAttr("min_cost_index", builder.getI64IntegerAttr(minIndex));
+    // Select the cheapest input unless a refinement is strictly cheaper.
+    int64_t classCost = opCosts.lookup_or(classOp, -1);
+    if (minIndex >= 0 && minCost == classCost) {
+      select(classOp, minIndex);
+      selected.insert(classOp);
+      worklist.push_back(classOp);
+      return;
+    }
+    if (classCost == -1)
+      return;
+    waitingFallback[classOp] = minIndex;
+    // Refinement targets are indexed after the inputs.
+    for (auto [i, target] : llvm::enumerate(classOp.getRefines())) {
+      int64_t index = classOp.getInputs().size() + i;
+      if (isFreeLeaf(target, graphRegion)) {
+        // A refinement into a class outside the graph is free.
+        if (classCost == 0 && selected.insert(classOp).second) {
+          select(classOp, index);
+          worklist.push_back(classOp);
+        }
+        continue;
       }
+      refiners[target.getDefiningOp()].push_back({classOp, index});
     }
   });
+
+  // A class that is cheapest through a refinement selects a refinement target
+  // of the same cost whose selection is already final. Propagating outward
+  // from the classes that selected an input keeps the selected refinements
+  // acyclic, even when refinement targets of equal cost refine into each
+  // other.
+  while (!worklist.empty()) {
+    ClassOp target = worklist.pop_back_val();
+    int64_t targetCost = opCosts.lookup_or(target, -1);
+    for (auto [source, index] : refiners.lookup(target)) {
+      if (opCosts.lookup_or(source, -1) != targetCost ||
+          !selected.insert(source).second)
+        continue;
+      select(source, index);
+      worklist.push_back(source);
+    }
+  }
+
+  // Costs that did not converge within the iteration limit can leave a class
+  // without a refinement of its cost: fall back to its cheapest input.
+  for (auto [op, minIndex] : waitingFallback)
+    if (!selected.contains(op) && minIndex >= 0)
+      select(cast<ClassOp>(op), minIndex);
 }
 
 void selectConstants(GraphOp graphOp) {
@@ -476,8 +533,18 @@ void extractFromGraph(GraphOp graphOp) {
       op->removeAttr("equivalence.cost");
     }
   });
-  // Extraction picks among equivalent values only. Drop the refinement edges
-  // first: they are uses of other classes that would keep them alive.
+  // A class that selected a refinement is replaced by the class it refines
+  // into, which is extracted in turn. The selected refinements are acyclic, so
+  // this terminates in a class that selected one of its inputs.
+  for (ClassOp classOp : classOps) {
+    std::optional<uint64_t> index = classOp.getMinCostIndex();
+    size_t numInputs = classOp.getInputs().size();
+    if (index && *index >= numInputs)
+      classOp.getResult().replaceAllUsesWith(
+          classOp.getRefines()[*index - numInputs]);
+  }
+  // Then drop the refinement edges: they are uses of other classes that would
+  // keep them alive.
   for (ClassOp classOp : classOps)
     classOp.getRefinesMutable().clear();
 

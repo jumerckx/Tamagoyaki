@@ -127,8 +127,11 @@ def Equivalence_ClassOp : Equivalence_Op<"class", [
 
         Rebuilding the e-graph closes refinements under congruence (if `%a`
         refines into `%b`, then `f(%a)` refines into `f(%b)` whenever both
-        exist) and unions the e-classes on a cycle of refinements. Extraction
-        ignores refinements.
+        exist) and unions the e-classes on a cycle of refinements.
+
+        `min_cost_index` records the selection made for extraction. An index
+        below the number of inputs selects that input; the indices after the
+        inputs select a refinement target, which the e-class is replaced by.
     }];
 
     let arguments = (ins 
@@ -176,7 +179,8 @@ def EquivalenceExtract: Pass<"equivalence-extract", "::mlir::ModuleOp"> {
   let description = [{
     After greedy selection has set min_cost_index on ClassOps, this pass
     extracts the selected operand from each e-class: replaces the ClassOp
-    result with the chosen operand, erases the ClassOp and all non-selected
+    result with the chosen operand (or, when a refinement target is selected,
+    with the e-class it refines into), erases the ClassOp and all non-selected
     candidate operations, and removes the cost attribute from the selected op.
     ClassOps with no uses are erased entirely along with their operand ops.
     ClassOps without a min_cost_index are left untouched.
@@ -194,6 +198,10 @@ def EquivalenceSelectGreedy: Pass<"equivalence-select-greedy", "::mlir::ModuleOp
     Implements greedy cost-based extraction for equivalence classes using
     bottom-up fixed-point iteration. For each e-class, finds the minimum cost
     node and sets the min_cost_index attribute on ClassOp operations.
+
+    An e-class costs no more than the e-classes it refines into. When one of
+    them is strictly cheaper than every node of the e-class, the refinement is
+    selected instead; the selected refinements never form a cycle.
   }];
   let options = [
     Option<"costFile", "cost-file", "std::string", "",
@@ -252,7 +260,7 @@ def EquivalenceSelectIlp: Pass<"equivalence-select-ilp", "::mlir::ModuleOp"> {
     the selected e-nodes (shared sub-terms counted once). Roots (the values
     yielded by the graph) are forced active. E-nodes carrying an
     `equivalence.pruned` marker, or whose cost is unresolvable, are excluded from
-    consideration. When warm-starting is enabled the greedy heuristic supplies an
+    consideration. Refinements are ignored. When warm-starting is enabled the greedy heuristic supplies an
     initial feasible solution to seed the solver.
 
     The ILP is solved with the HiGHS solver (https://highs.dev). This pass is
