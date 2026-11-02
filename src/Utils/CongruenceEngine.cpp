@@ -21,7 +21,6 @@
 #include "mlir/Support/LLVM.h"
 #include "vendor/mlir/SimpleOperationInfo.h"
 #include "llvm/ADT/STLExtras.h"
-#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/Casting.h"
@@ -216,34 +215,14 @@ bool CongruenceEngine::rebuild(HashConsPatternRewriter &rewriter) {
   });
 
   if (index.sameScopeDups.empty() && dirtyRoots.empty() && worklist.empty() &&
-      pendingDuplicates.empty())
+      pendingDuplicates.empty() && pendingErase.empty())
     return false;
 
-  // Track ops that get erased during the loop below. Operations queued in
-  // `todo` (or `worklist` re-entry) may be freed by `repair`'s `replaceOp`, so
-  // we must not dereference their pointers afterwards. Just checking
-  // `op->getBlock()` is unsafe because the Operation memory itself may have
-  // been freed.
-  SmallPtrSet<Operation *, 16> erasedOps;
-  struct EraseTracker : public RewriterBase::ForwardingListener {
-    EraseTracker(OpBuilder::Listener *previous,
-                 SmallPtrSet<Operation *, 16> &erased)
-        : RewriterBase::ForwardingListener(previous), erased(erased) {}
-    void notifyOperationErased(Operation *op) override {
-      erased.insert(op);
-      RewriterBase::ForwardingListener::notifyOperationErased(op);
-    }
-    SmallPtrSet<Operation *, 16> &erased;
-  };
-  OpBuilder::Listener *previousListener = rewriter.getListener();
-  EraseTracker tracker(previousListener, erasedOps);
-  rewriter.setListener(&tracker);
-  auto restoreListener =
-      llvm::scope_exit([&] { rewriter.setListener(previousListener); });
-
-  auto isDead = [&](Operation *op) {
-    return !op || erasedOps.contains(op) || !op->getBlock();
-  };
+  // Nothing is erased until the loop below reaches its fixpoint: duplicates are
+  // only detached and queued in `pendingErase`. Every pointer queued in the
+  // worklists therefore stays valid, and a duplicate is recognised by having
+  // no block.
+  auto isDead = [](Operation *op) { return !op || !op->getBlock(); };
 
   LLVM_DEBUG(index.verify());
 
@@ -346,11 +325,11 @@ bool CongruenceEngine::rebuild(HashConsPatternRewriter &rewriter) {
     }
   }
 
-  // Now that everything has reached a fixpoint, erase the dead eclasses
-  // detached by `fuseSameScope`.
+  // Now that everything has reached a fixpoint, erase the dead e-classes and
+  // e-nodes detached by `fuseSameScope` and `mergeDuplicate`.
   SmallPtrSet<Operation *, 8> erased;
-  for (equivalence::ClassOp dead : pendingErase) {
-    if (erased.insert(dead.getOperation()).second)
+  for (Operation *dead : pendingErase) {
+    if (erased.insert(dead).second)
       rewriter.eraseOp(dead);
   }
   pendingErase.clear();
@@ -387,15 +366,8 @@ void CongruenceEngine::hashconsGraph(HashConsPatternRewriter &rewriter,
       toMerge.emplace_back(op, existing);
   }
 
-  for (auto [other, keep] : toMerge) {
-    [[maybe_unused]] bool erased = rewriter.erase(keep).succeeded();
-    assert(erased);
-    [[maybe_unused]] bool inserted = rewriter.insert(keep).succeeded();
-    assert(inserted);
-
-    mergeResults(rewriter, other, keep);
-    rewriter.replaceOp(other, keep);
-  }
+  for (auto [other, keep] : toMerge)
+    mergeDuplicate(rewriter, other, keep);
   rebuild(rewriter);
 }
 
@@ -452,7 +424,13 @@ void CongruenceEngine::mergeDuplicate(HashConsPatternRewriter &rewriter,
   // Don't just erase the op, instead, replace. Listeners such as the
   // OriginalOpTracker used in herbie-mlir should be able to tell what
   // `other` is replaced with:
-  rewriter.replaceOp(other, keep);
+  rewriter.replaceAllOpUsesWith(other, keep->getResults());
+  // `rebuild` may still hold `other` in its worklists, so detach it and leave
+  // erasing it to the end of `rebuild`. Dropping its operands keeps it out of
+  // their users, where `repair` looks.
+  other->dropAllReferences();
+  other->remove();
+  pendingErase.push_back(other);
 }
 
 void CongruenceEngine::mergeResults(HashConsPatternRewriter &rewriter,
