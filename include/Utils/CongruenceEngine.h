@@ -122,7 +122,10 @@ private:
   // rebuild re-canonicalizes and skips dead ops.
   llvm::SetVector<equivalence::ClassOp> dirtyRoots;
 
-  SmallVector<equivalence::ClassOp> pendingErase;
+  /// Duplicate classes (`fuseSameScope`) and e-nodes (`mergeDuplicate`)
+  /// detached during `rebuild`. They are erased only once it reaches its
+  /// fixpoint, so pointers queued in the worklists never dangle.
+  SmallVector<mlir::Operation *> pendingErase;
 
   /// E-nodes whose re-keying collided with an existing hash-cons entry (see
   /// `repairDuplicate`). Drained by `rebuild`.
