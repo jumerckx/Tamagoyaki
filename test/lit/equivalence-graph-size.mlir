@@ -18,5 +18,16 @@ func.func @main(%arg0: i32) -> i32 {
     equivalence.yield %k2 : i32
   }
 
+// A refinement edge is an e-node of the class holding it, not an e-class.
+// CHECK: Graph has 4 e-classes and 4 e-nodes.
+  %2 = equivalence.graph -> (i32) {
+    %x = equivalence.class %arg0 : i32
+    %c1 = arith.constant 1 : i32
+    %s = arith.subi %x, %c1 : i32
+    %add = arith.addi %s, %c1 : i32
+    %a = equivalence.class %add refines %x : i32
+    equivalence.yield %a : i32
+  }
+
   return %0 : i32
 }

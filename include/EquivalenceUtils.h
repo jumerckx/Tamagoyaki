@@ -40,6 +40,7 @@ struct GraphSize {
 /// Compute the number of e-classes and e-nodes in a GraphOp. Each ClassOp is an
 /// e-class. Each result of a non-ClassOp is an e-node; results that are not
 /// already wrapped in a (single-use) ClassOp count as an implicit e-class too.
+/// Each `refines` edge of a ClassOp counts as an e-node of that e-class.
 GraphSize computeGraphSize(GraphOp graphOp);
 
 /// A NodeCostFn takes an Operation* and returns its base cost.

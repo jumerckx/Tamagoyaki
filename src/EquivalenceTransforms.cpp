@@ -244,8 +244,10 @@ GraphSize computeGraphSize(GraphOp graphOp) {
     if (op == graphOp) {
       return;
     }
-    if (dyn_cast<ClassOp>(op)) {
+    if (auto classOp = dyn_cast<ClassOp>(op)) {
       size.classes += 1;
+      // Each refinement edge is an e-node of the class that holds it.
+      size.nodes += classOp.getRefines().size();
     } else {
       size.nodes += op->getNumResults();
       for (auto result : op->getResults()) {
