@@ -182,19 +182,18 @@
                   m4
                   pkg-config
                 ];
-                buildInputs = [
-                  llvm-mlir
-                ]
-                ++ (with pkgs; [
+                buildInputs = with pkgs; [
                   gmp
                   mpfr
                   libmpc
                   zlib
                   libffi
-                  # HiGHS solver for the equivalence-select-ilp pass. Disable
-                  # with -DTAMAGOYAKI_ENABLE_HIGHS=OFF to drop this dependency.
-                  highs
-                ]);
+                ];
+                propagatedBuildInputs = [
+                  llvm-mlir
+                  # HiGHS solver for the equivalence-select-ilp pass. (-DTAMAGOYAKI_ENABLE_HIGHS)
+                  pkgs.highs
+                ];
               };
 
               tamagoyaki = stdenv.mkDerivation (
@@ -204,7 +203,12 @@
                   version = "0.1.0";
                   src = lib.cleanSource ./.;
 
-                  inherit (tamagoyakiDeps) nativeBuildInputs buildInputs;
+                  inherit (tamagoyakiDeps) nativeBuildInputs buildInputs propagatedBuildInputs;
+
+                  passthru = {
+                    inherit llvm-mlir stdenv variantAttrs;
+                    llvmCmakeFlags = commonCmakeFlags;
+                  };
 
                   cmakeFlags = [
                     "-DMLIR_DIR=${llvm-mlir}/lib/cmake/mlir"
@@ -243,7 +247,7 @@
                 (pkgs.mkShell.override { inherit stdenv; }) ({
                   name = "tamagoyaki${suffix}${lib.optionalString ci "-ci"}${lib.optionalString docs "-docs"}";
 
-                  inherit (tamagoyakiDeps) nativeBuildInputs buildInputs;
+                  inherit (tamagoyakiDeps) nativeBuildInputs buildInputs propagatedBuildInputs;
 
                   inherit (variantAttrs) hardeningDisable;
 
@@ -334,5 +338,9 @@
     {
       packages = builtins.mapAttrs (_: v: v.packages) everything;
       devShells = builtins.mapAttrs (_: v: v.devShells) everything;
+
+      overlays.default = final: prev: {
+        inherit (self.packages.${final.stdenv.hostPlatform.system}) tamagoyaki tamagoyaki-debug;
+      };
     };
 }
