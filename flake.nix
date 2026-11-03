@@ -164,6 +164,8 @@
                     "-DMLIR_INCLUDE_INTEGRATION_TESTS=OFF"
                     "-DMLIR_BUILD_MLIR_C_DYLIB=OFF"
                     "-DLLVM_INSTALL_UTILS=ON"
+                    "-DCMAKE_INSTALL_RPATH=${placeholder "out"}/lib"
+                    "-DCMAKE_INSTALL_NAME_DIR=${placeholder "out"}/lib"
                   ];
                   meta.platforms = lib.platforms.unix;
                   preConfigure = lib.optionalString isDebug ''
@@ -214,7 +216,6 @@
                     "-DMLIR_DIR=${llvm-mlir}/lib/cmake/mlir"
                     "-DLLVM_DIR=${llvm-mlir}/lib/cmake/llvm"
                     "-DLLVM_EXTERNAL_LIT=${pkgs.lit}/bin/lit"
-                    "-DCMAKE_INSTALL_RPATH=${llvm-mlir}/lib"
                     "-DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON"
                   ];
 
