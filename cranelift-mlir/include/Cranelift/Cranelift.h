@@ -22,8 +22,10 @@ convertToSoN(mlir::FunctionOpInterface funcOp,
 /// Place the operations of `graphOp`, from which a program has been extracted,
 /// back into `funcOp`, then erase `graphOp`. A dominator-tree preorder walk of
 /// the blocks places each operation before its first use, reused by the
-/// blocks that block dominates. `funcOp` must not have blocks unreachable from
-/// its entry.
+/// blocks that block dominates. As in Cranelift, an operation whose operands
+/// are available outside the loops of that block is hoisted out of them: it
+/// goes at the end of the closest dominating block in no more loops than its
+/// operands. `funcOp` must not have blocks unreachable from its entry.
 void elaborate(mlir::FunctionOpInterface funcOp,
                mlir::equivalence::GraphOp graphOp);
 

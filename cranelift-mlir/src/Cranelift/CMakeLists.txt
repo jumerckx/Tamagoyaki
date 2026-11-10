@@ -21,6 +21,7 @@ add_mlir_library(CraneliftDialect
   MLIRCraneliftIncGen
 
   LINK_LIBS PUBLIC
+  MLIRAnalysis
   MLIRIR
   MLIRPass
   MLIRParser

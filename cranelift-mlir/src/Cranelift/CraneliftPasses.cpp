@@ -4,6 +4,7 @@
 #include "EquivalenceDialect.h"
 #include "EquivalenceUtils.h"
 #include "Utils/HashConsPatternRewriter.h"
+#include "mlir/Analysis/CFGLoopInfo.h"
 #include "mlir/Dialect/Match/IR/Match.h"
 #include "mlir/Dialect/PDL/IR/PDL.h"
 #include "mlir/Dialect/PDLInterp/IR/PDLInterp.h"
@@ -28,6 +29,7 @@
 #include "llvm/ADT/SmallVector.h"
 #include <cassert>
 #include <functional>
+#include <optional>
 #include <utility>
 
 namespace cranelift {
@@ -173,9 +175,29 @@ void elaborate(mlir::FunctionOpInterface funcOp,
   llvm::ScopedHashTable<mlir::Value, mlir::Value> elaborated;
   mlir::Region &graphBody = graphOp.getBody();
 
+  // DFS over the domtree; a ScopedHashTableScope is pushed per block
+  // so that mappings from dominating blocks are visible to children
+  // and automatically popped when backtracking to siblings.
+  mlir::DominanceInfo domInfo(funcOp);
+  mlir::Region &funcBody = funcOp.getFunctionBody();
+
+  // As in Cranelift, a value is hoisted out of the loops its operands are
+  // invariant in. Single-block regions have no dominator tree, nor loops.
+  std::optional<mlir::CFGLoopInfo> loopInfo;
+  if (!funcBody.hasOneBlock())
+    loopInfo.emplace(domInfo.getDomTree(&funcBody));
+  auto loopDepth = [&](mlir::Block *block) -> unsigned {
+    return loopInfo ? loopInfo->getLoopDepth(block) : 0;
+  };
+
+  // The blocks from the entry to the visited block, with their scopes.
+  using Scope = llvm::ScopedHashTableScope<mlir::Value, mlir::Value>;
+  llvm::SmallVector<std::pair<mlir::Block *, Scope *>> path;
+
   // Recursively elaborate a graph-internal value, cloning its producing
   // op (and transitive dependencies) into the funcOp at the builder's
-  // current insertion point.
+  // current insertion point, in the visited block, or at the end of the
+  // block on the path that is in no more loops than its operands.
   std::function<mlir::Value(mlir::Value, mlir::OpBuilder &)> elaborateValue;
   elaborateValue = [&](mlir::Value v, mlir::OpBuilder &builder) -> mlir::Value {
     if (mlir::Value cached = elaborated.lookup(v))
@@ -195,24 +217,41 @@ void elaborate(mlir::FunctionOpInterface funcOp,
         mapping.map(operand, elaborateValue(operand, builder));
     }
 
-    mlir::Operation *cloned = builder.clone(*defOp, mapping);
+    // The loop depth at which every operand is available. A terminator's
+    // results are only available in its successors, so stay at the use.
+    unsigned depth = 0;
+    for (mlir::Value operand : defOp->getOperands()) {
+      mlir::Value available = mapping.lookupOrDefault(operand);
+      mlir::Operation *availableDef = available.getDefiningOp();
+      depth = std::max(
+          depth,
+          availableDef && availableDef->hasTrait<mlir::OpTrait::IsTerminator>()
+              ? loopDepth(path.back().first)
+              : loopDepth(available.getParentBlock()));
+    }
+    size_t level = path.size() - 1;
+    while (loopDepth(path[level].first) > depth)
+      --level;
+
+    mlir::Operation *cloned;
+    if (level == path.size() - 1) {
+      cloned = builder.clone(*defOp, mapping);
+    } else {
+      mlir::OpBuilder hoistBuilder(path[level].first->getTerminator());
+      cloned = hoistBuilder.clone(*defOp, mapping);
+    }
 
     for (auto [origRes, clonedRes] :
          llvm::zip(defOp->getResults(), cloned->getResults()))
-      elaborated.insert(origRes, clonedRes);
+      elaborated.insertIntoScope(path[level].second, origRes, clonedRes);
 
     return cloned->getResult(mlir::cast<mlir::OpResult>(v).getResultNumber());
   };
 
-  // DFS over the domtree; a ScopedHashTableScope is pushed per block
-  // so that mappings from dominating blocks are visible to children
-  // and automatically popped when backtracking to siblings.
-  mlir::DominanceInfo domInfo(funcOp);
-  mlir::Region &funcBody = funcOp.getFunctionBody();
-
   std::function<void(mlir::Block *)> visitBlock;
   visitBlock = [&](mlir::Block *block) {
-    llvm::ScopedHashTableScope<mlir::Value, mlir::Value> scope(elaborated);
+    Scope scope(elaborated);
+    path.emplace_back(block, &scope);
     mlir::OpBuilder builder(funcOp->getContext());
 
     for (mlir::Operation &op : *block) {
@@ -227,11 +266,10 @@ void elaborate(mlir::FunctionOpInterface funcOp,
     }
 
     // Visit dominator-tree children.
-    if (funcBody.hasOneBlock())
-      return;
-    auto *domNode = domInfo.getNode(block);
-    for (auto *child : domNode->children())
-      visitBlock(child->getBlock());
+    if (!funcBody.hasOneBlock())
+      for (auto *child : domInfo.getNode(block)->children())
+        visitBlock(child->getBlock());
+    path.pop_back();
   };
 
   visitBlock(&funcBody.front());
