@@ -24,6 +24,7 @@
 #include "llvm/ADT/DepthFirstIterator.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/ScopedHashTable.h"
+#include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include <cassert>
 #include <functional>
@@ -125,6 +126,29 @@ mlir::equivalence::GraphOp convertToSoN(mlir::FunctionOpInterface funcOp) {
     }
   }
 
+  // The values the graph captures (block arguments, results of the ops left
+  // in place) each get an e-class at the start of the graph, as
+  // insertGraphInFunction gives block arguments. Otherwise a rewrite into one
+  // would create its e-class next to the value, outside the graph, for every
+  // use of the value.
+  mlir::Block &graphBlock = graphOp.getBody().front();
+  llvm::SetVector<mlir::Value> captured;
+  for (mlir::Operation &op : graphBlock.without_terminator())
+    for (mlir::Value operand : op.getOperands())
+      if (operand.getParentRegion() != &graphOp.getBody())
+        captured.insert(operand);
+  builder.setInsertionPointToStart(&graphBlock);
+  for (mlir::Value value : captured) {
+    auto classOp = mlir::equivalence::ClassOp::create(
+        builder, value.getLoc(), mlir::TypeRange{value.getType()},
+        mlir::ValueRange{value}, /*leader=*/mlir::Value{},
+        /*min_cost_index=*/nullptr);
+    value.replaceUsesWithIf(classOp.getResult(), [&](mlir::OpOperand &use) {
+      return use.getOwner() != classOp &&
+             use.getOwner()->getBlock() == &graphBlock;
+    });
+  }
+
   return graphOp;
 }
 
@@ -154,8 +178,10 @@ void elaborate(mlir::FunctionOpInterface funcOp,
     if (mlir::Value cached = elaborated.lookup(v))
       return cached;
 
+    // A captured value, which extraction picked from its e-class.
     mlir::Operation *defOp = v.getDefiningOp();
-    assert(defOp && "graph value without a defining op");
+    if (!defOp || defOp->getParentRegion() != &graphBody)
+      return v;
 
     // Elaborate operands that live inside the graph; others (block
     // args, side-effecting op results) are already available in funcOp.
