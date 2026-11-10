@@ -35,7 +35,9 @@ namespace cranelift {
 #define GEN_PASS_DEF_CRANELIFTOPTIMIZEPASS
 #include "CraneliftPasses.h.inc"
 
-mlir::equivalence::GraphOp convertToSoN(mlir::FunctionOpInterface funcOp) {
+mlir::equivalence::GraphOp
+convertToSoN(mlir::FunctionOpInterface funcOp,
+             llvm::function_ref<bool(mlir::Operation *)> keepInPlace) {
   mlir::OpBuilder builder(funcOp->getContext());
   mlir::Region &funcBody = funcOp.getFunctionBody();
 
@@ -59,7 +61,8 @@ mlir::equivalence::GraphOp convertToSoN(mlir::FunctionOpInterface funcOp) {
   for (mlir::Block *block : blockOrder) {
     for (mlir::Operation &op : *block) {
       if (mlir::isSpeculatable(&op) &&
-          !op.hasTrait<mlir::OpTrait::IsTerminator>()) {
+          !op.hasTrait<mlir::OpTrait::IsTerminator>() &&
+          !(keepInPlace && keepInPlace(&op))) {
         opsToProcess.push_back(&op);
         opsInGraph.insert(&op);
       }
