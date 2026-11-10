@@ -113,6 +113,10 @@ configure_package_config_file(
 
 export(EXPORT TamagoyakiTargets
        FILE ${CMAKE_BINARY_DIR}/${TAMAGOYAKI_BUILD_CMAKEDIR}/TamagoyakiTargets.cmake)
+if(BUILD_CRANELIFT_MLIR)
+  export(EXPORT TamagoyakiCraneliftTargets
+         FILE ${CMAKE_BINARY_DIR}/${TAMAGOYAKI_BUILD_CMAKEDIR}/TamagoyakiCraneliftTargets.cmake)
+endif()
 
 write_basic_package_version_file(
   ${CMAKE_BINARY_DIR}/${TAMAGOYAKI_BUILD_CMAKEDIR}/TamagoyakiConfigVersion.cmake
@@ -129,6 +133,10 @@ configure_package_config_file(
   PATH_VARS TAMAGOYAKI_CONFIG_TOOLSDIR TAMAGOYAKI_CONFIG_CMAKEDIR)
 
 install(EXPORT TamagoyakiTargets DESTINATION ${TAMAGOYAKI_INSTALL_CMAKEDIR})
+if(BUILD_CRANELIFT_MLIR)
+  install(EXPORT TamagoyakiCraneliftTargets
+          DESTINATION ${TAMAGOYAKI_INSTALL_CMAKEDIR})
+endif()
 install(FILES
         ${CMAKE_CURRENT_BINARY_DIR}/cmake-install/TamagoyakiConfig.cmake
         ${CMAKE_BINARY_DIR}/${TAMAGOYAKI_BUILD_CMAKEDIR}/TamagoyakiConfigVersion.cmake
