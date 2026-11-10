@@ -25,7 +25,7 @@ def Match_Question : NativeOpTrait<"Question"> {
 def Match_MatcherOp : Match_Op<"matcher", [
     IsolatedFromAbove, SingleBlock, NoTerminator,
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getDefaultDialect"]>,
-    Symbol
+    SymbolName, SymbolVisibility, Symbol
   ]> {
   let summary = "Container for the navigation/constraint IR of one matcher";
 
@@ -351,7 +351,7 @@ def Match_SuccessOp : Match_Op<"success", [
 def Match_RewriterOp : Match_Op<"rewriter", [
     IsolatedFromAbove, SingleBlock, NoTerminator,
     DeclareOpInterfaceMethods<OpAsmOpInterface, ["getDefaultDialect"]>,
-    Symbol
+    SymbolName, SymbolVisibility, Symbol
   ]> {
   let summary = "Container for the rewrite IR of one pattern";
 
