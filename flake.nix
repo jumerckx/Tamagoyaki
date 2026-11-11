@@ -23,7 +23,7 @@
     };
 
     llvm-project-src = {
-      url = "github:llvm/llvm-project/040a641988f6ed6f4fab250706ca2b620c1de2d8";
+      url = "github:llvm/llvm-project/5d7b436ab2ce344606f62e9e45be237b73127a75";
       flake = false;
     };
     # The case studies -- herbie_mlir and rover-mlir, and the evaluations --

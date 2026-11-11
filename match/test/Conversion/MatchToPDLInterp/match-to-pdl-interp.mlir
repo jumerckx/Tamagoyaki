@@ -321,7 +321,7 @@ module {
 // -----
 
 // CHECK-LABEL: pdl_interp.func @matcher(%arg0: !pdl.operation) {
-// CHECK-NEXT:    pdl_interp.apply_constraint "c"(%arg0 : !pdl.operation) {isNegated = true} -> ^bb2, ^bb1
+// CHECK-NEXT:    pdl_interp.apply_constraint "c"(%arg0 : !pdl.operation) is_negated = true -> ^bb2, ^bb1
 // CHECK:       ^bb2:
 // CHECK-NEXT:    %[[O:.*]] = pdl_interp.get_operand 0 of %arg0
 // CHECK-NEXT:    pdl_interp.is_not_null %[[O]] : !pdl.value -> ^bb3, ^bb1

@@ -100,11 +100,11 @@ module @constraint_with_result_multiple {
 // -----
 
 // CHECK-LABEL: module @negated_constraint
-// CHECK:         pdl_interp.apply_constraint "constraint"(%arg0 : !pdl.operation) {isNegated = true}
+// CHECK:         pdl_interp.apply_constraint "constraint"(%arg0 : !pdl.operation) is_negated = true
 module @negated_constraint {
   pdl.pattern : benefit(1) {
     %root = operation
-    pdl.apply_native_constraint "constraint"(%root : !pdl.operation) {isNegated = true}
+    pdl.apply_native_constraint "constraint"(%root : !pdl.operation) is_negated = true
     rewrite %root with "rewriter"
   }
 }

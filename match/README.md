@@ -48,9 +48,8 @@ Only the `pdl` -> `pdl_interp` flow is copied. Not copied:
   every navigation to a defining op into a loop over an e-class, and without
   this option the loops of a pattern multiply before any of their checks run.
 * The CMake files are adapted to the out-of-tree build, and the tests run
-  `tamagoyaki-opt` instead of `mlir-opt`. The `pdl`/`pdl_interp` negated
-  constraints in the tests use the pinned MLIR's `{isNegated = true}` syntax,
-  and the `PDLToPDLInterp` tests run the three-pass pipeline above.
+  `tamagoyaki-opt` instead of `mlir-opt`, and the `PDLToPDLInterp` tests run
+  the three-pass pipeline above.
 
 ## E-matching
 
