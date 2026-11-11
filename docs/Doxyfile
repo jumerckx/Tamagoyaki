@@ -71,6 +71,10 @@ WARN_NO_PARAMDOC       = NO
 # generated *.h.inc files. Without this, out-of-line definitions of methods
 # such as Op::verify() in *.cpp files cannot be matched to a declaration and
 # Doxygen emits "documented symbol ... was not declared or defined" warnings.
+#
+# Attribute macros used in generated declarations (e.g. LLVM_ATTRIBUTE_MINSIZE
+# on Op::print) are defined empty so they don't reach Breathe, whose C++
+# declaration parser can't handle them.
 ENABLE_PREPROCESSING   = YES
 MACRO_EXPANSION        = YES
 EXPAND_ONLY_PREDEF     = YES
@@ -81,4 +85,5 @@ PREDEFINED             = GET_OP_CLASSES \
                          GET_ATTRDEF_CLASSES \
                          GET_ATTRDEF_LIST \
                          GEN_PASS_DECL \
-                         GEN_PASS_REGISTRATION
+                         GEN_PASS_REGISTRATION \
+                         LLVM_ATTRIBUTE_MINSIZE=
