@@ -6,18 +6,20 @@
 //   * a matched result is mapped to its e-class result (get_class_result);
 //   * get_defining_op, and the rest of its block, loops over the members of the
 //     e-class of the value (get_class_vals);
-//   * equal on values becomes ematch.equivalent;
+//   * equal on values becomes ematch.equivalent, and the check that a value is
+//     a result of its defining op applies to the e-class member;
 //   * a matched operand passed to success becomes its e-class representative,
-//     an e-class result the value it was computed from.
+//     an e-class result the value it was computed from, and the (value,
+//     member) pair of each enclosing loop is appended.
 // In the rewriters, value arguments and results are mapped to their e-class
-// results, created ops are deduplicated, replace becomes union and erase is
-// dropped.
+// results, created ops are deduplicated, replace becomes union_or_refine on
+// the appended pairs (union without them) and erase is dropped.
 // ===----------------------------------------------------------------------===//
 
 module {
   module @rewriters {
     // CHECK-LABEL: match.rewriter @r(
-    // CHECK-SAME:      %[[ROOT:.*]]: !pdl.operation, %[[ARG:.*]]: !pdl.value, %[[ARGS:.*]]: !pdl.range<value>, %[[T:.*]]: !pdl.type, %[[DEAD:.*]]: !pdl.operation)
+    // CHECK-SAME:      %[[ROOT:.*]]: !pdl.operation, %[[ARG:.*]]: !pdl.value, %[[ARGS:.*]]: !pdl.range<value>, %[[T:.*]]: !pdl.type, %[[DEAD:.*]]: !pdl.operation, %[[VAL:.*]]: !pdl.value, %[[MEMBER:.*]]: !pdl.value)
     // CHECK-NEXT:    %[[CA:.*]] = ematch.get_class_result %[[ARG]]
     // CHECK-NEXT:    %[[CAS:.*]] = ematch.get_class_results %[[ARGS]]
     // CHECK-NEXT:    %[[NEG:.*]] = create_operation "arith.negf"(%[[CA]] : !pdl.value) -> (%[[T]] : !pdl.type)
@@ -30,9 +32,9 @@ module {
     // CHECK-NEXT:    %[[NATIVED:.*]] = ematch.dedup %[[NATIVE]]
     // CHECK-NEXT:    %[[ALL:.*]] = pdl.results of %[[ADDD]]
     // CHECK-NEXT:    %[[CALL:.*]] = ematch.get_class_results %[[ALL]]
-    // CHECK-NEXT:    ematch.union %[[ROOT]] : !pdl.operation, %[[CALL]] : !pdl.range<value>
+    // CHECK-NEXT:    ematch.union_or_refine %[[ROOT]] : !pdl.operation, %[[CALL]] : !pdl.range<value> checks(%[[VAL]], %[[MEMBER]] : !pdl.value, !pdl.value)
     // CHECK-NEXT:    %[[RANGE:.*]] = create_range %[[CRES]] : !pdl.value
-    // CHECK-NEXT:    ematch.union %[[NATIVED]] : !pdl.operation, %[[RANGE]] : !pdl.range<value>
+    // CHECK-NEXT:    ematch.union_or_refine %[[NATIVED]] : !pdl.operation, %[[RANGE]] : !pdl.range<value> checks(%[[VAL]], %[[MEMBER]] : !pdl.value, !pdl.value)
     // CHECK-NEXT:  }
     match.rewriter @r(%root : !pdl.operation, %arg : !pdl.value, %args : !pdl.range<value>, %t : !pdl.type, %dead : !pdl.operation) {
       %neg = create_operation "arith.negf"(%arg : !pdl.value) -> (%t : !pdl.type)
@@ -66,12 +68,12 @@ module {
   // CHECK-NEXT:      %[[DR:.*]] = get_result 0 of %[[DOP]]
   // CHECK-NEXT:      %[[DRV:.*]] = is_not_null %[[DR]] : !pdl.value
   // CHECK-NEXT:      %[[DCR:.*]] = ematch.get_class_result %[[DRV]]
-  // CHECK-NEXT:      ematch.equivalent %[[DCR]], %[[V0]]
+  // CHECK-NEXT:      ematch.equivalent %[[DCR]], %[[M]]
   // CHECK-NEXT:      %[[DT:.*]] = get_value_type of %[[DCR]] : !pdl.type
   // Equality of types is untouched.
   // CHECK-NEXT:      equal %[[DT]], %[[RT]] : !pdl.type
   // CHECK-NEXT:      %[[REP:.*]] = ematch.get_class_representative %[[V1]]
-  // CHECK-NEXT:      success @rewriters::@r benefit(1) (%[[ROOT]], %[[REP]], %[[RV]], %[[RT]], %[[DOP]] : !pdl.operation, !pdl.value, !pdl.value, !pdl.type, !pdl.operation)
+  // CHECK-NEXT:      success @rewriters::@r benefit(1) (%[[ROOT]], %[[REP]], %[[RV]], %[[RT]], %[[DOP]], %[[V0]], %[[M]] : !pdl.operation, !pdl.value, !pdl.value, !pdl.type, !pdl.operation, !pdl.value, !pdl.value)
   // CHECK-NEXT:    }
   // CHECK-NEXT:  }
   match.matcher @m root(%root : !pdl.operation) {

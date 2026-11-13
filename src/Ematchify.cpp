@@ -32,7 +32,9 @@
 #include "mlir/IR/BuiltinOps.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringMap.h"
 #include <llvm/ADT/SmallVectorExtras.h>
 #include <mlir/IR/Block.h>
 #include <mlir/IR/Location.h>
@@ -90,7 +92,28 @@ Value getClassResultInput(Value v) {
   return nullptr;
 }
 
-void ematchifyMatcher(match::MatcherOp matcher) {
+/// Return whether `v` is (the e-class result of) a result of the operation
+/// navigated to by `definingOp`.
+bool isResultOf(Value v, match::GetDefiningOpOp definingOp) {
+  if (Value classInput = getClassResultInput(v))
+    v = classInput;
+  auto unwrap = v.getDefiningOp<match::IsNotNullOp>();
+  if (!unwrap)
+    return false;
+  Operation *get = unwrap.getOptionalValue().getDefiningOp();
+  Value op;
+  if (auto result = dyn_cast_or_null<match::GetResultOp>(get))
+    op = result.getOp();
+  else if (auto results = dyn_cast_or_null<match::GetResultsOp>(get))
+    op = results.getOp();
+  auto opUnwrap = op ? op.getDefiningOp<match::IsNotNullOp>() : nullptr;
+  return opUnwrap && opUnwrap.getOptionalValue() == definingOp.getResult();
+}
+
+/// Ematchify `matcher` and record in `numChecks`, for each rewriter it calls,
+/// the number of (operand, matched) pairs appended to the rewriter's arguments.
+void ematchifyMatcher(match::MatcherOp matcher,
+                      llvm::StringMap<unsigned> &numChecks) {
   OpBuilder builder(matcher.getContext());
   Type valueRangeTy =
       pdl::RangeType::get(pdl::ValueType::get(matcher.getContext()));
@@ -114,22 +137,35 @@ void ematchifyMatcher(match::MatcherOp matcher) {
   // only runs once the navigation succeeded, so this existentially quantifies
   // exactly that part of the matcher over the members.
   //
+  // The members include those of the e-classes the value refines into, which
+  // are not equivalent to it. The check that the value is a result of its
+  // defining op therefore applies to the member it was navigated from.
+  //
   // The defining op of a value range is still taken from the range itself.
   SmallVector<match::GetDefiningOpOp> definingOps;
   matcher.walk([&](match::GetDefiningOpOp op) {
     if (isValue(op.getValue()))
       definingOps.push_back(op);
   });
+  llvm::SmallPtrSet<Operation *, 4> classLoops;
   for (match::GetDefiningOpOp op : definingOps) {
     builder.setInsertionPoint(op);
-    Value members = GetClassValsOp::create(builder, op.getLoc(), valueRangeTy,
-                                           op.getValue());
+    Value value = op.getValue();
+    Value members =
+        GetClassValsOp::create(builder, op.getLoc(), valueRangeTy, value);
     auto loop = match::ForEachOp::create(builder, op.getLoc(), members);
+    classLoops.insert(loop);
     Block &body = loop.getBody().front();
     Block *block = op->getBlock();
     body.getOperations().splice(body.end(), block->getOperations(),
                                 op->getIterator(), block->end());
     op.getValueMutable().assign(loop.getLoopVariable());
+    for (OpOperand &use : llvm::make_early_inc_range(value.getUses())) {
+      auto equal = dyn_cast<match::EqualOp>(use.getOwner());
+      if (equal &&
+          isResultOf(equal->getOperand(1 - use.getOperandNumber()), op))
+        use.set(loop.getLoopVariable());
+    }
   }
 
   // Two values match if they are in the same e-class.
@@ -147,7 +183,26 @@ void ematchifyMatcher(match::MatcherOp matcher) {
   // The rewriter maps its value arguments back to their e-class result(s)
   // (see ematchifyRewriter): pass the e-class representative of a matched
   // operand, and the matched value itself for an e-class result.
+  //
+  // A member navigated through may only be in an e-class the value refines
+  // into: the rewriter also receives each (value, member) pair of the
+  // enclosing navigation loops, and only unions if all of them are equivalent.
   matcher.walk([&](match::SuccessOp op) {
+    SmallVector<Value> checks;
+    for (Operation *parent = op->getParentOp(); parent != matcher;
+         parent = parent->getParentOp()) {
+      if (!classLoops.contains(parent))
+        continue;
+      auto loop = cast<match::ForEachOp>(parent);
+      Value value = loop.getRange().getDefiningOp<GetClassValsOp>().getValue();
+      checks.append({value, loop.getLoopVariable()});
+    }
+    auto [it, inserted] = numChecks.try_emplace(
+        op.getRewriter().getLeafReference(), checks.size() / 2);
+    assert((inserted || it->second == checks.size() / 2) &&
+           "a rewriter is called with differently nested navigations");
+    (void)it;
+    (void)inserted;
     builder.setInsertionPoint(op);
     llvm::SmallDenseMap<Value, Value> representatives;
     for (OpOperand &input : op.getInputsMutable()) {
@@ -167,10 +222,13 @@ void ematchifyMatcher(match::MatcherOp matcher) {
             builder, op.getLoc(), value.getType(), value);
       input.set(representative);
     }
+    op.getInputsMutable().append(checks);
   });
 }
 
-void ematchifyRewriter(match::RewriterOp rewriter) {
+/// Ematchify `rewriter`, which receives `numChecks` (operand, matched) pairs
+/// after its arguments (see ematchifyMatcher).
+void ematchifyRewriter(match::RewriterOp rewriter, unsigned numChecks) {
   Block &body = rewriter.getBody().front();
   OpBuilder builder(rewriter.getContext());
   Type valueRangeTy =
@@ -187,6 +245,10 @@ void ematchifyRewriter(match::RewriterOp rewriter) {
     Value classResult = createClassResult(builder, arg);
     arg.replaceAllUsesExcept(classResult, classResult.getDefiningOp());
   }
+  SmallVector<Value> checks;
+  for (unsigned i = 0; i < 2 * numChecks; ++i)
+    checks.push_back(body.addArgument(
+        pdl::ValueType::get(rewriter.getContext()), rewriter.getLoc()));
 
   // An operation is only added to the e-graph if no equivalent e-node exists.
   auto dedup = [&](Value createdOp) {
@@ -209,15 +271,20 @@ void ematchifyRewriter(match::RewriterOp rewriter) {
       replaceWithClassResult(builder, op->getResult(0), op);
     } else if (auto replace = dyn_cast<match::ReplaceOp>(op);
                replace && !replace.getReplValues().empty()) {
-      // Replacing merges the e-classes instead of mutating the e-graph.
+      // Replacing merges the e-classes instead of mutating the e-graph, or
+      // refines the replaced e-class if the match went through a refinement.
       builder.setInsertionPoint(replace);
       ValueRange replValues = replace.getReplValues();
       Value replacement = replValues.front();
       if (replValues.size() != 1 || !isValueRange(replacement))
         replacement = match::CreateRangeOp::create(builder, replace.getLoc(),
                                                    valueRangeTy, replValues);
-      UnionOp::create(builder, replace.getLoc(), replace.getInputOp(),
-                      replacement);
+      if (checks.empty())
+        UnionOp::create(builder, replace.getLoc(), replace.getInputOp(),
+                        replacement);
+      else
+        UnionOrRefineOp::create(builder, replace.getLoc(), replace.getInputOp(),
+                                replacement, checks);
       replace.erase();
     } else if (isa<match::EraseOp, match::ReplaceOp>(op)) {
       // Nothing is ever removed from an e-graph.
@@ -289,10 +356,11 @@ void ematchifyMatchPatterns(ModuleOp module) {
     else if (auto rewriter = dyn_cast<match::RewriterOp>(op))
       rewriters.push_back(rewriter);
   });
+  llvm::StringMap<unsigned> numChecks;
   for (match::MatcherOp matcher : matchers)
-    ematchifyMatcher(matcher);
+    ematchifyMatcher(matcher, numChecks);
   for (match::RewriterOp rewriter : rewriters)
-    ematchifyRewriter(rewriter);
+    ematchifyRewriter(rewriter, numChecks.lookup(rewriter.getSymName()));
 }
 
 void convertEmatchOpsToMatch(ModuleOp module) {
@@ -300,7 +368,8 @@ void convertEmatchOpsToMatch(ModuleOp module) {
   SmallVector<Operation *> ops;
   module.walk([&](Operation *op) {
     if (isa<GetClassValsOp, GetClassResultOp, GetClassResultsOp,
-            GetClassRepresentativeOp, EquivalentOp, UnionOp, DedupOp>(op) &&
+            GetClassRepresentativeOp, EquivalentOp, UnionOp, UnionOrRefineOp,
+            DedupOp>(op) &&
         (op->getParentOfType<match::MatcherOp>() ||
          op->getParentOfType<match::RewriterOp>()))
       ops.push_back(op);

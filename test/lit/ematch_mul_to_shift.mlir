@@ -24,9 +24,9 @@
 // LOWER:             %[[RES:.*]] = pdl_interp.get_result 0 of %[[DEF]]
 // LOWER:             pdl_interp.check_attribute %{{.*}} is 2 : i32
 // LOWER:             %[[CLASS:.*]] = pdl_interp.apply_rewrite "get_class_result"(%[[RES]] : !pdl.value) : !pdl.value
-// LOWER-NEXT:        pdl_interp.apply_constraint "are_equivalent"(%[[CLASS]], %[[OPERAND]] : !pdl.value, !pdl.value)
-// LOWER:             pdl_interp.record_match @rewriters::@mul_to_shift(%[[REP]], %[[ROOT]] : !pdl.value, !pdl.operation)
-// LOWER:         pdl_interp.func @mul_to_shift(%[[X:.*]]: !pdl.value, %[[MUL:.*]]: !pdl.operation)
+// LOWER-NEXT:        pdl_interp.apply_constraint "are_equivalent"(%[[CLASS]], %[[MEMBER]] : !pdl.value, !pdl.value)
+// LOWER:             pdl_interp.record_match @rewriters::@mul_to_shift(%[[REP]], %[[ROOT]], %[[OPERAND]], %[[MEMBER]] : !pdl.value, !pdl.operation, !pdl.value, !pdl.value)
+// LOWER:         pdl_interp.func @mul_to_shift(%[[X:.*]]: !pdl.value, %[[MUL:.*]]: !pdl.operation, %[[VAL:.*]]: !pdl.value, %[[MATCHED:.*]]: !pdl.value)
 // LOWER-NEXT:      %[[XC:.*]] = pdl_interp.apply_rewrite "get_class_result"(%[[X]] : !pdl.value) : !pdl.value
 // LOWER:           %[[ONE:.*]] = pdl_interp.create_operation "arith.constant"
 // LOWER-NEXT:      %[[ONED:.*]] = pdl_interp.apply_rewrite "dedup"(%[[ONE]] : !pdl.operation) : !pdl.operation
@@ -36,7 +36,7 @@
 // LOWER-NEXT:      %[[SHLD:.*]] = pdl_interp.apply_rewrite "dedup"(%[[SHL]] : !pdl.operation) : !pdl.operation
 // LOWER-NEXT:      %[[ALL:.*]] = pdl_interp.get_results of %[[SHLD]] : !pdl.range<value>
 // LOWER-NEXT:      %[[ALLC:.*]] = pdl_interp.apply_rewrite "get_class_results"(%[[ALL]] : !pdl.range<value>) : !pdl.range<value>
-// LOWER-NEXT:      pdl_interp.apply_rewrite "union"(%[[MUL]], %[[ALLC]] : !pdl.operation, !pdl.range<value>)
+// LOWER-NEXT:      pdl_interp.apply_rewrite "union_or_refine"(%[[MUL]], %[[ALLC]], %[[VAL]], %[[MATCHED]] : !pdl.operation, !pdl.range<value>, !pdl.value, !pdl.value)
 // LOWER-NEXT:      pdl_interp.finalize
 module @patterns {
   pdl.pattern @mul_to_shift : benefit(1) {

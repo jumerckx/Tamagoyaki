@@ -16,7 +16,7 @@
 // CHECK-NEXT:        %[[DEF1:.*]] = pdl_interp.get_defining_op of %[[M1]]
 // CHECK:             %[[RES1:.*]] = pdl_interp.get_result 0 of %[[DEF1]]
 // CHECK:             %[[CLASS1:.*]] = pdl_interp.apply_rewrite "get_class_result"(%[[RES1]] : !pdl.value)
-// CHECK-NEXT:        pdl_interp.apply_constraint "are_equivalent"(%[[CLASS1]], %[[OP1]] : !pdl.value, !pdl.value)
+// CHECK-NEXT:        pdl_interp.apply_constraint "are_equivalent"(%[[CLASS1]], %[[M1]] : !pdl.value, !pdl.value)
 // CHECK-NOT:         pdl_interp.foreach
 // CHECK:             pdl_interp.foreach
 // CHECK:               pdl_interp.record_match @rewriters::@add_neg_neg_neg
